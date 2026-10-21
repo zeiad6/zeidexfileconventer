@@ -72,7 +72,7 @@ check images.pdf            vips -- tool images-to-pdf photo.png shot.bmp
 check collage.jpg           vips -- tool collage photo.png photo.png
 check photo-redacted.png    ffmpeg -- tool redact --boxes "10,10,200,100;300,200,50,50" photo.png
 check photo-adjusted.png    ffmpeg -- tool adjust --contrast 1.3 --grain 8 photo.png
-gs -q -dSAFER -dBATCH -dNOPAUSE -sDEVICE=png16m -r150 -sOutputFile=card.png doc.ps 2>/dev/null
+gs -q -dSAFER -dBATCH -dNOPAUSE -sDEVICE=png16m -r300 -dLastPage=1 -sOutputFile=card.png doc.pdf 2>/dev/null
 check card-redacted.png     gs tesseract -- tool redact --boxes auto card.png
 
 check "doc pages"           gs -- convert --to png doc.pdf
