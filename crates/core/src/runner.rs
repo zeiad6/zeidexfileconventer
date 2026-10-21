@@ -403,7 +403,9 @@ fn probe(op: &Op, inputs: &[PathBuf]) -> Ctx {
                 ctx.detected = if what == crate::ops::FACES {
                     detect_faces(src).unwrap_or_default()
                 } else {
-                    preview_png(src, u32::MAX).and_then(|png| detect_text_png(&png, what)).unwrap_or_default()
+                    detect_text_file(src, what)
+                        .or_else(|_| preview_png(src, 32767).and_then(|png| detect_text_png(&png, what)))
+                        .unwrap_or_default()
                 };
             }
         }
@@ -516,6 +518,7 @@ pub fn waveform_png(src: &Path, width: u32, height: u32) -> Result<Vec<u8>> {
 
 /// PNG preview no larger than `max` px: the image itself, or a frame from a video.
 pub fn preview_png(src: &Path, max: u32) -> Result<Vec<u8>> {
+    let max = max.clamp(16, 32767);
     let out = std::env::temp_dir().join(format!(
         "zeidex-preview-{}-{}.png",
         std::process::id(),
@@ -567,6 +570,26 @@ fn scratch_file(tag: &str, ext: &str) -> PathBuf {
         std::process::id(),
         JOB.fetch_add(1, Ordering::Relaxed)
     ))
+}
+
+/// Text lines found by Tesseract in an image file, as boxes in that image's pixels.
+pub fn detect_text_file(src: &Path, lang: &str) -> Result<Vec<Rect>> {
+    if !lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '_') {
+        return Err(Error::BadOption(format!("lang={lang}")));
+    }
+    let out = command(&tools::require(Tool::Tesseract)?)
+        .arg(src)
+        .args(["stdout", "-l", lang, "tsv"])
+        .stdin(Stdio::null())
+        .output();
+    let out = out?;
+    if !out.status.success() {
+        return Err(Error::Failed {
+            tool: "Tesseract".into(),
+            detail: String::from_utf8_lossy(&out.stderr).trim().into(),
+        });
+    }
+    Ok(parse_tsv(&String::from_utf8_lossy(&out.stdout)))
 }
 
 /// Text lines found by Tesseract in a PNG, as boxes in that PNG's pixels (for auto-redact).
