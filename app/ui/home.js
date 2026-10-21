@@ -148,6 +148,10 @@ async function settings() {
 
 listen('open-files', async () => load(await invoke('take_pending')));
 listen('hook-error', () => { $('hook').textContent = window.ZT('hookOff'); });
+listen('selection-empty', () => {
+  invoke('show_home');
+  $('hook').textContent = window.ZT('selectionHint');
+});
 
 (async () => {
   $('hook').textContent = window.ZT((await invoke('hook_ok')) ? 'hookOn' : 'hookOff');

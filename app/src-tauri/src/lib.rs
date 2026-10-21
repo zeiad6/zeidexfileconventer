@@ -162,18 +162,14 @@ fn run_job(
         Op::parse(&id, &opts).map_err(|e| e.to_string())?
     };
     hook::hide(&app);
-    if let Op::Rename { .. } = op {
-        let text = match runner::rename(&op, &paths) {
-            Ok(pairs) => {
-                pairs.iter().map(|(a, b)| format!("{} → {}", file_name(a), file_name(b))).collect::<Vec<_>>().join("\n")
-            }
-            Err(e) => e.to_string(),
-        };
+    if runner::is_text_tool(&op) {
+        // Reports (metadata, QR contents, duplicates, renames) go to the jobs window as text.
+        let job = NEXT_JOB.fetch_add(1, Ordering::Relaxed);
         show(&app, "jobs");
-        let _ = app.emit(
-            "job",
-            JobEvent::Text { job: NEXT_JOB.fetch_add(1, Ordering::Relaxed), title: "rename".into(), text },
-        );
+        std::thread::spawn(move || {
+            let text = runner::text_tool(&op, &paths).unwrap_or_else(|e| e.to_string());
+            let _ = app.emit("job", JobEvent::Text { job, title: id, text });
+        });
         return Ok(());
     }
     let title = if kind == "convert" { format!("→ {}", id.to_uppercase()) } else { id };
@@ -187,13 +183,6 @@ fn spawn_job(app: AppHandle, op: Op, paths: Vec<PathBuf>, title: String, cleanup
     let job = NEXT_JOB.fetch_add(1, Ordering::Relaxed);
     show(&app, "jobs");
     std::thread::spawn(move || {
-        if op == Op::Info {
-            for p in &paths {
-                let text = runner::info(p).unwrap_or_else(|e| e.to_string());
-                let _ = app.emit("job", JobEvent::Text { job, title: file_name(p), text });
-            }
-            return;
-        }
         let results = runner::run(&op, &paths, |e| {
             let _ = app.emit("job", job_event(job, &title, e));
         });
@@ -622,6 +611,27 @@ fn show(app: &AppHandle, label: &str) {
     }
 }
 
+/// Ctrl+Shift+Space: open the wheel for the file manager's selection (Explorer on Windows)
+/// or for files copied to the clipboard (Ctrl+C in Nautilus, Dolphin, Nemo...).
+fn open_selection(app: &AppHandle) {
+    let mut paths = zeidex_core::selection::explorer_selection();
+    if paths.is_empty() {
+        if let Ok(text) = app.clipboard().read_text() {
+            paths = zeidex_core::selection::parse_uri_list(&text);
+        }
+    }
+    if paths.is_empty() {
+        let _ = app.emit("selection-empty", ());
+        return;
+    }
+    hook::show_at(app, "convert", (0, 0));
+    hook::keep();
+    if let Some(w) = app.get_webview_window("wheel") {
+        let _ = w.set_focus();
+    }
+    let _ = app.emit("wheel-open", paths.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>());
+}
+
 /// Handles `--open <files...>`; relative names (Nautilus scripts pass them) resolve against `cwd`.
 fn open_args(app: &AppHandle, args: &[String], cwd: &Path) {
     let files: Vec<String> = args
@@ -721,7 +731,7 @@ pub fn run() {
                 }
             }
 
-            hook::start(handle.clone());
+            hook::start(handle.clone(), open_selection);
             let args: Vec<String> = std::env::args().collect();
             let cwd = std::env::current_dir().unwrap_or_default();
             open_args(&handle, &args, &cwd);

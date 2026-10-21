@@ -82,8 +82,8 @@ fn run_unit(op: &Op, inputs: &[PathBuf], progress: &mut dyn FnMut(f32)) -> Resul
     }
     match op {
         Op::Checksum => return checksum(src),
-        Op::Rename { .. } => {
-            return Err(Error::Unsupported("rename works on the whole selection: use runner::rename".into()))
+        Op::Rename { .. } | Op::Duplicates { .. } | Op::QrRead => {
+            return Err(Error::Unsupported("this tool reports text: use runner::text_tool".into()))
         }
         _ => {}
     }
@@ -144,6 +144,117 @@ fn checksum(src: &Path) -> Result<PathBuf> {
     let out = unique_path(&src.with_file_name(format!("{name}.sha256")));
     fs::write(&out, format!("{digest}  {name}\n"))?;
     Ok(out)
+}
+
+/// Tools whose result is a report rather than a file (QR contents, duplicate groups, renames).
+pub fn is_text_tool(op: &Op) -> bool {
+    matches!(op, Op::Info | Op::QrRead | Op::Duplicates { .. } | Op::Rename { .. })
+}
+
+/// Runs a text tool over the whole selection and returns its report.
+pub fn text_tool(op: &Op, inputs: &[PathBuf]) -> Result<String> {
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    match op {
+        Op::Info => {
+            let mut out = String::new();
+            for p in inputs {
+                out += &format!("== {}\n{}\n", name(p), info(p).unwrap_or_else(|e| e.to_string()));
+            }
+            Ok(out)
+        }
+        Op::QrRead => {
+            let mut out = String::new();
+            for p in inputs {
+                out += &format!("== {}\n{}\n", name(p), qr_read(p).unwrap_or_else(|e| e.to_string()));
+            }
+            Ok(out)
+        }
+        Op::Rename { .. } => {
+            let pairs = rename(op, inputs)?;
+            Ok(pairs.iter().map(|(a, b)| format!("{} -> {}\n", name(a), name(b))).collect())
+        }
+        Op::Duplicates { move_dupes } => duplicates(inputs, *move_dupes),
+        _ => Err(Error::Unsupported("not a text tool".into())),
+    }
+}
+
+/// Decoded QR codes / barcodes in an image, one per line (ZBar).
+pub fn qr_read(src: &Path) -> Result<String> {
+    let out =
+        command(&tools::require(Tool::Zbar)?).args(["--quiet", "--raw"]).arg(src).stdin(Stdio::null()).output()?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // zbarimg exits 4 when the image simply has no code in it.
+    match (out.status.code(), text.is_empty()) {
+        (Some(0), false) => Ok(text),
+        (Some(0 | 4), _) => Err(Error::Unsupported("no QR code or barcode found".into())),
+        _ => Err(Error::Failed { tool: "ZBar".into(), detail: String::from_utf8_lossy(&out.stderr).trim().into() }),
+    }
+}
+
+/// Files under `inputs` (folders are walked) grouped by identical content. With `move_dupes`,
+/// every copy but the first of each group is moved into a `Duplicates` folder beside it.
+pub fn duplicates(inputs: &[PathBuf], move_dupes: bool) -> Result<String> {
+    use std::collections::HashMap;
+    let mut files = Vec::new();
+    let mut stack: Vec<PathBuf> = inputs.to_vec();
+    while let Some(p) = stack.pop() {
+        if p.is_dir() {
+            for e in fs::read_dir(&p)?.flatten() {
+                let name = e.file_name();
+                // Skip hidden entries and our own Duplicates folders so reruns are stable.
+                if !name.to_string_lossy().starts_with('.') && name != "Duplicates" {
+                    stack.push(e.path());
+                }
+            }
+        } else if p.is_file() {
+            files.push(p);
+        }
+    }
+    files.sort();
+    files.dedup();
+    let mut by_size: HashMap<u64, Vec<PathBuf>> = HashMap::new();
+    for f in files {
+        by_size.entry(fs::metadata(&f)?.len()).or_default().push(f);
+    }
+    let mut groups: Vec<Vec<PathBuf>> = Vec::new();
+    for (size, same) in by_size {
+        if same.len() < 2 || size == 0 {
+            continue;
+        }
+        let mut by_hash: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        for f in same {
+            by_hash.entry(crate::sha256::of_reader(fs::File::open(&f)?)?).or_default().push(f);
+        }
+        groups.extend(by_hash.into_values().filter(|g| g.len() > 1));
+    }
+    for g in &mut groups {
+        g.sort();
+    }
+    groups.sort();
+    if groups.is_empty() {
+        return Ok("no duplicates found\n".into());
+    }
+    let mut report = String::new();
+    let mut wasted = 0u64;
+    for g in &groups {
+        let size = fs::metadata(&g[0]).map_or(0, |m| m.len());
+        wasted += size * (g.len() as u64 - 1);
+        report += &format!("{} copies, {} bytes each:\n", g.len(), size);
+        for (i, f) in g.iter().enumerate() {
+            let mut line = format!("  {}", f.display());
+            if move_dupes && i > 0 {
+                let dir = f.parent().unwrap_or(Path::new(".")).join("Duplicates");
+                fs::create_dir_all(&dir)?;
+                let dst = unique_path(&dir.join(f.file_name().unwrap_or_default()));
+                fs::rename(f, &dst)?;
+                line += &format!("  -> {}", dst.display());
+            }
+            report += &line;
+            report.push('\n');
+        }
+    }
+    report += &format!("{} groups, {wasted} bytes in extra copies\n", groups.len());
+    Ok(report)
 }
 
 /// Batch rename in place; returns (old, new) pairs.
@@ -280,7 +391,10 @@ fn probe(op: &Op, inputs: &[PathBuf]) -> Ctx {
         }
         _ => {}
     }
-    if matches!(op, Op::Watermark { .. } | Op::Slideshow { .. }) {
+    if matches!(op, Op::StripMetadata) && category_of(src) == Some(Category::Image) {
+        ctx.exiftool = tools::locate(Tool::ExifTool).is_some();
+    }
+    if matches!(op, Op::Watermark { .. } | Op::Slideshow { .. } | Op::WebSet) {
         ctx.dims = dimensions(src);
     }
     if matches!(op, Op::Transcribe { .. }) {
@@ -488,6 +602,10 @@ pub fn pdf_thumbnails(src: &Path, dpi: u32) -> Result<Vec<Vec<u8>>> {
 /// Human-readable metadata dump for the Info tool.
 pub fn info(src: &Path) -> Result<String> {
     match category_of(src) {
+        // ExifTool knows camera, lens and GPS tags; vipsheader is the fallback.
+        Some(Category::Image) if tools::locate(Tool::ExifTool).is_some() => {
+            capture(Tool::ExifTool, &["-G1", "-s"], src)
+        }
         Some(Category::Image) => capture(Tool::VipsHeader, &["-a"], src),
         Some(Category::Video | Category::Audio) => {
             capture(Tool::Ffprobe, &["-hide_banner", "-show_format", "-show_streams"], src)
@@ -639,6 +757,27 @@ mod tests {
         let pairs = rename(&Op::Rename { pattern: "clip-{n:2}".into(), start: 1 }, &files[..2]).unwrap();
         assert_eq!(pairs[1].1, d.join("clip-02.srt"));
         assert!(d.join("clip-01.srt").exists() && !files[0].exists());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn duplicate_groups() {
+        let d = scratch("dupes");
+        fs::create_dir_all(d.join("sub")).unwrap();
+        fs::write(d.join("a.txt"), "same").unwrap();
+        fs::write(d.join("sub/b.txt"), "same").unwrap();
+        fs::write(d.join("c.txt"), "diff").unwrap();
+        fs::write(d.join("d.txt"), "same").unwrap();
+        let report = duplicates(std::slice::from_ref(&d), true).unwrap();
+        assert!(report.contains("3 copies, 4 bytes each") && report.contains("8 bytes in extra copies"), "{report}");
+        assert!(
+            d.join("a.txt").exists() && d.join("Duplicates/d.txt").exists() && d.join("sub/Duplicates/b.txt").exists()
+        );
+        assert_eq!(
+            duplicates(std::slice::from_ref(&d), false).unwrap(),
+            "no duplicates found\n",
+            "Duplicates folders skipped"
+        );
         fs::remove_dir_all(&d).unwrap();
     }
 

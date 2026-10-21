@@ -20,10 +20,13 @@ pub enum Tool {
     Calibre,
     Tesseract,
     Whisper,
+    ExifTool,
+    Zbar,
+    Qrencode,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 12] = [
+    pub const ALL: [Tool; 15] = [
         Tool::Ffmpeg,
         Tool::Ffprobe,
         Tool::Vips,
@@ -36,6 +39,9 @@ impl Tool {
         Tool::Calibre,
         Tool::Tesseract,
         Tool::Whisper,
+        Tool::ExifTool,
+        Tool::Zbar,
+        Tool::Qrencode,
     ];
 
     pub fn label(self) -> &'static str {
@@ -52,6 +58,9 @@ impl Tool {
             Tool::Calibre => "Calibre",
             Tool::Tesseract => "Tesseract OCR",
             Tool::Whisper => "whisper.cpp",
+            Tool::ExifTool => "ExifTool",
+            Tool::Zbar => "ZBar (QR)",
+            Tool::Qrencode => "qrencode",
         }
     }
 
@@ -69,6 +78,9 @@ impl Tool {
             Tool::Calibre => "ZEIDEX_EBOOK_CONVERT",
             Tool::Tesseract => "ZEIDEX_TESSERACT",
             Tool::Whisper => "ZEIDEX_WHISPER",
+            Tool::ExifTool => "ZEIDEX_EXIFTOOL",
+            Tool::Zbar => "ZEIDEX_ZBARIMG",
+            Tool::Qrencode => "ZEIDEX_QRENCODE",
         }
     }
 
@@ -88,6 +100,9 @@ impl Tool {
                 Tool::Calibre => &["ebook-convert.exe"],
                 Tool::Tesseract => &["tesseract.exe"],
                 Tool::Whisper => &["whisper-cli.exe", "whisper.exe"],
+                Tool::ExifTool => &["exiftool.exe", "exiftool(-k).exe"],
+                Tool::Zbar => &["zbarimg.exe"],
+                Tool::Qrencode => &["qrencode.exe"],
             }
         } else {
             match self {
@@ -103,6 +118,9 @@ impl Tool {
                 Tool::Calibre => &["ebook-convert"],
                 Tool::Tesseract => &["tesseract"],
                 Tool::Whisper => &["whisper-cli", "whisper-cpp"],
+                Tool::ExifTool => &["exiftool"],
+                Tool::Zbar => &["zbarimg"],
+                Tool::Qrencode => &["qrencode"],
             }
         }
     }
@@ -119,6 +137,9 @@ impl Tool {
                 Tool::Pandoc => "winget install JohnMacFarlane.Pandoc",
                 Tool::Calibre => "winget install calibre.calibre",
                 Tool::Tesseract => "winget install UB-Mannheim.TesseractOCR",
+                Tool::ExifTool => "winget install OliverBetz.ExifTool",
+                Tool::Zbar => "zbar for Windows (zbar.sourceforge.net), then put zbarimg.exe on PATH",
+                Tool::Qrencode => "scoop install qrencode",
                 Tool::Whisper => {
                     "whisper.cpp release (github.com/ggml-org/whisper.cpp) + set ZEIDEX_WHISPER_MODEL to a ggml-*.bin"
                 }
@@ -134,6 +155,9 @@ impl Tool {
                 Tool::Pandoc => "sudo apt install pandoc",
                 Tool::Calibre => "sudo apt install calibre",
                 Tool::Tesseract => "sudo apt install tesseract-ocr tesseract-ocr-ara",
+                Tool::ExifTool => "sudo apt install libimage-exiftool-perl",
+                Tool::Zbar => "sudo apt install zbar-tools",
+                Tool::Qrencode => "sudo apt install qrencode",
                 Tool::Whisper => {
                     "build whisper.cpp (github.com/ggml-org/whisper.cpp) + set ZEIDEX_WHISPER_MODEL to a ggml-*.bin"
                 }

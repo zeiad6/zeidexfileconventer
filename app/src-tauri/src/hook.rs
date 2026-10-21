@@ -56,43 +56,59 @@ pub fn keep() {
     KEEP.store(true, Ordering::Relaxed);
 }
 
-pub fn start(app: AppHandle) {
+/// `on_hotkey` runs (on its own thread) when Ctrl+Shift+Space is pressed outside a drag: the
+/// keyboard way to open the wheel for files selected in the file manager.
+pub fn start(app: AppHandle, on_hotkey: fn(&AppHandle)) {
     std::thread::spawn(move || {
         let handle = app.clone();
         let (mut down, mut dragging) = (false, false);
+        let (mut ctrl, mut shift) = (false, false);
         let (mut origin, mut last) = ((0.0f64, 0.0f64), (0.0f64, 0.0f64));
-        let result = listen(move |ev| match ev.event_type {
-            EventType::MouseMove { x, y } => {
-                last = (x, y);
-                if down && !dragging && (x - origin.0).hypot(y - origin.1) > DRAG_THRESHOLD {
-                    dragging = true;
-                }
-            }
-            EventType::ButtonPress(Button::Left) => {
-                down = true;
-                dragging = false;
-                origin = last;
-            }
-            EventType::ButtonRelease(Button::Left) => {
-                down = false;
-                if std::mem::take(&mut dragging) && VISIBLE.load(Ordering::Relaxed) {
+        let result = listen(move |ev| {
+            match ev.event_type {
+                EventType::KeyPress(Key::ControlLeft | Key::ControlRight) => ctrl = true,
+                EventType::KeyRelease(Key::ControlLeft | Key::ControlRight) => ctrl = false,
+                EventType::KeyPress(Key::ShiftLeft | Key::ShiftRight) => shift = true,
+                EventType::KeyRelease(Key::ShiftLeft | Key::ShiftRight) => shift = false,
+                EventType::KeyPress(Key::Space) if ctrl && shift && !dragging => {
                     let app = handle.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(RELEASE_GRACE);
-                        if !KEEP.load(Ordering::Relaxed) {
-                            hide(&app);
-                        }
-                    });
+                    std::thread::spawn(move || on_hotkey(&app));
                 }
+                _ => {}
             }
-            EventType::KeyPress(key) if dragging => {
-                let Some(t) = Trigger::of(key) else { return };
-                let keys = *KEYS.lock().unwrap_or_else(|e| e.into_inner());
-                let Some(i) = keys.iter().position(|k| *k == t) else { return };
-                let mode = ["convert", "tools", "actions"][i];
-                show_at(&handle, mode, (last.0 as i32, last.1 as i32));
+            match ev.event_type {
+                EventType::MouseMove { x, y } => {
+                    last = (x, y);
+                    if down && !dragging && (x - origin.0).hypot(y - origin.1) > DRAG_THRESHOLD {
+                        dragging = true;
+                    }
+                }
+                EventType::ButtonPress(Button::Left) => {
+                    down = true;
+                    dragging = false;
+                    origin = last;
+                }
+                EventType::ButtonRelease(Button::Left) => {
+                    down = false;
+                    if std::mem::take(&mut dragging) && VISIBLE.load(Ordering::Relaxed) {
+                        let app = handle.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(RELEASE_GRACE);
+                            if !KEEP.load(Ordering::Relaxed) {
+                                hide(&app);
+                            }
+                        });
+                    }
+                }
+                EventType::KeyPress(key) if dragging => {
+                    let Some(t) = Trigger::of(key) else { return };
+                    let keys = *KEYS.lock().unwrap_or_else(|e| e.into_inner());
+                    let Some(i) = keys.iter().position(|k| *k == t) else { return };
+                    let mode = ["convert", "tools", "actions"][i];
+                    show_at(&handle, mode, (last.0 as i32, last.1 as i32));
+                }
+                _ => {}
             }
-            _ => {}
         });
         if let Err(e) = result {
             OK.store(false, Ordering::Relaxed);

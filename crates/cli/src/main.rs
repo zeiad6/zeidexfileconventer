@@ -10,31 +10,32 @@ use zeidex_core::runner::{self, Event};
 use zeidex_core::tools::{locate, Tool};
 use zeidex_core::{integrate, Error};
 
-const USAGE: &str = "\
+const USAGE: &str = r#"
 zeidex — local file converter (images, video, audio, PDF, office, ebooks, archives)
 
 USAGE:
   zeidex targets <files...>                 formats and tools available for the files
   zeidex convert --to <ext> <files...>      convert, output saved beside each original
   zeidex tool <id> [--key value]... <files...>
-  zeidex recipe \"<step> | <step> ...\" <files...>   chain tools, e.g. \"resize max=1600 | compress percent=60 | strip\"
-  zeidex watch <dir> --do \"<step or recipe>\" [--ext heic,png]   process files as they arrive (Ctrl+C stops)
+  zeidex recipe "<step> | <step> ..." <files...>   chain tools, e.g. "resize max=1600 | compress percent=60 | strip"
+  zeidex watch <dir> --do "<step or recipe>" [--ext heic,png]   process files as they arrive (Ctrl+C stops)
   zeidex info <file>                        print metadata
+  zeidex qr-make "<text>" [--out qr.png]    make a QR code image (needs qrencode)
   zeidex tools                              list tool ids and their options
   zeidex doctor                             show which engines were found
-  zeidex integrate                          add \"Open with Zeidex\" to the file manager
+  zeidex integrate                          add "Open with Zeidex" to the file manager
 
 EXAMPLES:
   zeidex convert --to jpg *.heic
   zeidex tool compress --target 8MB clip.mov
   zeidex tool ocr --lang ara+eng --to pdf scan.pdf
   zeidex tool merge-pdf a.pdf b.pdf
-  zeidex tool rename --pattern \"trip-{n:3}\" *.jpg
-  zeidex watch ~/Downloads --ext heic --do \"convert to=jpg\"
+  zeidex tool rename --pattern "trip-{n:3}" *.jpg
+  zeidex watch ~/Downloads --ext heic --do "convert to=jpg"
 
 OPTIONS:
   --jobs N    files processed at the same time (default: half the CPU cores, max 4)
-";
+"#;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -67,7 +68,7 @@ fn split_args(args: &[String]) -> Result<(HashMap<String, String>, Vec<PathBuf>)
 
 fn real_main(args: &[String]) -> Result<bool, Error> {
     let Some((cmd, rest)) = args.split_first() else {
-        print!("{USAGE}");
+        print!("{}", USAGE.trim_start());
         return Ok(true);
     };
     match cmd.as_str() {
@@ -102,18 +103,33 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
             let (id, rest) = rest.split_first().ok_or_else(|| Error::BadOption("tool id required".into()))?;
             let (opts, files) = split_args(rest)?;
             let op = Op::parse(id, &opts)?;
-            if op == Op::Info {
-                return info(&files);
-            }
-            if let Op::Rename { .. } = op {
-                for (old, new) in runner::rename(&op, &files)? {
-                    println!("{} -> {}", old.display(), new.display());
-                }
+            if runner::is_text_tool(&op) {
+                print!("{}", runner::text_tool(&op, &files)?);
                 return Ok(true);
             }
             run(&op, &files, &opts)
         }
-        "info" => info(&split_args(rest)?.1),
+        "info" => {
+            print!("{}", runner::text_tool(&Op::Info, &split_args(rest)?.1)?);
+            Ok(true)
+        }
+        "qr-make" => {
+            let (text, rest) = rest.split_first().ok_or_else(|| Error::BadOption("text required".into()))?;
+            let (opts, _) = split_args(rest)?;
+            let out = PathBuf::from(opts.get("out").map_or("qr.png", String::as_str));
+            let out = runner::unique_path(&std::path::absolute(&out)?);
+            let ok = std::process::Command::new(zeidex_core::tools::require(Tool::Qrencode)?)
+                .args(["-s", "10", "-m", "2", "-l", "M", "-o"])
+                .arg(&out)
+                .arg("--")
+                .arg(text)
+                .status()?
+                .success();
+            if ok {
+                println!("{}", out.display());
+            }
+            Ok(ok)
+        }
         "tools" => {
             for t in TOOLS {
                 let cats: Vec<&str> = t.cats.iter().map(|c| c.name()).collect();
@@ -150,19 +166,11 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
             Ok(true)
         }
         "-h" | "--help" | "help" => {
-            print!("{USAGE}");
+            print!("{}", USAGE.trim_start());
             Ok(true)
         }
         other => Err(Error::BadOption(format!("unknown command `{other}` (try --help)"))),
     }
-}
-
-fn info(files: &[PathBuf]) -> Result<bool, Error> {
-    for f in files {
-        println!("== {}", f.display());
-        println!("{}", runner::info(f)?);
-    }
-    Ok(true)
 }
 
 /// Polls `dir` once a second and runs `op` on every new, fully written file.

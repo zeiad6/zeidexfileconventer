@@ -58,6 +58,17 @@ impl Adjust {
     };
 }
 
+/// `exif` option key -> ExifTool tag.
+pub const EXIF_FIELDS: [(&str, &str); 7] = [
+    ("artist", "Artist"),
+    ("copyright", "Copyright"),
+    ("description", "ImageDescription"),
+    ("date", "DateTimeOriginal"),
+    ("make", "Make"),
+    ("model", "Model"),
+    ("keywords", "XMP-dc:Subject"),
+];
+
 /// Tags `zeidex tool tags` may set; others are ignored so a typo cannot write junk keys.
 pub const TAG_KEYS: [&str; 7] = ["title", "artist", "album", "date", "genre", "comment", "copyright"];
 
@@ -78,10 +89,15 @@ pub enum Op {
     },
     StripMetadata,
     Info,
+    /// `password` encrypts (AES-256) zip/7z; `split` writes volumes of that many bytes.
     Archive {
         kind: String,
+        password: Option<String>,
+        split: Option<u64>,
     },
-    Extract,
+    Extract {
+        password: Option<String>,
+    },
     Resize(Size),
     Crop(CropSpec),
     Rotate {
@@ -200,6 +216,34 @@ pub enum Op {
     },
     /// Several single-file ops applied one after another (`resize max=1600 | compress percent=60`).
     Recipe(Vec<Op>),
+    /// EXIF edit through ExifTool: (tag, value) pairs, GPS position, or GPS removal.
+    Exif {
+        tags: Vec<(String, String)>,
+        gps: Option<(f64, f64)>,
+        remove_gps: bool,
+    },
+    /// Decode QR codes / barcodes in an image (ZBar).
+    QrRead,
+    /// Fit into a social format (9:16, 1:1, 4:5, 16:9) over a blurred copy of itself.
+    Social {
+        ratio: (u32, u32),
+    },
+    /// 4×4 grid of frames from across a video.
+    ContactSheet,
+    /// Downscale a video to at most `height` lines.
+    VideoHeight {
+        height: u32,
+    },
+    /// Video + audio file: replace the video's soundtrack.
+    ReplaceAudio,
+    DenoiseAudio,
+    RemoveSilence,
+    /// Responsive web images: WebP + AVIF at several widths, plus a `<picture>` snippet.
+    WebSet,
+    /// Find identical files (size, then SHA-256) under the selection; optionally move copies away.
+    Duplicates {
+        move_dupes: bool,
+    },
     MergePdf,
     SplitPdf,
     /// `rotate` holds (output page, degrees) pairs.
@@ -221,6 +265,7 @@ impl Op {
                 | Op::MergePdf
                 | Op::AddSubs { .. }
                 | Op::Slideshow { .. }
+                | Op::ReplaceAudio
         )
     }
 
@@ -257,9 +302,17 @@ impl Op {
                 if !["zip", "7z", "tar", "tgz"].contains(&kind.as_str()) {
                     return Err(bad("format", &kind));
                 }
-                Op::Archive { kind }
+                let password = get("password").map(str::to_string);
+                if password.is_some() && !["zip", "7z"].contains(&kind.as_str()) {
+                    return Err(bad("password", "only zip and 7z archives can be encrypted"));
+                }
+                let split = get("split").map(|v| parse_size(v).ok_or_else(|| bad("split", v))).transpose()?;
+                if split.is_some_and(|b| b < 100_000) {
+                    return Err(bad("split", "parts must be at least 100KB"));
+                }
+                Op::Archive { kind, password, split }
             }
-            "extract" => Op::Extract,
+            "extract" => Op::Extract { password: get("password").map(str::to_string) },
             "resize" => match (get("scale"), get("max")) {
                 (Some(s), _) => {
                     Op::Resize(Size::Percent(s.trim_end_matches('%').parse().map_err(|_| bad("scale", s))?))
@@ -485,6 +538,47 @@ impl Op {
                 Op::Rename { pattern, start: int("start", 1)? as usize }
             }
             "recipe" => Op::Recipe(parse_recipe(get("steps").ok_or_else(|| bad("steps", "required"))?)?),
+            "exif" => {
+                let tags: Vec<(String, String)> = EXIF_FIELDS
+                    .iter()
+                    .filter_map(|(key, tag)| get(key).map(|v| (tag.to_string(), v.to_string())))
+                    .collect();
+                let gps = get("gps")
+                    .map(|v| {
+                        let (la, lo) = v.split_once(',').ok_or_else(|| bad("gps", "use lat,lon"))?;
+                        match (la.trim().parse::<f64>(), lo.trim().parse::<f64>()) {
+                            (Ok(a), Ok(o)) if a.abs() <= 90.0 && o.abs() <= 180.0 => Ok((a, o)),
+                            _ => Err(bad("gps", v)),
+                        }
+                    })
+                    .transpose()?;
+                let remove_gps = matches!(get("remove-gps"), Some("1" | "true" | "yes"));
+                if tags.is_empty() && gps.is_none() && !remove_gps {
+                    return Err(bad("exif", "set a field, gps=lat,lon or remove-gps=1"));
+                }
+                Op::Exif { tags, gps, remove_gps }
+            }
+            "qr-read" => Op::QrRead,
+            "social" => {
+                let ratio = parse_ratio(get("ratio").unwrap_or("9:16"))?;
+                if ![(9, 16), (1, 1), (4, 5), (16, 9)].contains(&ratio) {
+                    return Err(bad("ratio", "use 9:16, 1:1, 4:5 or 16:9"));
+                }
+                Op::Social { ratio }
+            }
+            "contact-sheet" => Op::ContactSheet,
+            "video-size" => {
+                let height = int("height", 720)?;
+                if ![2160, 1440, 1080, 720, 480, 360].contains(&height) {
+                    return Err(bad("height", "use 2160, 1440, 1080, 720, 480 or 360"));
+                }
+                Op::VideoHeight { height }
+            }
+            "replace-audio" => Op::ReplaceAudio,
+            "denoise-audio" => Op::DenoiseAudio,
+            "remove-silence" => Op::RemoveSilence,
+            "web-set" => Op::WebSet,
+            "duplicates" => Op::Duplicates { move_dupes: matches!(get("move"), Some("1" | "true" | "yes")) },
             "visualize" => {
                 let shape = get("shape").unwrap_or("landscape").to_string();
                 if !["landscape", "portrait", "square"].contains(&shape.as_str()) {
@@ -522,7 +616,12 @@ pub fn parse_recipe(spec: &str) -> Result<Vec<Op>> {
     let mut steps = Vec::new();
     for part in spec.split('|').map(str::trim).filter(|p| !p.is_empty()) {
         let op = parse_step(part)?;
-        if op.is_multi() || matches!(op, Op::Recipe(_) | Op::Info | Op::Checksum | Op::Rename { .. }) {
+        if op.is_multi()
+            || matches!(
+                op,
+                Op::Recipe(_) | Op::Info | Op::Checksum | Op::Rename { .. } | Op::QrRead | Op::Duplicates { .. }
+            )
+        {
             return Err(bad("recipe", &format!("`{part}` cannot be a recipe step")));
         }
         steps.push(op);
@@ -827,10 +926,19 @@ pub const TOOLS: &[ToolDef] = &[
         label_ar: "أرشفة",
         cats: ANY,
         multi: false,
-        params: &[p("format", "zip / 7z / tar / tgz", "zip / 7z / tar / tgz", "zip")],
+        params: &[
+            p("format", "zip / 7z / tar / tgz", "zip / 7z / tar / tgz", "zip"),
+            p("password", "Password (zip/7z, AES-256)", "كلمة مرور (zip/7z، AES-256)", ""),
+            p("split", "Split into parts of (e.g. 25MB)", "تقسيم إلى أجزاء بحجم (مثل 25MB)", ""),
+        ],
     },
     ToolDef {
-        id: "extract", label: "Extract", label_ar: "فك الأرشيف", cats: &[Archive], multi: false, params: &[]
+        id: "extract",
+        label: "Extract",
+        label_ar: "فك الأرشيف",
+        cats: &[Archive],
+        multi: false,
+        params: &[p("password", "Password (if protected)", "كلمة المرور (إن كان محمياً)", "")],
     },
     ToolDef {
         id: "resize",
@@ -1032,6 +1140,95 @@ pub const TOOLS: &[ToolDef] = &[
             p("rotate", "Rotate, e.g. 1:90,3:180", "تدوير، مثل 1:90,3:180", ""),
         ],
     },
+    ToolDef {
+        id: "exif",
+        label: "Edit EXIF / location",
+        label_ar: "تحرير EXIF والموقع",
+        cats: &[Image],
+        multi: false,
+        params: &[
+            p("artist", "Artist", "المصوّر", ""),
+            p("copyright", "Copyright", "حقوق النشر", ""),
+            p("description", "Description", "الوصف", ""),
+            p("date", "Date taken (YYYY:MM:DD HH:MM:SS)", "تاريخ الالتقاط (YYYY:MM:DD HH:MM:SS)", ""),
+            p("make", "Camera make", "صانع الكاميرا", ""),
+            p("model", "Camera model", "طراز الكاميرا", ""),
+            p("gps", "Location lat,lon", "الموقع lat,lon", ""),
+            p("remove-gps", "Remove location (1)", "حذف الموقع (1)", ""),
+        ],
+    },
+    ToolDef {
+        id: "qr-read",
+        label: "Read QR / barcode",
+        label_ar: "قراءة QR / باركود",
+        cats: &[Image],
+        multi: false,
+        params: &[],
+    },
+    ToolDef {
+        id: "social",
+        label: "Social format",
+        label_ar: "مقاس التواصل الاجتماعي",
+        cats: &[Image, Video],
+        multi: false,
+        params: &[p("ratio", "9:16 / 1:1 / 4:5 / 16:9", "9:16 / 1:1 / 4:5 / 16:9", "9:16")],
+    },
+    ToolDef {
+        id: "contact-sheet",
+        label: "Contact sheet",
+        label_ar: "لوحة مصغّرات",
+        cats: &[Video],
+        multi: false,
+        params: &[],
+    },
+    ToolDef {
+        id: "video-size",
+        label: "Resolution",
+        label_ar: "الدقة",
+        cats: &[Video],
+        multi: false,
+        params: &[p("height", "2160 / 1440 / 1080 / 720 / 480 / 360", "2160 / 1440 / 1080 / 720 / 480 / 360", "720")],
+    },
+    ToolDef {
+        id: "replace-audio",
+        label: "Replace audio",
+        label_ar: "استبدال الصوت",
+        cats: &[],
+        multi: true,
+        params: &[],
+    },
+    ToolDef {
+        id: "denoise-audio",
+        label: "Reduce noise",
+        label_ar: "تقليل الضوضاء",
+        cats: AV,
+        multi: false,
+        params: &[],
+    },
+    ToolDef {
+        id: "remove-silence",
+        label: "Remove silences",
+        label_ar: "حذف فترات الصمت",
+        cats: &[Audio],
+        multi: false,
+        params: &[],
+    },
+    ToolDef {
+        id: "web-set",
+        label: "Responsive web images",
+        label_ar: "صور ويب متجاوبة",
+        cats: &[Image],
+        multi: false,
+        params: &[],
+    },
+    ToolDef {
+        id: "duplicates",
+        label: "Find duplicates",
+        label_ar: "كشف المكررات",
+        cats: ANY,
+        multi: false,
+        params: &[p("move", "Move copies to a Duplicates folder (1)", "نقل النسخ إلى مجلد Duplicates (1)", "")],
+    },
 ];
 
 /// Tools the desktop app opens in its visual editor instead of an options form.
@@ -1056,6 +1253,9 @@ pub fn tools_for_paths<P: AsRef<std::path::Path>>(paths: &[P]) -> Vec<&'static T
     let count = |c: Category| cats.iter().filter(|x| **x == Some(c)).count();
     if paths.len() == 2 && count(Video) == 1 && count(Subtitle) == 1 {
         tools.extend(TOOLS.iter().filter(|t| t.id == "add-subs" || t.id == "burn-subs"));
+    }
+    if paths.len() == 2 && count(Video) == 1 && count(Audio) == 1 {
+        tools.extend(TOOLS.iter().filter(|t| t.id == "replace-audio"));
     }
     tools
 }
@@ -1144,7 +1344,7 @@ mod tests {
             // no sensible defaults: bleep needs a range, redact needs boxes, annotate is app-only
             // ...adjust/tags defaults change nothing (refused on purpose); some need user input
             let needs_input =
-                ["bleep", "redact", "annotate", "adjust", "tags", "watermark", "protect", "unlock", "recipe"];
+                ["bleep", "redact", "annotate", "adjust", "tags", "watermark", "protect", "unlock", "recipe", "exif"];
             assert!(r.is_ok() || needs_input.contains(&t.id), "{} -> {:?}", t.id, r.err());
         }
     }
@@ -1166,6 +1366,18 @@ mod tests {
         assert_eq!(Op::parse("shift-subs", &opts(&[("seconds", "-1.25")])).unwrap(), Op::ShiftSubs { ms: -1250 });
         assert!(Op::parse("watermark", &opts(&[("image", "l.png"), ("pos", "middle")])).is_err());
         assert!(Op::parse("transcribe", &opts(&[("lang", "ar;rm")])).is_err());
+        assert_eq!(
+            Op::parse("exif", &opts(&[("artist", "Zeiad"), ("gps", "24.7, 46.7")])).unwrap(),
+            Op::Exif { tags: vec![("Artist".into(), "Zeiad".into())], gps: Some((24.7, 46.7)), remove_gps: false }
+        );
+        assert!(Op::parse("exif", &opts(&[("gps", "100,0")])).is_err());
+        assert!(Op::parse("archive", &opts(&[("format", "tgz"), ("password", "x")])).is_err());
+        assert!(matches!(
+            Op::parse("archive", &opts(&[("split", "25MB")])),
+            Ok(Op::Archive { split: Some(25_000_000), .. })
+        ));
+        assert!(Op::parse("social", &opts(&[("ratio", "3:2")])).is_err());
+        assert!(ids(&["a.mp4", "a.m4a"]).contains(&"replace-audio"));
     }
 
     #[test]
@@ -1175,7 +1387,7 @@ mod tests {
         assert!(!one.contains(&"merge-pdf") && two.contains(&"merge-pdf"));
         assert_eq!(
             tools_for(None, 3).iter().map(|t| t.id).collect::<Vec<_>>(),
-            vec!["checksum", "rename", "recipe", "archive"]
+            vec!["checksum", "rename", "recipe", "archive", "duplicates"]
         );
     }
 }

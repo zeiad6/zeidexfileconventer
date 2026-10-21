@@ -134,6 +134,33 @@ if "$Z" tool rename --pattern "note-{n:2}" ren/x.txt ren/y.txt >/dev/null && [[ 
 else echo "FAIL  batch rename"; fail=$((fail + 1)); fi
 [[ -f clip.mp4.sha256 ]] && has sha256sum && ! sha256sum -c clip.mp4.sha256 >/dev/null 2>&1 && { echo "FAIL  checksum does not verify with sha256sum"; fail=$((fail + 1)); }
 [[ -f photo.ico ]] && has file && ! file photo.ico | grep -qi "icon" && { echo "FAIL  ico not recognised"; fail=$((fail + 1)); }
+# ---- v0.5 ----
+ffmpeg -loglevel error -f lavfi -i testsrc=size=320x240 -frames:v 1 cam.jpg
+check cam-exif.jpg          exiftool -- tool exif --artist "Zeidex QA" --gps "24.7136,46.6753" cam.jpg
+[[ -f cam-exif.jpg ]] && ! exiftool -s3 -Artist cam-exif.jpg | grep -q "Zeidex QA" && { echo "FAIL  exif artist not written"; fail=$((fail + 1)); }
+check cam-exif-clean.jpg    exiftool -- tool strip cam-exif.jpg
+[[ -f cam-exif-clean.jpg ]] && exiftool -s3 -GPSLatitude cam-exif-clean.jpg | grep -q . && { echo "FAIL  strip left GPS behind"; fail=$((fail + 1)); }
+check photo-9x16.png        ffmpeg -- tool social photo.png
+check clip-1x1.mp4          ffmpeg -- tool social --ratio 1:1 clip.mp4
+check clip-sheet.jpg        ffmpeg ffprobe -- tool contact-sheet clip.mp4
+check clip-360p.mp4         ffmpeg -- tool video-size --height 360 clip.mp4
+check clip-newaudio.mp4     ffmpeg -- tool replace-audio clip.mp4 voice.wav
+check voice-denoised.wav    ffmpeg -- tool denoise-audio voice.wav
+check voice-nosilence.wav   ffmpeg -- tool remove-silence voice.wav
+check "photo web"           vips -- tool web-set photo.png
+check "clip parts (3)"      7z -- tool archive --password s3cret --split 100KB clip.mp4
+check subs.7z               7z -- tool archive --format 7z --password s3cret subs.srt
+mv subs.7z secret.7z 2>/dev/null
+check secret                7z -- tool extract --password s3cret secret.7z
+if has 7z && [[ -f secret.7z ]] && "$Z" tool extract secret.7z >/dev/null 2>&1; then echo "FAIL  extract without password succeeded"; fail=$((fail + 1)); fi
+mkdir dupes && cp subs.srt dupes/a.srt && cp subs.srt dupes/b.srt
+if "$Z" tool duplicates dupes 2>/dev/null | grep -q "2 copies"; then echo "ok    duplicates"; pass=$((pass + 1)); else echo "FAIL  duplicates"; fail=$((fail + 1)); fi
+if has qrencode && has zbarimg; then
+  "$Z" qr-make "https://zeidex.example/قيمة" --out code.png >/dev/null
+  if "$Z" tool qr-read code.png | grep -q "zeidex.example"; then echo "ok    qr-make + qr-read"; pass=$((pass + 1)); else echo "FAIL  qr round trip"; fail=$((fail + 1)); fi
+else
+  echo "SKIP  qr round trip (no qrencode/zbarimg)"; skip=$((skip + 1))
+fi
 grep -qi "ocr test" doc-ocr.txt 2>/dev/null || { has tesseract && { echo "FAIL  OCR text mismatch"; fail=$((fail + 1)); }; }
 echo "passed=$pass failed=$fail skipped=$skip"
 [[ $fail -eq 0 ]]

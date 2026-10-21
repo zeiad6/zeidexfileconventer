@@ -11,6 +11,7 @@ pub mod pdf;
 pub mod plan;
 pub mod rename;
 pub mod runner;
+pub mod selection;
 pub mod sha256;
 pub mod subtitle;
 pub mod tools;

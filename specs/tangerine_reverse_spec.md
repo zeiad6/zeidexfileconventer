@@ -87,5 +87,12 @@ local speech-to-SRT with whisper.cpp, subtitle shift/extract/add/burn, video rev
 stabilize, frame export, image slideshows, fades, PDF password protect/unlock, and
 multi-size .ico export.
 
-Still out of scope: face detection (no portable engine in the chosen stack; U3), dehaze,
-EXIF editing (removal only), and R7 (Enter on a file manager selection).
+v0.5 closes the remaining parity gaps and adds more: QR/barcode reading (ZBar), QR
+generation (qrencode), EXIF and GPS editing with lossless metadata removal (ExifTool), and R7
+as Ctrl+Shift+Space on the Explorer selection (Windows) or on files copied to the clipboard
+(Linux), with arrow/Enter/Tab keyboard control of the wheel. Extras: social formats over a
+blurred fill, contact sheets, resolution presets, audio replacement, noise reduction, silence
+removal, AES-encrypted and split archives, duplicate finder, and responsive web image sets.
+
+Still out of scope: face detection (no portable engine in the chosen stack; U3) and dehaze.
+On Linux, R7 needs a copy (Ctrl+C) first, because file managers expose no common selection API.

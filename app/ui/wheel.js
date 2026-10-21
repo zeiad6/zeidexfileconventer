@@ -156,6 +156,7 @@ async function drop(p, pos) {
 }
 
 function reset() {
+  clickMode = false;
   closeForm();
   paths = [];
   desc = null;
@@ -183,9 +184,41 @@ getCurrentWebview().onDragDropEvent(async (e) => {
   }
 });
 
+// Keyboard mode (Ctrl+Shift+Space on a selection): no drag, so mouse moves, clicks and
+// keys drive the wheel. Arrows pick, Enter applies, Tab switches ring, Escape closes.
+let clickMode = false;
+const toPhysical = (e) => ({ x: e.clientX * (window.devicePixelRatio || 1), y: e.clientY * (window.devicePixelRatio || 1) });
+
+listen('wheel-open', async (e) => {
+  clickMode = true;
+  closeForm();
+  desc = null;
+  await load(e.payload);
+  hover = items().length ? 0 : -1;
+  render();
+});
+document.addEventListener('mousemove', (e) => { if (clickMode && !formOpen) over(toPhysical(e)); });
+document.addEventListener('click', (e) => {
+  if (!clickMode || formOpen || e.target.closest?.('#params')) return;
+  drop(paths, toPhysical(e));
+});
+window.addEventListener('blur', () => { if (clickMode && !formOpen) invoke('hide_wheel'); });
+
 listen('wheel-mode', (e) => { if (!formOpen) setMode(e.payload); });
 listen('wheel-hidden', reset);
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') invoke('hide_wheel');
+  if (e.key === 'Escape') return invoke('hide_wheel');
+  if (formOpen || !desc) return;
+  const n = items().length;
+  if (['ArrowRight', 'ArrowDown'].includes(e.key) && n) hover = (hover + 1 + n) % n;
+  else if (['ArrowLeft', 'ArrowUp'].includes(e.key) && n) hover = (hover - 1 + n) % n;
+  else if (e.key === 'Tab') {
+    e.preventDefault?.();
+    const next = MODES.slice(MODES.indexOf(mode) + 1).concat(MODES).find((m) => desc[m].length);
+    setMode(next || mode);
+    hover = items().length ? 0 : -1;
+  } else if (e.key === 'Enter' && hover >= 0) return choose(items()[hover]);
+  else return;
+  render();
 });
 render();

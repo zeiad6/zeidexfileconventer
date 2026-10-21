@@ -38,6 +38,8 @@ pub struct Ctx {
     /// Pixel size of the first input, for ops that size things relative to it.
     pub dims: Option<(u32, u32)>,
     pub whisper_model: Option<PathBuf>,
+    /// ExifTool is installed (lossless metadata removal for images).
+    pub exiftool: bool,
     pub image: Option<ImageInfo>,
     pub size: u64,
 }
@@ -139,7 +141,12 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
         }
         Op::Compress { how, max } => compress(src, &from, cat, how, *max, ctx, tmp, &mut s, &stem)?,
         Op::StripMetadata => {
-            if is(Category::Image) && from != "bmp" && from != "svg" {
+            if is(Category::Image) && ctx.exiftool && from != "svg" {
+                // Lossless: ExifTool rewrites only the metadata, never the pixels.
+                let out = tmp.join(format!("clean.{from}"));
+                s.push(run(Tool::ExifTool, args!["-q", "-all=", "-o", &out, "--", src]));
+                (out, named(&stem, "clean", &from))
+            } else if is(Category::Image) && from != "bmp" && from != "svg" {
                 let out = tmp.join(format!("clean.{from}"));
                 let opts = if from == "jpg" { "[Q=95,strip]" } else { "[strip]" };
                 let input = image_src(src, &from, tmp, &mut s);
@@ -163,12 +170,131 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             }
         }
         Op::Info => return Err(Error::Unsupported("info is read with runner::info".into())),
-        Op::Archive { kind } => {
-            let out = pack(inputs, kind, tmp, &mut s);
+        Op::Archive { kind, password, split } => {
             let base = if inputs.len() == 1 { display_name(src) } else { "archive".into() };
-            (out, named(&base, "", kind))
+            match split {
+                // Volumes (name.zip.001, .002...) go into one folder.
+                Some(bytes) => {
+                    let dir = tmp.join("parts");
+                    s.push(Step::MkDir(dir.clone()));
+                    pack(inputs, kind, &dir, &mut s, password.as_deref(), Some(*bytes));
+                    (dir, format!("{base} parts"))
+                }
+                None => (pack(inputs, kind, tmp, &mut s, password.as_deref(), None), named(&base, "", kind)),
+            }
         }
-        Op::Extract if is(Category::Archive) => (extract(src, tmp, &mut s), stem.clone()),
+        Op::Extract { password } if is(Category::Archive) => {
+            (extract(src, tmp, &mut s, password.as_deref()), stem.clone())
+        }
+        Op::Exif { tags, gps, remove_gps } if is(Category::Image) => {
+            let out = tmp.join(format!("exif.{from}"));
+            let mut a = args!["-q", "-o", &out];
+            if *remove_gps {
+                a.push("-gps:all=".into());
+            }
+            for (tag, value) in tags {
+                a.push(format!("-{tag}={value}").into());
+            }
+            if let Some((lat, lon)) = gps {
+                a.extend(args![
+                    format!("-GPSLatitude={}", lat.abs()),
+                    format!("-GPSLatitudeRef={}", if *lat < 0.0 { "S" } else { "N" }),
+                    format!("-GPSLongitude={}", lon.abs()),
+                    format!("-GPSLongitudeRef={}", if *lon < 0.0 { "W" } else { "E" })
+                ]);
+            }
+            a.extend(args!["--", src]);
+            s.push(run(Tool::ExifTool, a));
+            (out, named(&stem, "exif", &from))
+        }
+        Op::Social { ratio } if is(Category::Image) || is(Category::Video) => {
+            let (w, h) = social_canvas(*ratio);
+            let graph = format!(
+                "[0:v]split[a][b];[a]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},boxblur=24:2[bg];\
+                 [b]scale={w}:{h}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
+            );
+            let tag = format!("{}x{}", ratio.0, ratio.1);
+            visual_filter(src, &from, cat, &graph, &tag, ctx, tmp, &mut s, &stem)
+        }
+        Op::ContactSheet if is(Category::Video) => {
+            let dur = ctx.media.as_ref().map(|m| m.duration).filter(|d| *d > 0.0)
+                .ok_or_else(|| Error::Unsupported("could not read the duration".into()))?;
+            let out = tmp.join("sheet.jpg");
+            let mut a = ffmpeg_in(src);
+            a.extend(args![
+                "-vf", format!("fps={:.5},scale=480:-2,tile=4x4:padding=6:margin=6", SHEET_TILES as f64 / dur),
+                "-frames:v", "1", "-q:v", "3", &out
+            ]);
+            s.push(ffmpeg(a, ctx));
+            (out, named(&stem, "sheet", "jpg"))
+        }
+        Op::VideoHeight { height } if is(Category::Video) => {
+            let to = av_out_ext(&from, cat);
+            let out = tmp.join(format!("resized.{to}"));
+            let mut a = ffmpeg_in(src);
+            a.extend(args!["-vf", format!("scale=-2:'min({height},ih)'"), "-c:a", "copy"]);
+            a.extend(strs(video_codec(to)));
+            a.push(out.clone().into());
+            s.push(ffmpeg(a, ctx));
+            (out, named(&stem, &format!("{height}p"), to))
+        }
+        Op::ReplaceAudio => {
+            let find = |c: Category| inputs.iter().find(|p| crate::format::category_of(p) == Some(c));
+            let (Some(video), Some(audio)) = (find(Category::Video), find(Category::Audio)) else {
+                return Err(Error::BadOption("select one video and one audio file".into()));
+            };
+            let to = av_out_ext(&ext_of(video).unwrap_or_default(), Some(Category::Video));
+            let out = tmp.join(format!("newaudio.{to}"));
+            let mut a = ffmpeg_in(video);
+            a.extend(args!["-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy"]);
+            a.extend(strs(audio_codec(to)));
+            a.extend(args!["-shortest", &out]);
+            s.push(run(Tool::Ffmpeg, a));
+            (out, named(&stem_of(video), "newaudio", to))
+        }
+        Op::DenoiseAudio if av => audio_filter(src, &from, cat, "afftdn=nf=-25", "denoised", ctx, tmp, &mut s, &stem),
+        Op::RemoveSilence if is(Category::Audio) => audio_filter(
+            src,
+            &from,
+            cat,
+            "silenceremove=start_periods=1:start_threshold=-45dB:stop_periods=-1:stop_duration=0.6:stop_threshold=-45dB",
+            "nosilence",
+            ctx,
+            tmp,
+            &mut s,
+            &stem,
+        ),
+        Op::WebSet if is(Category::Image) => {
+            let dir = tmp.join("web");
+            s.push(Step::MkDir(dir.clone()));
+            let input = image_src(src, &from, tmp, &mut s);
+            let source_w = ctx.dims.map_or(u32::MAX, |(w, _)| w);
+            let mut widths: Vec<u32> = WEB_WIDTHS.iter().copied().filter(|w| *w <= source_w).collect();
+            if widths.is_empty() {
+                widths.push(source_w);
+            }
+            let srcset = |ext: &str, opts: &str, s: &mut Vec<Step>| {
+                let mut set = Vec::new();
+                for w in &widths {
+                    let file = format!("{stem}-{w}.{ext}");
+                    let dst = suffixed(&dir.join(&file), opts);
+                    s.push(run(Tool::Vips, args!["thumbnail", &input, dst, w.to_string(), "--size", "down"]));
+                    set.push(format!("{file} {w}w"));
+                }
+                set.join(", ")
+            };
+            let avif = srcset("avif", "[Q=55,strip]", &mut s);
+            let webp = srcset("webp", "[Q=80,strip]", &mut s);
+            let fallback = format!("{stem}-{}.webp", widths[widths.len() / 2]);
+            let html = format!(
+                "<picture>\n  <source type=\"image/avif\" srcset=\"{avif}\" sizes=\"100vw\">\n  \
+                 <source type=\"image/webp\" srcset=\"{webp}\" sizes=\"100vw\">\n  \
+                 <img src=\"{fallback}\" alt=\"\" loading=\"lazy\" decoding=\"async\">\n</picture>\n"
+            );
+            s.push(Step::WriteFile { path: dir.join(format!("{stem}.html")), contents: html });
+            (dir, format!("{stem} web"))
+        }
+        Op::QrRead | Op::Duplicates { .. } => return Err(Error::Unsupported("handled by the runner".into())),
         Op::Resize(size) if is(Category::Image) => {
             let (input, out, to) = image_io(src, &from, tmp, "resized", &mut s);
             s.push(match size {
@@ -932,6 +1058,21 @@ pub fn crop_box(w: u32, h: u32, rw: u32, rh: u32) -> (u32, u32) {
     }
 }
 
+const SHEET_TILES: u32 = 16;
+/// Widths for responsive web images (never upscaled).
+const WEB_WIDTHS: [u32; 3] = [480, 960, 1600];
+
+/// Output canvas for social formats: 1080 px on the short side.
+fn social_canvas(ratio: (u32, u32)) -> (u32, u32) {
+    let short = 1080;
+    let (a, b) = ratio;
+    if a >= b {
+        (short * a / b, short)
+    } else {
+        (short, short * b / a)
+    }
+}
+
 /// Clips longer than this are refused by `reverse` (FFmpeg buffers the whole clip).
 const REVERSE_MAX_SECS: f64 = 120.0;
 const ICON_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
@@ -1631,8 +1772,8 @@ fn convert(src: &Path, from: &str, to: &str, tmp: &Path, ctx: &Ctx, s: &mut Vec<
             _ => calibre(src, to, tmp, s),
         },
         Category::Archive => {
-            let dir = extract(src, tmp, s);
-            pack(&[dir.join("*")], to, tmp, s)
+            let dir = extract(src, tmp, s, None);
+            pack(&[dir.join("*")], to, tmp, s, None, None)
         }
     })
 }
@@ -1650,7 +1791,9 @@ fn convert_from(src: &Path, from: &str, to: &str, tmp: &Path, ctx: &Ctx, s: &mut
 
 // ---------- archives ----------
 
-fn extract(src: &Path, tmp: &Path, s: &mut Vec<Step>) -> PathBuf {
+fn extract(src: &Path, tmp: &Path, s: &mut Vec<Step>, password: Option<&str>) -> PathBuf {
+    // Always pass -p so an encrypted archive fails instead of waiting for a password prompt.
+    let pw = format!("-p{}", password.unwrap_or(""));
     let dir = tmp.join("extracted");
     let name = src.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     // 7-Zip unwraps one layer at a time: .tar.gz -> .tar -> files.
@@ -1662,10 +1805,10 @@ fn extract(src: &Path, tmp: &Path, s: &mut Vec<Step>) -> PathBuf {
     match inner {
         Some(tar) => {
             let layer = tmp.join("layer");
-            s.push(run(Tool::SevenZip, args!["x", "-y", prefixed("-o", &layer), "--", src]));
-            s.push(run(Tool::SevenZip, args!["x", "-y", prefixed("-o", &dir), "--", layer.join(tar)]));
+            s.push(run(Tool::SevenZip, args!["x", "-y", &pw, prefixed("-o", &layer), "--", src]));
+            s.push(run(Tool::SevenZip, args!["x", "-y", &pw, prefixed("-o", &dir), "--", layer.join(tar)]));
         }
-        None => s.push(run(Tool::SevenZip, args!["x", "-y", prefixed("-o", &dir), "--", src])),
+        None => s.push(run(Tool::SevenZip, args!["x", "-y", &pw, prefixed("-o", &dir), "--", src])),
     }
     dir
 }
@@ -1675,9 +1818,25 @@ fn stem_tar(src: &Path, suffix_len: usize) -> String {
     name[..name.len() - suffix_len].to_string()
 }
 
-fn pack(inputs: &[PathBuf], kind: &str, tmp: &Path, s: &mut Vec<Step>) -> PathBuf {
+fn pack(
+    inputs: &[PathBuf],
+    kind: &str,
+    tmp: &Path,
+    s: &mut Vec<Step>,
+    password: Option<&str>,
+    split: Option<u64>,
+) -> PathBuf {
     let seven = |t: &str, out: &Path, files: &[PathBuf]| {
-        let mut a = args!["a", "-y", format!("-t{t}"), out, "--"];
+        let mut a = args!["a", "-y", format!("-t{t}"), out];
+        if let Some(pw) = password {
+            a.push(format!("-p{pw}").into());
+            // zip: AES instead of the weak ZipCrypto; 7z: also hide the file names.
+            a.push(if t == "zip" { "-mem=AES256" } else { "-mhe=on" }.into());
+        }
+        if let Some(bytes) = split {
+            a.push(format!("-v{bytes}b").into());
+        }
+        a.push("--".into());
         a.extend(files.iter().map(OsString::from));
         run(Tool::SevenZip, a)
     };
@@ -1948,6 +2107,61 @@ mod tests {
         assert_eq!(p.name, "logo.ico");
         let p = plan_of("shift-subs", &[("seconds", "2")], &["/in/s.vtt"], Ctx::default()).unwrap();
         assert!(matches!(p.steps[0], Step::Subtitle { shift_ms: 2000, .. }));
+    }
+
+    #[test]
+    fn v05_tools() {
+        let p = plan_of(
+            "exif",
+            &[("artist", "Z"), ("gps", "-33.9,18.4"), ("remove-gps", "1")],
+            &["/in/p.jpg"],
+            Ctx::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            argv(&p)[0].1,
+            "-q -o /t/exif.jpg -gps:all= -Artist=Z -GPSLatitude=33.9 -GPSLatitudeRef=S -GPSLongitude=18.4 -GPSLongitudeRef=E -- /in/p.jpg"
+        );
+        let p = plan_of("strip", &[], &["/in/p.heic"], Ctx { exiftool: true, ..Ctx::default() }).unwrap();
+        assert_eq!(argv(&p)[0], (Tool::ExifTool, "-q -all= -o /t/clean.heic -- /in/p.heic".into()));
+
+        assert_eq!(social_canvas((9, 16)), (1080, 1920));
+        assert_eq!(social_canvas((4, 5)), (1080, 1350));
+        let p = plan_of("social", &[("ratio", "1:1")], &["/in/v.mov"], media(5.0)).unwrap();
+        assert!(argv(&p)[0].1.contains("crop=1080:1080,boxblur") && p.name == "v-1x1.mov");
+        let p = plan_of("contact-sheet", &[], &["/in/v.mp4"], media(32.0)).unwrap();
+        assert!(argv(&p)[0].1.contains("fps=0.50000,scale=480:-2,tile=4x4"));
+        let p = plan_of("video-size", &[("height", "480")], &["/in/v.mkv"], media(5.0)).unwrap();
+        assert!(argv(&p)[0].1.contains("scale=-2:'min(480,ih)'") && p.name == "v-480p.mkv");
+        let p = plan_of("replace-audio", &[], &["/in/song.mp3", "/in/v.webm"], Ctx::default()).unwrap();
+        assert!(argv(&p)[0].1.contains("-map 0:v:0 -map 1:a:0 -c:v copy -c:a libopus"));
+
+        let p = plan_of(
+            "archive",
+            &[("format", "zip"), ("password", "pw"), ("split", "1MB")],
+            &["/in/a.txt"],
+            Ctx::default(),
+        )
+        .unwrap();
+        assert!(argv(&p)[0].1.starts_with("a -y -tzip /t/parts/archive.zip -ppw -mem=AES256 -v1000000b -- /in/a.txt"));
+        assert_eq!(p.name, "a parts");
+        let p = plan_of("extract", &[("password", "pw")], &["/in/a.7z"], Ctx::default()).unwrap();
+        assert!(argv(&p)[0].1.starts_with("x -y -ppw -o/t/extracted"));
+        let p = plan_of("extract", &[], &["/in/a.zip"], Ctx::default()).unwrap();
+        assert!(argv(&p)[0].1.starts_with("x -y -p -o"), "never waits for a password prompt");
+
+        let p = plan_of("web-set", &[], &["/in/hero.jpg"], Ctx { dims: Some((1200, 800)), ..Ctx::default() }).unwrap();
+        let a = argv(&p);
+        assert_eq!(a.len(), 4, "480 and 960 only (no upscaling), avif + webp");
+        let html = p
+            .steps
+            .iter()
+            .find_map(|s| match s {
+                Step::WriteFile { contents, .. } => Some(contents.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(html.contains("hero-480.avif 480w, hero-960.avif 960w") && html.contains("src=\"hero-960.webp\""));
     }
 
     #[test]

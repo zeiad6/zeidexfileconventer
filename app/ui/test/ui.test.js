@@ -154,6 +154,7 @@ function page(html, query = '') {
     },
   };
   sandbox.window = sandbox;
+  sandbox.addEventListener = (t, f) => { (listeners[`win:${t}`] ||= []).push(f); };
   const ctx = vm.createContext(sandbox);
   for (const m of src.matchAll(/<script src="([^"]+)"/g)) {
     vm.runInContext(fs.readFileSync(path.join(UI, m[1]), 'utf8'), ctx, { filename: m[1] });
@@ -163,7 +164,8 @@ function page(html, query = '') {
     calls,
     drag: (payload) => dropHandler({ payload }),
     emit: (name, payload) => (listeners[name] || []).forEach((cb) => cb({ payload })),
-    key: (key) => (listeners['doc:keydown'] || []).forEach((f) => f({ key, target: { tagName: 'BODY' } })),
+    key: (key) => (listeners['doc:keydown'] || []).forEach((f) => f({ key, target: { tagName: 'BODY' }, preventDefault() {} })),
+    doc: (type, e) => (listeners[`doc:${type}`] || []).forEach((f) => f(e)),
   };
 }
 
@@ -205,6 +207,26 @@ const segs = (p) => p.byId.wheel.children.filter((c) => c.tagName === 'PATH');
     await p.drag({ type: 'drop', paths: ['/v/clip.mp4'], position: { x: 210, y: 245 } });
     const fl = p.calls.find(([c]) => c === 'float_add');
     ok(fl && fl[1].paths[0] === '/v/clip.mp4', 'wheel: dropping on the hub floats the files on the orb');
+  }
+
+  // ---------- wheel: keyboard mode (Ctrl+Shift+Space) ----------
+  {
+    const p = page('wheel.html');
+    await p.emit('wheel-open', ['/v/clip.mp4']);
+    await tick();
+    ok(segs(p).length === 10 && segs(p)[0].attrs.class.includes('hot'), 'keyboard: wheel opens on the selection, first item active');
+    p.key('ArrowRight');
+    p.key('Enter');
+    await tick();
+    let run = p.calls.find(([c]) => c === 'run_job');
+    ok(run && run[1].kind === 'convert' && run[1].id === 'mov', `keyboard: arrows + Enter convert (${run && run[1].id})`);
+    p.key('Tab');
+    ok(segs(p).length === 5, 'keyboard: Tab switches to the tools ring');
+    // mouse: hover then click a segment, no drag involved
+    p.doc('mousemove', { clientX: 260, clientY: 40 });
+    p.doc('click', { clientX: 260, clientY: 40, target: {} });
+    await tick();
+    ok(!p.byId.params.hidden, 'keyboard: clicking a tool with options opens its form');
   }
 
   // ---------- editor ----------
