@@ -94,5 +94,12 @@ as Ctrl+Shift+Space on the Explorer selection (Windows) or on files copied to th
 blurred fill, contact sheets, resolution presets, audio replacement, noise reduction, silence
 removal, AES-encrypted and split archives, duplicate finder, and responsive web image sets.
 
-Still out of scope: face detection (no portable engine in the chosen stack; U3) and dehaze.
+v0.6 closes U3 and the last tool gaps: face redaction with a pure-Rust Viola–Jones detector
+running OpenCV's frontal-face Haar cascade (embedded, no extra engine), dehaze with the dark
+channel prior and a guided filter (pure Rust between two FFmpeg passes), a frame-stepping trim
+timeline with a waveform and I/O keys, a frame picker for "save frames", and a clip-order list
+for join.
+
+Still out of scope: face detection in video (use manual boxes with a time range) and profile
+faces (frontal cascade only).
 On Linux, R7 needs a copy (Ctrl+C) first, because file managers expose no common selection API.

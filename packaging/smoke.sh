@@ -163,5 +163,14 @@ else
   echo "SKIP  qr round trip (no qrencode/zbarimg)"; skip=$((skip + 1))
 fi
 grep -qi "ocr test" doc-ocr.txt 2>/dev/null || { has tesseract && { echo "FAIL  OCR text mismatch"; fail=$((fail + 1)); }; }
+# ---- v0.6 ----
+check photo-dehazed.png     ffmpeg -- tool dehaze --strength 0.7 photo.png
+if has ffmpeg; then
+  # the test pattern has no faces: the job must refuse instead of writing an untouched copy
+  if "$Z" tool redact --boxes faces photo.png >/dev/null 2>err.log; then
+    echo "FAIL  face redaction on a faceless image succeeded"; fail=$((fail + 1))
+  elif grep -q "no faces" err.log; then echo "ok    tool redact --boxes faces (none found)"; pass=$((pass + 1))
+  else echo "FAIL  face redaction error"; sed 's/^/      /' err.log; fail=$((fail + 1)); fi
+fi
 echo "passed=$pass failed=$fail skipped=$skip"
 [[ $fail -eq 0 ]]

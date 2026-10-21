@@ -279,6 +279,14 @@ fn exec(step: &Step, report: &mut dyn FnMut(f32)) -> Result<()> {
             subtitle::shift(&mut cues, *shift_ms);
             Ok(fs::write(dst, subtitle::write(&cues, to))?)
         }
+        Step::Dehaze { src, dst, strength } => {
+            let (w, h, mut px) = crate::dehaze::read_ppm(&fs::read(src)?).ok_or_else(|| Error::Failed {
+                tool: "dehaze".into(),
+                detail: "could not read the decoded image".into(),
+            })?;
+            crate::dehaze::dehaze(&mut px, w, h, *strength);
+            Ok(fs::write(dst, crate::dehaze::write_ppm(w, h, &px))?)
+        }
         Step::Ico { pngs, dst } => {
             let data = pngs.iter().map(|(s, p)| Ok((*s, fs::read(p)?))).collect::<std::io::Result<Vec<_>>>()?;
             Ok(crate::ico::write_ico(&data, &mut fs::File::create(dst)?)?)
@@ -391,9 +399,12 @@ fn probe(op: &Op, inputs: &[PathBuf]) -> Ctx {
         Some(Category::Image) if matches!(op, Op::Crop(_) | Op::Background { .. }) => ctx.image = probe_image(src),
         // Full-size render (the preview never upscales), so OCR boxes are already in source pixels.
         Some(Category::Image) => {
-            if let Op::Redact { auto: Some(lang), .. } = op {
-                ctx.detected =
-                    preview_png(src, u32::MAX).and_then(|png| detect_text_png(&png, lang)).unwrap_or_default();
+            if let Op::Redact { auto: Some(what), .. } = op {
+                ctx.detected = if what == crate::ops::FACES {
+                    detect_faces(src).unwrap_or_default()
+                } else {
+                    preview_png(src, u32::MAX).and_then(|png| detect_text_png(&png, what)).unwrap_or_default()
+                };
             }
         }
         _ => {}
@@ -467,6 +478,40 @@ pub fn dimensions(src: &Path) -> Option<(u32, u32)> {
         }
     }
     probe_media(src).filter(|m| m.width > 0).map(|m| (m.width, m.height))
+}
+
+/// One video frame at `at` seconds as PNG, at most `max` px. Seeking before `-i` is fast and
+/// lands on the exact frame because FFmpeg decodes forward from the previous keyframe.
+pub fn frame_png(src: &Path, at: f64, max: u32) -> Result<Vec<u8>> {
+    let out = scratch_file("frame", "png");
+    let scale = format!("scale='min({max},iw)':'min({max},ih)':force_original_aspect_ratio=decrease");
+    let seek = format!("{:.3}", at.max(0.0));
+    let args: Vec<OsString> = ["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-ss", &seek, "-i"]
+        .iter()
+        .map(OsString::from)
+        .chain([src.as_os_str().to_owned()])
+        .chain(["-frames:v", "1", "-vf", &scale].iter().map(OsString::from))
+        .chain([out.as_os_str().to_owned()])
+        .collect();
+    let r = run_tool(Tool::Ffmpeg, &args, None, None, &mut |_| {}).and_then(|_| Ok(fs::read(&out)?));
+    let _ = fs::remove_file(&out);
+    r
+}
+
+/// Waveform picture of an audio (or video soundtrack) file for the trim timeline.
+pub fn waveform_png(src: &Path, width: u32, height: u32) -> Result<Vec<u8>> {
+    let out = scratch_file("wave", "png");
+    let graph = format!("[0:a]aformat=channel_layouts=mono,showwavespic=s={width}x{height}:colors=0xF07B1D[v]");
+    let args: Vec<OsString> = ["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i"]
+        .iter()
+        .map(OsString::from)
+        .chain([src.as_os_str().to_owned()])
+        .chain(["-filter_complex", &graph, "-map", "[v]", "-frames:v", "1"].iter().map(OsString::from))
+        .chain([out.as_os_str().to_owned()])
+        .collect();
+    let r = run_tool(Tool::Ffmpeg, &args, None, None, &mut |_| {}).and_then(|_| Ok(fs::read(&out)?));
+    let _ = fs::remove_file(&out);
+    r
 }
 
 /// PNG preview no larger than `max` px: the image itself, or a frame from a video.
@@ -581,6 +626,53 @@ fn parse_tsv(tsv: &str) -> Vec<Rect> {
         .collect()
 }
 
+/// Longest side the face detector works at; boxes are scaled back to the original.
+const FACE_DETECT_MAX: u32 = 800;
+/// Grow detected faces so hair line and chin are covered too.
+const FACE_PAD: f64 = 0.15;
+
+/// Faces in an image file, as boxes in its own pixels (padded for redaction).
+pub fn detect_faces(src: &Path) -> Result<Vec<Rect>> {
+    static CASCADE: std::sync::OnceLock<crate::faces::Cascade> = std::sync::OnceLock::new();
+    let (full_w, full_h) = dimensions(src).ok_or_else(|| Error::Unsupported("could not read the image size".into()))?;
+    let pgm = scratch_file("faces", "pgm");
+    let scale = format!("scale='min({FACE_DETECT_MAX},iw)':-2,format=gray");
+    let args: Vec<OsString> = ["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i"]
+        .iter()
+        .map(OsString::from)
+        .chain([src.as_os_str().to_owned()])
+        .chain(["-frames:v", "1", "-vf", &scale].iter().map(OsString::from))
+        .chain([pgm.as_os_str().to_owned()])
+        .collect();
+    let made = run_tool(Tool::Ffmpeg, &args, None, None, &mut |_| {});
+    let data = made.and_then(|_| Ok(fs::read(&pgm)?));
+    let _ = fs::remove_file(&pgm);
+    let (w, h, gray) = crate::dehaze::read_pgm(&data?)
+        .ok_or_else(|| Error::Failed { tool: "faces".into(), detail: "could not decode the image".into() })?;
+    let k = full_w as f64 / w as f64;
+    let faces = CASCADE.get_or_init(crate::faces::Cascade::frontal_face).detect(&gray, w, h);
+    Ok(faces
+        .into_iter()
+        .map(|r| {
+            let pad = r.w as f64 * FACE_PAD;
+            let x = ((r.x as f64 - pad) * k).max(0.0) as u32;
+            let y = ((r.y as f64 - pad) * k).max(0.0) as u32;
+            let w = ((r.w as f64 + 2.0 * pad) * k) as u32;
+            let h = ((r.h as f64 + 2.0 * pad) * k) as u32;
+            Rect { x, y, w: w.min(full_w.saturating_sub(x)).max(1), h: h.min(full_h.saturating_sub(y)).max(1) }
+        })
+        .collect())
+}
+
+/// Faces in a PNG (the editor preview), in that PNG's pixels.
+pub fn detect_faces_png(png: &[u8]) -> Result<Vec<Rect>> {
+    let file = scratch_file("faces-in", "png");
+    fs::write(&file, png)?;
+    let r = detect_faces(&file);
+    let _ = fs::remove_file(&file);
+    r
+}
+
 /// Small PNG per PDF page for the page organizer (Ghostscript at `dpi`).
 pub fn pdf_thumbnails(src: &Path, dpi: u32) -> Result<Vec<Vec<u8>>> {
     let dir = scratch_file("thumbs", "d");
@@ -668,6 +760,26 @@ mod tests {
                    5\t1\t1\t1\t2\t1\t10\t80\t40\t20\t12\tnoise\n\
                    5\t1\t2\t1\t1\t1\t2\t2\t30\t10\t88\tTop\n";
         assert_eq!(parse_tsv(tsv), vec![Rect { x: 6, y: 16, w: 128, h: 38 }, Rect { x: 0, y: 0, w: 36, h: 16 }]);
+    }
+
+    /// Needs FFmpeg; skipped when it is missing.
+    #[test]
+    fn frames_and_waveforms_with_real_engines() {
+        let Some(ff) = tools::locate(Tool::Ffmpeg) else { return };
+        let d = scratch("frames");
+        let clip = d.join("c.mp4");
+        let ok = Command::new(&ff)
+            .args(["-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10", "-f", "lavfi", "-i"])
+            .args(["sine=frequency=440", "-t", "2", "-pix_fmt", "yuv420p"])
+            .arg(&clip)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+        let a = frame_png(&clip, 0.0, 160).unwrap();
+        let b = frame_png(&clip, 1.5, 160).unwrap();
+        assert!(a.starts_with(b"\x89PNG") && b.starts_with(b"\x89PNG") && a != b, "different frames");
+        assert!(waveform_png(&clip, 400, 60).unwrap().starts_with(b"\x89PNG"));
+        fs::remove_dir_all(&d).unwrap();
     }
 
     /// Needs Ghostscript (and Tesseract for the OCR half); skipped when they are missing.

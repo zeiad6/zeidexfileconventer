@@ -15,7 +15,23 @@
     <button id="apply" class="primary" data-t="apply"></button>
   </header>
   <p class="err" id="err" role="alert"></p>
-  <div class="stage"><canvas id="canvas"></canvas><div id="pages" class="pages" hidden></div></div>
+  <div class="stage"><canvas id="canvas"></canvas><div id="pages" class="pages" hidden></div><div id="clips" class="clips" hidden></div></div>
+  <div id="timeline" class="timeline" hidden>
+    <div class="wave"><img id="wave" alt=""><div id="range" class="range"></div><div id="head" class="head"></div></div>
+    <input id="scrub" type="range" min="0" step="0.04" value="0" aria-label="time">
+    <div class="tl-row">
+      <button id="back1s" title="-1 s">⏪</button>
+      <button id="back1f" title="-1 frame">◀</button>
+      <strong id="clock">0:00.000</strong>
+      <button id="fwd1f" title="+1 frame">▶</button>
+      <button id="fwd1s" title="+1 s">⏩</button>
+      <span class="spacer"></span>
+      <button id="setStart" data-t="setStart"></button>
+      <button id="setEnd" data-t="setEnd"></button>
+      <button id="saveFrame" data-t="saveFrame"></button>
+      <span id="span" class="hint"></span>
+    </div>
+  </div>
   <p class="hint" id="info"></p>
   <script src="common.js"></script>
   <script src="editor.js"></script>

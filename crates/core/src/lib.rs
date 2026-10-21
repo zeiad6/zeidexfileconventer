@@ -3,6 +3,8 @@
 
 pub mod actions;
 pub mod b64;
+pub mod dehaze;
+pub mod faces;
 pub mod format;
 pub mod ico;
 pub mod integrate;

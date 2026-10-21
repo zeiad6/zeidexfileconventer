@@ -84,6 +84,15 @@
     duplicate: ['Duplicate', 'تكرار'],
     remove: ['Remove', 'حذف'],
     float: ['Float', 'تعليق في الدائرة'],
+    trim: ['Trim', 'اقتطاع'],
+    snapshot: ['Save frames', 'حفظ الإطارات'],
+    join: ['Join clips', 'دمج المقاطع'],
+    setStart: ['Set start (I)', 'تعيين البداية (I)'],
+    setEnd: ['Set end (O)', 'تعيين النهاية (O)'],
+    saveFrame: ['Save this frame', 'حفظ هذا الإطار'],
+    twoClips: ['Keep at least two clips.', 'أبقِ مقطعين على الأقل.'],
+    detectFaces: ['Detect faces', 'كشف الوجوه'],
+    noFaces: ['No faces found.', 'لم يُعثر على وجوه.'],
   };
   window.ZLANG = ar ? 'ar' : 'en';
   window.ZT = (k) => (S[k] ? S[k][ar ? 1 : 0] : k);

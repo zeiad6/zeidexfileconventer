@@ -284,7 +284,28 @@ struct EditorState {
     pages: Vec<String>,
     /// For each entry of `pages`: (file index in `paths`, page number), both 1-based.
     page_refs: Vec<(usize, u32)>,
+    /// Frame rate, for frame-by-frame stepping on the trim timeline.
+    fps: f64,
+    /// Waveform picture (data URL) of the soundtrack, when there is one.
+    waveform: String,
+    /// Clips in selection order for the join list.
+    clips: Vec<Clip>,
 }
+
+#[derive(Serialize)]
+struct Clip {
+    path: String,
+    name: String,
+    duration: f64,
+    /// First-frame thumbnail (data URL); empty for audio.
+    thumb: String,
+}
+
+/// Size of the frames shown while scrubbing (small = responsive).
+const SCRUB_MAX: u32 = 960;
+const THUMB_MAX: u32 = 240;
+const WAVE_W: u32 = 1200;
+const WAVE_H: u32 = 120;
 
 const PREVIEW_MAX: u32 = 1600;
 /// Thumbnail resolution for the page organizer (A4 ≈ 190×270 px).
@@ -327,6 +348,65 @@ async fn editor_state() -> Result<EditorState, String> {
             preview: String::new(),
             pages,
             page_refs,
+            fps: 0.0,
+            waveform: String::new(),
+            clips: vec![],
+        });
+    }
+    if tool == "join" {
+        let clips = paths
+            .iter()
+            .map(|p| {
+                let path = Path::new(p);
+                let media = runner::probe_media(path).unwrap_or_default();
+                let thumb = if media.has_video {
+                    runner::frame_png(path, 0.0, THUMB_MAX).map(|png| data_url(&png)).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                Clip { path: p.clone(), name: file_name(path), duration: media.duration, thumb }
+            })
+            .collect();
+        return Ok(EditorState {
+            paths,
+            tool,
+            video: true,
+            width: 0,
+            height: 0,
+            duration: 0.0,
+            preview: String::new(),
+            pages: vec![],
+            page_refs: vec![],
+            fps: 0.0,
+            waveform: String::new(),
+            clips,
+        });
+    }
+    if tool == "trim" || tool == "snapshot" {
+        let media = runner::probe_media(&src).ok_or("could not read the file")?;
+        let preview = if media.has_video {
+            data_url(&runner::frame_png(&src, 0.0, SCRUB_MAX).map_err(|e| e.to_string())?)
+        } else {
+            String::new()
+        };
+        let waveform = if media.has_audio {
+            runner::waveform_png(&src, WAVE_W, WAVE_H).map(|png| data_url(&png)).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        return Ok(EditorState {
+            paths,
+            tool,
+            video: media.has_video,
+            width: media.width,
+            height: media.height,
+            duration: media.duration,
+            preview,
+            pages: vec![],
+            page_refs: vec![],
+            fps: if media.fps > 0.0 { media.fps } else { 25.0 },
+            waveform,
+            clips: vec![],
         });
     }
     let video = format::category_of(&src) == Some(format::Category::Video);
@@ -335,7 +415,20 @@ async fn editor_state() -> Result<EditorState, String> {
     let png = runner::preview_png(&src, PREVIEW_MAX).map_err(|e| e.to_string())?;
     let preview = data_url(&png);
     *EDITOR_PREVIEW.lock().unwrap_or_else(|e| e.into_inner()) = png;
-    Ok(EditorState { paths, tool, video, width, height, duration, preview, pages: vec![], page_refs: vec![] })
+    Ok(EditorState {
+        paths,
+        tool,
+        video,
+        width,
+        height,
+        duration,
+        preview,
+        pages: vec![],
+        page_refs: vec![],
+        fps: 0.0,
+        waveform: String::new(),
+        clips: vec![],
+    })
 }
 
 #[derive(Serialize)]
@@ -354,6 +447,25 @@ async fn detect_text(lang: String) -> Result<Vec<Box4>, String> {
         return Err("no preview".into());
     }
     let boxes = runner::detect_text_png(&png, &lang).map_err(|e| e.to_string())?;
+    Ok(boxes.into_iter().map(|r| Box4 { x: r.x, y: r.y, w: r.w, h: r.h }).collect())
+}
+
+/// The frame at `t` seconds of the file open in the editor (trim / save-frame timeline).
+#[tauri::command]
+async fn frame_at(t: f64) -> Result<String, String> {
+    let (paths, _) = EDITOR.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or("no file open")?;
+    let png = runner::frame_png(Path::new(&paths[0]), t, SCRUB_MAX).map_err(|e| e.to_string())?;
+    Ok(format!("data:image/png;base64,{}", b64::encode(&png)))
+}
+
+/// Faces in the editor's preview, in preview pixels (redact → "Detect faces").
+#[tauri::command]
+async fn detect_faces() -> Result<Vec<Box4>, String> {
+    let png = EDITOR_PREVIEW.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if png.is_empty() {
+        return Err("no preview".into());
+    }
+    let boxes = runner::detect_faces_png(&png).map_err(|e| e.to_string())?;
     Ok(boxes.into_iter().map(|r| Box4 { x: r.x, y: r.y, w: r.w, h: r.h }).collect())
 }
 
@@ -696,7 +808,9 @@ pub fn run() {
             float_list,
             float_clear,
             drag_icon,
-            pick_folder
+            pick_folder,
+            frame_at,
+            detect_faces
         ])
         .on_window_event(|window, event| {
             // Closing a window keeps the app alive in the tray, like a menu-bar app.

@@ -107,8 +107,15 @@ function page(html, query = '') {
       ? { paths: ['/home/u/d.pdf'], tool: 'pages', video: false, width: 0, height: 0, duration: 0, preview: '', pages: ['data:p1', 'data:p2', 'data:p3'], page_refs: [[1, 1], [1, 2], [1, 3]] }
       : query === 'merge-pdf'
       ? { paths: ['/u/a.pdf', '/u/b.pdf'], tool: 'merge-pdf', video: false, width: 0, height: 0, duration: 0, preview: '', pages: ['a1', 'a2', 'b1'], page_refs: [[1, 1], [1, 2], [2, 1]] }
+      : query === 'trim' || query === 'snapshot'
+      ? { paths: ['/u/clip.mp4'], tool: query, video: true, width: 1280, height: 720, duration: 10, preview: 'data:image/png;base64,AAAA', pages: [], page_refs: [], fps: 25, waveform: 'data:image/png;base64,WAVE', clips: [] }
+      : query === 'join'
+      ? { paths: ['/u/a.mp4', '/u/b.mov', '/u/c.mp4'], tool: 'join', video: true, width: 0, height: 0, duration: 0, preview: '', pages: [], page_refs: [], fps: 0, waveform: '',
+        clips: [{ path: '/u/a.mp4', name: 'a.mp4', duration: 4, thumb: 'data:a' }, { path: '/u/b.mov', name: 'b.mov', duration: 2, thumb: 'data:b' }, { path: '/u/c.mp4', name: 'c.mp4', duration: 1.5, thumb: '' }] }
       : { paths: ['/home/u/p.png', '/home/u/q.png'], tool: query || 'redact', video: false, width: 1600, height: 1200, duration: 0, preview: 'data:image/png;base64,AAAA', pages: [] },
     detect_text: [{ x: 5, y: 6, w: 70, h: 20 }],
+    detect_faces: [{ x: 100, y: 50, w: 60, h: 60 }],
+    frame_at: 'data:image/png;base64,FRAME',
     float_list: ['/home/u/a.txt', '/home/u/b.png'],
     drag_icon: 'data:image/png;base64,AAAA',
   };
@@ -326,6 +333,91 @@ const segs = (p) => p.byId.wheel.children.filter((c) => c.tagName === 'PATH');
     ok(save && save[1].src === '/home/u/p.png' && save[1].data.startsWith('data:image/png;base64,'), 'editor: annotate sends the layer as PNG');
     ok(save && save[1].width === 1600 && save[1].height === 1200, 'editor: layer is composited at the source size');
     ok(p.calls.some(([c]) => c === 'close_editor'), 'editor: closes after saving');
+  }
+  {
+    const p = page('editor.html', 'redact');
+    await tick(10);
+    const btn = p.byId.controls.querySelectorAll('button').find((b) => b.textContent === 'Detect faces');
+    await btn.fire('click');
+    await p.byId.apply.fire('click');
+    const run = p.calls.find(([c]) => c === 'run_job');
+    // faces come back in preview pixels (800 px of a 1600 px source), like text boxes
+    ok(run && run[1].opts.boxes === '200,100,120,120', `editor: detected faces are redacted (${run && run[1].opts.boxes})`);
+  }
+  {
+    const p = page('editor.html', 'trim');
+    await tick(10);
+    ok(!p.byId.timeline.hidden && p.byId.wave.src === 'data:image/png;base64,WAVE', 'trim: timeline with waveform shown');
+    ok(p.byId.saveFrame.hidden && !p.byId.setStart.hidden, 'trim: in/out buttons, no frame button');
+    const scrub = p.byId.scrub;
+    scrub.value = '2';
+    scrub.fire('input', { target: scrub });
+    p.key('i');
+    p.key('ArrowRight'); // +1 frame (1/25 s)
+    p.key('i');
+    await tick(150);
+    ok(p.calls.some(([c, a]) => c === 'frame_at' && Math.abs(a.t - 2.04) < 1e-6), 'trim: scrubbing fetches the frame (debounced)');
+    scrub.value = '7.5';
+    scrub.fire('input', { target: scrub });
+    p.byId.setEnd.fire('click');
+    ok(p.byId.clock.textContent === '0:07.500', `trim: clock shows the position (${p.byId.clock.textContent})`);
+    await p.byId.apply.fire('click');
+    const run = p.calls.find(([c]) => c === 'run_job');
+    ok(run && run[1].id === 'trim' && run[1].opts.start === '2.040' && run[1].opts.end === '7.500', `trim: sends the frame-exact range (${run && JSON.stringify(run[1].opts)})`);
+  }
+  {
+    const p = page('editor.html', 'trim');
+    await tick(10);
+    p.byId.scrub.value = '3';
+    p.byId.scrub.fire('input', { target: p.byId.scrub });
+    p.byId.setStart.fire('click');
+    await p.byId.apply.fire('click');
+    const run = p.calls.find(([c]) => c === 'run_job');
+    ok(run && run[1].opts.start === '3.000' && run[1].opts.end === undefined, 'trim: untouched end is left open');
+  }
+  {
+    const p = page('editor.html', 'snapshot');
+    await tick(10);
+    ok(!p.byId.saveFrame.hidden && p.byId.setStart.hidden, 'snapshot: frame button, no in/out');
+    p.byId.scrub.value = '4.2';
+    p.byId.scrub.fire('input', { target: p.byId.scrub });
+    await p.byId.saveFrame.fire('click');
+    const run = p.calls.find(([c]) => c === 'run_job');
+    ok(run && run[1].id === 'snapshot' && run[1].opts.at === '4.200', `snapshot: saves the current frame (${run && run[1].opts.at})`);
+  }
+  {
+    const p = page('editor.html', 'join');
+    await tick(10);
+    const list = p.byId.clips;
+    ok(!list.hidden && list.children.length === 3 && p.byId.canvas.hidden, 'join: one card per clip');
+    ok(p.byId.info.textContent === '3 · 0:07.500', `join: total length shown (${p.byId.info.textContent})`);
+    // move c.mp4 to the front, then drop b.mov
+    list.children[2].querySelector('.page-tools').children[0].fire('click');
+    list.children[1].querySelector('.page-tools').children[0].fire('click');
+    list.children[2].querySelector('.page-tools').children[1].fire('click');
+    await p.byId.apply.fire('click');
+    const run = p.calls.find(([c]) => c === 'run_job');
+    ok(run && run[1].id === 'join' && run[1].paths.join() === '/u/c.mp4,/u/a.mp4', `join: clips in the chosen order (${run && run[1].paths})`);
+    ok(p.calls.some(([c]) => c === 'close_editor'), 'join: closes after starting the job');
+  }
+  {
+    const p = page('editor.html', 'join');
+    await tick(10);
+    const list = p.byId.clips;
+    list.children[0].querySelector('.page-tools').children[1].fire('click');
+    list.children[0].querySelector('.page-tools').children[1].fire('click');
+    await p.byId.apply.fire('click');
+    ok(!p.calls.some(([c]) => c === 'run_job') && p.byId.err.textContent.includes('two clips'), 'join: refuses a single clip');
+  }
+  {
+    // a frame requested while scrubbing must not land after the editor closed
+    const p = page('editor.html', 'trim');
+    await tick(10);
+    p.byId.scrub.value = '5';
+    p.byId.scrub.fire('input', { target: p.byId.scrub });
+    p.key('Escape');
+    await tick(200);
+    ok(!p.calls.some(([c]) => c === 'frame_at'), 'trim: closing cancels a pending frame fetch');
   }
 
   // ---------- orb (Float shelf) ----------

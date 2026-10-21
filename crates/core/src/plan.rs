@@ -70,6 +70,12 @@ pub enum Step {
         pngs: Vec<(u32, PathBuf)>,
         dst: PathBuf,
     },
+    /// PPM in, dehazed PPM out (pure Rust, see `dehaze`).
+    Dehaze {
+        src: PathBuf,
+        dst: PathBuf,
+        strength: f32,
+    },
     JpegsToPdf {
         jpegs: Vec<PathBuf>,
         dst: PathBuf,
@@ -293,6 +299,21 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             );
             s.push(Step::WriteFile { path: dir.join(format!("{stem}.html")), contents: html });
             (dir, format!("{stem} web"))
+        }
+        Op::Dehaze { strength } if is(Category::Image) => {
+            let (input, to) = ffmpeg_image_input(src, &from, tmp, &mut s);
+            let (raw_in, raw_out) = (tmp.join("in.ppm"), tmp.join("out.ppm"));
+            let out = tmp.join(format!("dehazed.{to}"));
+            s.push(run(
+                Tool::Ffmpeg,
+                args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i", &input, "-frames:v", "1", "-pix_fmt", "rgb24", &raw_in],
+            ));
+            s.push(Step::Dehaze { src: raw_in, dst: raw_out.clone(), strength: *strength as f32 });
+            s.push(run(
+                Tool::Ffmpeg,
+                args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i", &raw_out, "-frames:v", "1", "-q:v", "2", &out],
+            ));
+            (out, named(&stem, "dehazed", to))
         }
         Op::QrRead | Op::Duplicates { .. } => return Err(Error::Unsupported("handled by the runner".into())),
         Op::Resize(size) if is(Category::Image) => {
@@ -686,13 +707,15 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             s.push(ffmpeg(a, ctx));
             (out, named(&stem, "bleeped", to))
         }
-        Op::Redact { auto: Some(_), .. } if !is(Category::Image) => {
-            return Err(unsupported("Automatic text detection", &from))
+        Op::Redact { auto: Some(what), .. } if !is(Category::Image) => {
+            let kind = if what == crate::ops::FACES { "Automatic face detection" } else { "Automatic text detection" };
+            return Err(unsupported(kind, &from));
         }
         Op::Redact { boxes, fill, range, auto } if is(Category::Image) || is(Category::Video) => {
             let boxes = if auto.is_some() { &ctx.detected } else { boxes };
             if boxes.is_empty() {
-                return Err(Error::Unsupported("no text was found to redact".into()));
+                let what = if auto.as_deref() == Some(crate::ops::FACES) { "no faces were" } else { "no text was" };
+                return Err(Error::Unsupported(format!("{what} found to redact")));
             }
             let graph = redact_graph(boxes, *fill, *range);
             visual_filter(src, &from, cat, &graph, "redacted", ctx, tmp, &mut s, &stem)

@@ -61,6 +61,9 @@ impl Adjust {
     };
 }
 
+/// `Op::Redact::auto` value asking for face detection instead of OCR.
+pub const FACES: &str = "faces";
+
 /// `exif` option key -> ExifTool tag.
 pub const EXIF_FIELDS: [(&str, &str); 7] = [
     ("artist", "Artist"),
@@ -149,7 +152,8 @@ pub enum Op {
         end: f64,
     },
     /// Blur (`fill: None`) or paint over boxes, optionally only between two times (video).
-    /// `auto` (a Tesseract language) replaces `boxes` with the text lines found in the image.
+    /// `auto` replaces `boxes` with what is found in the image: text lines for a Tesseract
+    /// language code, or faces for the special value `"faces"`.
     Redact {
         boxes: Vec<Rect>,
         fill: Option<[u8; 3]>,
@@ -243,6 +247,10 @@ pub enum Op {
     RemoveSilence,
     /// Responsive web images: WebP + AVIF at several widths, plus a `<picture>` snippet.
     WebSet,
+    /// Remove haze (dark channel prior), `strength` 0..1.
+    Dehaze {
+        strength: f64,
+    },
     /// Find identical files (size, then SHA-256) under the selection; optionally move copies away.
     Duplicates {
         move_dupes: bool,
@@ -410,7 +418,9 @@ impl Op {
             }
             "redact" => {
                 let spec = get("boxes").ok_or_else(|| bad("boxes", "required (x,y,w,h;... or auto)"))?;
-                let auto = if spec == "auto" {
+                let auto = if spec == "faces" {
+                    Some(FACES.to_string())
+                } else if spec == "auto" || spec == "text" {
                     let lang = get("lang").unwrap_or("eng");
                     if !lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '_') {
                         return Err(bad("lang", lang));
@@ -588,6 +598,13 @@ impl Op {
             "denoise-audio" => Op::DenoiseAudio,
             "remove-silence" => Op::RemoveSilence,
             "web-set" => Op::WebSet,
+            "dehaze" => {
+                let strength = num("strength", 0.8)?;
+                if !(0.05..=1.0).contains(&strength) {
+                    return Err(bad("strength", "use 0.05-1"));
+                }
+                Op::Dehaze { strength }
+            }
             "duplicates" => Op::Duplicates { move_dupes: matches!(get("move"), Some("1" | "true" | "yes")) },
             "visualize" => {
                 let shape = get("shape").unwrap_or("landscape").to_string();
@@ -994,7 +1011,7 @@ pub const TOOLS: &[ToolDef] = &[
         cats: &[Image, Video],
         multi: false,
         params: &[
-            p("boxes", "Boxes x,y,w,h;… or auto (text)", "المربعات x,y,w,h;… أو auto (نصوص)", ""),
+            p("boxes", "Boxes x,y,w,h;…, text or faces", "المربعات x,y,w,h;… أو text أو faces", ""),
             p("style", "blur or color", "blur أو لون", "blur"),
             p("start", "From (video)", "من (فيديو)", ""),
             p("end", "To (video)", "إلى (فيديو)", ""),
@@ -1258,10 +1275,20 @@ pub const TOOLS: &[ToolDef] = &[
         multi: false,
         params: &[p("move", "Move copies to a Duplicates folder (1)", "نقل النسخ إلى مجلد Duplicates (1)", "")],
     },
+    ToolDef {
+        id: "dehaze",
+        label: "Dehaze",
+        label_ar: "إزالة الضباب",
+        cats: &[Image],
+        multi: false,
+        params: &[p("strength", "Strength (0.05-1)", "القوة (0.05-1)", "0.8")],
+    },
 ];
 
 /// Tools the desktop app opens in its visual editor instead of an options form.
-pub const EDITOR_TOOLS: [&str; 6] = ["crop", "redact", "annotate", "adjust", "pages", "merge-pdf"];
+/// `trim` and `snapshot` use the frame-stepping timeline; `join` the clip-order list.
+pub const EDITOR_TOOLS: [&str; 9] =
+    ["crop", "redact", "annotate", "adjust", "pages", "merge-pdf", "trim", "snapshot", "join"];
 
 /// Tools offered for a selection of `count` files sharing `cat` (`None` = mixed selection,
 /// which gets the tools that work on any file).

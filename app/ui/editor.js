@@ -26,6 +26,12 @@ const SLIDERS = [['brightness', -1, 1, 0.02], ['contrast', 0, 3, 0.02], ['satura
   ['gamma', 0.1, 3, 0.02], ['sharpen', 0, 3, 0.05], ['clarity', 0, 2, 0.05], ['denoise', 0, 20, 0.5], ['grain', 0, 60, 1]];
 let adj = { ...NEUTRAL };
 let pages = []; // organizer: [{t: thumbnail index, f: file, n: page (1-based), rot: degrees}]
+let clips = []; // join: clips in output order
+let now = 0; // timeline position (s)
+let cut = { start: 0, end: 0 }; // trim range (s)
+let frameTimer = 0;
+/// Pause before fetching a frame while the slider moves, so scrubbing stays smooth.
+const SCRUB_DEBOUNCE_MS = 120;
 
 const adjustCss = () => `brightness(${1 + adj.brightness}) contrast(${adj.contrast}) saturate(${adj.saturation}) hue-rotate(${adj.hue}deg)`;
 
@@ -107,7 +113,13 @@ function drawShape(s) {
 }
 
 function draw() {
-  if (!img) return;
+  if (!img || !st) return;
+  if (st.tool === 'trim' || st.tool === 'snapshot') {
+    cv.width = img.naturalWidth;
+    cv.height = img.naturalHeight;
+    ctx.drawImage(img, 0, 0);
+    return;
+  }
   if (st.tool === 'adjust') {
     ctx.filter = adjustCss();
     ctx.drawImage(img, 0, 0);
@@ -174,7 +186,21 @@ function controls() {
       c.append(make('input', { id: 'end', placeholder: window.ZT('to'), size: 6 }));
     }
     const lang = make('input', { id: 'lang', value: window.ZLANG === 'ar' ? 'ara+eng' : 'eng', size: 7, title: 'Tesseract' });
-    c.append(lang, make('button', {
+    const detectFaces = make('button', {
+      textContent: window.ZT('detectFaces'),
+      onclick: async () => {
+        $('err').textContent = '';
+        try {
+          const found = await invoke('detect_faces');
+          if (!found.length) throw window.ZT('noFaces');
+          boxes.push(...found);
+          draw();
+        } catch (e) {
+          $('err').textContent = String(e);
+        }
+      },
+    });
+    c.append(detectFaces, lang, make('button', {
       textContent: window.ZT('detectText'),
       onclick: async () => {
         $('err').textContent = '';
@@ -214,7 +240,7 @@ function controls() {
 }
 
 cv.addEventListener('pointerdown', (e) => {
-  if (!st || st.tool === 'adjust' || st.tool === 'pages' || st.tool === 'merge-pdf') return;
+  if (!st || ['adjust', 'pages', 'merge-pdf', 'trim', 'snapshot', 'join'].includes(st.tool)) return;
   cv.setPointerCapture(e.pointerId);
   const p = point(e);
   if (st.tool === 'annotate') {
@@ -255,6 +281,7 @@ cv.addEventListener('pointerup', () => {
 const src = (b) => [b.x, b.y, b.w, b.h].map((v) => Math.round(v * k)).join(',');
 
 async function apply() {
+  if (!st) return;
   $('err').textContent = '';
   try {
     if (st.tool === 'annotate') {
@@ -268,6 +295,15 @@ async function apply() {
       shapes.forEach(drawShape);
       ctx = screen;
       await invoke('save_annotation', { src: st.paths[0], data: layer.toDataURL('image/png'), width: st.width, height: st.height });
+    } else if (st.tool === 'trim') {
+      const opts = { start: cut.start.toFixed(3) };
+      if (cut.end < st.duration - 0.001) opts.end = cut.end.toFixed(3);
+      await invoke('run_job', { paths: st.paths, kind: 'tool', id: 'trim', opts });
+    } else if (st.tool === 'snapshot') {
+      await invoke('run_job', { paths: st.paths, kind: 'tool', id: 'snapshot', opts: { at: now.toFixed(3) } });
+    } else if (st.tool === 'join') {
+      if (clips.length < 2) throw window.ZT('twoClips');
+      await invoke('run_job', { paths: clips.map((c) => c.path), kind: 'tool', id: 'join', opts: {} });
     } else if (st.tool === 'adjust') {
       const opts = Object.fromEntries(Object.entries(adj).map(([key, v]) => [key, String(v)]));
       await invoke('run_job', { paths: st.paths, kind: 'tool', id: 'adjust', opts });
@@ -295,6 +331,7 @@ async function apply() {
 }
 
 function close() {
+  clearTimeout(frameTimer);
   img = null;
   st = null;
   ctx.clearRect(0, 0, cv.width, cv.height);
@@ -330,6 +367,102 @@ function renderPages() {
   $('info').textContent = `${pages.length} ${window.ZT('pagesCount')}`;
 }
 
+// ---------- timeline (trim, save frames) ----------
+
+const clock = (t) => {
+  const m = Math.floor(t / 60);
+  const s = (t - m * 60).toFixed(3).padStart(6, '0');
+  return `${m}:${s}`;
+};
+
+function paintTimeline() {
+  const d = st.duration || 1;
+  $('scrub').value = String(now);
+  $('clock').textContent = clock(now);
+  $('head').style.left = `${(now / d) * 100}%`;
+  const r = $('range');
+  r.style.left = `${(cut.start / d) * 100}%`;
+  r.style.width = `${((cut.end - cut.start) / d) * 100}%`;
+  r.hidden = st.tool !== 'trim';
+  $('span').textContent = st.tool === 'trim' ? `${clock(cut.start)} → ${clock(cut.end)} (${(cut.end - cut.start).toFixed(2)} s)` : '';
+}
+
+function seek(t) {
+  now = Math.min(Math.max(0, t), st.duration);
+  paintTimeline();
+  if (!st.video) return;
+  clearTimeout(frameTimer);
+  frameTimer = setTimeout(async () => {
+    const want = st;
+    try {
+      const url = await invoke('frame_at', { t: now });
+      if (st !== want) return; // closed or reopened meanwhile
+      const next = new Image();
+      next.onload = () => { if (st === want) { img = next; draw(); } };
+      next.src = url;
+    } catch (e) {
+      $('err').textContent = String(e);
+    }
+  }, SCRUB_DEBOUNCE_MS);
+}
+
+function openTimeline() {
+  $('timeline').hidden = false;
+  cv.hidden = !st.video;
+  $('wave').hidden = !st.waveform;
+  if (st.waveform) $('wave').src = st.waveform;
+  const scrub = $('scrub');
+  scrub.max = String(st.duration);
+  scrub.step = String(1 / (st.fps || 25));
+  cut = { start: 0, end: st.duration };
+  now = 0;
+  const trim = st.tool === 'trim';
+  $('setStart').hidden = !trim;
+  $('setEnd').hidden = !trim;
+  $('saveFrame').hidden = trim || !st.video;
+  paintTimeline();
+}
+
+const frame = () => 1 / (st.fps || 25);
+$('scrub').oninput = (e) => seek(+e.target.value);
+$('back1f').onclick = () => seek(now - frame());
+$('fwd1f').onclick = () => seek(now + frame());
+$('back1s').onclick = () => seek(now - 1);
+$('fwd1s').onclick = () => seek(now + 1);
+$('setStart').onclick = () => { cut.start = Math.min(now, cut.end - frame()); paintTimeline(); };
+$('setEnd').onclick = () => { cut.end = Math.max(now, cut.start + frame()); paintTimeline(); };
+$('saveFrame').onclick = async () => {
+  $('err').textContent = '';
+  try {
+    await invoke('run_job', { paths: st.paths, kind: 'tool', id: 'snapshot', opts: { at: now.toFixed(3) } });
+  } catch (e) {
+    $('err').textContent = String(e);
+  }
+};
+
+// ---------- join: clip order ----------
+
+function renderClips() {
+  const list = $('clips');
+  list.replaceChildren(...clips.map((c, i) => {
+    const card = make('div', { className: 'clip' });
+    const thumb = c.thumb ? make('img', { src: c.thumb, alt: '' }) : make('div', { className: 'clip-audio', textContent: '♪' });
+    const move = (to) => { const [it] = clips.splice(i, 1); clips.splice(to, 0, it); renderClips(); };
+    const btn = (text, title, fn) => make('button', { textContent: text, title: window.ZT(title), onclick: fn });
+    const tools = make('div', { className: 'page-tools' });
+    tools.append(
+      btn('◀', 'moveLeft', () => i > 0 && move(i - 1)),
+      btn('✕', 'remove', () => { clips.splice(i, 1); renderClips(); }),
+      btn('▶', 'moveRight', () => i < clips.length - 1 && move(i + 1)),
+    );
+    card.append(thumb, make('div', { className: 'page-n', textContent: `${i + 1} · ${c.name}` }),
+      make('div', { className: 'page-n', textContent: clock(c.duration) }), tools);
+    return card;
+  }));
+  const total = clips.reduce((a, c) => a + c.duration, 0);
+  $('info').textContent = `${clips.length} · ${clock(total)}`;
+}
+
 async function open() {
   $('err').textContent = '';
   try {
@@ -345,13 +478,27 @@ async function open() {
   $('apply').textContent = window.ZT(st.tool === 'annotate' ? 'save' : 'apply');
   controls();
   const organizer = st.tool === 'pages' || st.tool === 'merge-pdf';
+  const timeline = st.tool === 'trim' || st.tool === 'snapshot';
+  const joining = st.tool === 'join';
   $('pages').hidden = !organizer;
-  cv.hidden = organizer;
-  $('undo').hidden = organizer || st.tool === 'adjust';
+  $('clips').hidden = !joining;
+  $('timeline').hidden = !timeline;
+  cv.hidden = organizer || joining;
+  $('undo').hidden = organizer || joining || timeline || st.tool === 'adjust';
+  if (joining) {
+    clips = st.clips.slice();
+    img = null;
+    return renderClips();
+  }
+  if (timeline) openTimeline();
   if (organizer) {
     pages = st.page_refs.map(([f, n], t) => ({ t, f, n, rot: 0 }));
     img = null;
     return renderPages();
+  }
+  if (!st.preview) {
+    img = null;
+    return;
   }
   img = new Image();
   img.onload = () => {
@@ -370,6 +517,12 @@ document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;
   if (e.key === 'Escape') close();
   if (e.key === 'Enter') apply();
+  if (st && (st.tool === 'trim' || st.tool === 'snapshot')) {
+    if (e.key === 'ArrowLeft') seek(now - (e.shiftKey ? 1 : frame()));
+    if (e.key === 'ArrowRight') seek(now + (e.shiftKey ? 1 : frame()));
+    if (e.key === 'i' && st.tool === 'trim') $('setStart').onclick();
+    if (e.key === 'o' && st.tool === 'trim') $('setEnd').onclick();
+  }
   if ((e.ctrlKey || e.metaKey) && e.key === 'z') undo();
 });
 listen('editor-open', open);
