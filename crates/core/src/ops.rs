@@ -33,6 +33,26 @@ pub struct Rect {
     pub h: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Adjust {
+    pub brightness: f64,
+    pub contrast: f64,
+    pub saturation: f64,
+    pub gamma: f64,
+    pub hue: f64,
+    pub sharpen: f64,
+    pub denoise: f64,
+    pub grain: f64,
+}
+
+impl Adjust {
+    pub const NEUTRAL: Adjust =
+        Adjust { brightness: 0.0, contrast: 1.0, saturation: 1.0, gamma: 1.0, hue: 0.0, sharpen: 0.0, denoise: 0.0, grain: 0.0 };
+}
+
+/// Tags `zeidex tool tags` may set; others are ignored so a typo cannot write junk keys.
+pub const TAG_KEYS: [&str; 7] = ["title", "artist", "album", "date", "genre", "comment", "copyright"];
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum CropSpec {
     Ratio(u32, u32),
@@ -66,11 +86,19 @@ pub enum Op {
     Channels { count: u32, left: f64, right: f64 },
     Bleep { start: f64, end: f64 },
     /// Blur (`fill: None`) or paint over boxes, optionally only between two times (video).
-    Redact { boxes: Vec<Rect>, fill: Option<[u8; 3]>, range: Option<(f64, f64)> },
+    /// `auto` (a Tesseract language) replaces `boxes` with the text lines found in the image.
+    Redact { boxes: Vec<Rect>, fill: Option<[u8; 3]>, range: Option<(f64, f64)>, auto: Option<String> },
     Visualize { shape: String },
+    /// Photo/video look: eq + sharpen + denoise + grain, all through FFmpeg.
+    Adjust(Adjust),
+    /// Composite a transparent PNG (drawn at preview size) over the original at full size.
+    Overlay { png: std::path::PathBuf, width: u32, height: u32 },
+    /// Container tags (title, artist...) for audio/video, copied without re-encoding.
+    SetTags(Vec<(String, String)>),
     MergePdf,
     SplitPdf,
-    Pages { spec: String },
+    /// `rotate` holds (output page, degrees) pairs.
+    Pages { spec: String, rotate: Vec<(u32, u32)> },
 }
 
 impl Op {
@@ -201,14 +229,23 @@ impl Op {
                 Op::Bleep { start, end }
             }
             "redact" => {
-                let boxes = get("boxes")
-                    .ok_or_else(|| bad("boxes", "required (x,y,w,h;...)"))?
+                let spec = get("boxes").ok_or_else(|| bad("boxes", "required (x,y,w,h;... or auto)"))?;
+                let auto = if spec == "auto" {
+                    let lang = get("lang").unwrap_or("eng");
+                    if !lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '_') {
+                        return Err(bad("lang", lang));
+                    }
+                    Some(lang.to_string())
+                } else {
+                    None
+                };
+                let boxes = (if auto.is_some() { "" } else { spec })
                     .split(';')
                     .map(str::trim)
                     .filter(|b| !b.is_empty())
                     .map(parse_rect)
                     .collect::<Result<Vec<_>>>()?;
-                if boxes.is_empty() {
+                if boxes.is_empty() && auto.is_none() {
                     return Err(bad("boxes", "required"));
                 }
                 let fill = match get("style").unwrap_or("blur") {
@@ -225,9 +262,39 @@ impl Op {
                         Some((s, e))
                     }
                 };
-                Op::Redact { boxes, fill, range }
+                Op::Redact { boxes, fill, range, auto }
             }
             "annotate" => return Err(Error::Unsupported("annotate runs in the app's editor".into())),
+            "adjust" => {
+                let r = |k: &str, d: f64, lo: f64, hi: f64| -> Result<f64> {
+                    let v = num(k, d)?;
+                    if (lo..=hi).contains(&v) { Ok(v) } else { Err(bad(k, &format!("use {lo}..{hi}"))) }
+                };
+                let a = Adjust {
+                    brightness: r("brightness", 0.0, -1.0, 1.0)?,
+                    contrast: r("contrast", 1.0, 0.0, 3.0)?,
+                    saturation: r("saturation", 1.0, 0.0, 3.0)?,
+                    gamma: r("gamma", 1.0, 0.1, 5.0)?,
+                    hue: r("hue", 0.0, -180.0, 180.0)?,
+                    sharpen: r("sharpen", 0.0, 0.0, 3.0)?,
+                    denoise: r("denoise", 0.0, 0.0, 20.0)?,
+                    grain: r("grain", 0.0, 0.0, 60.0)?,
+                };
+                if a == Adjust::NEUTRAL {
+                    return Err(bad("adjust", "nothing to change"));
+                }
+                Op::Adjust(a)
+            }
+            "tags" => {
+                let pairs: Vec<(String, String)> = TAG_KEYS
+                    .iter()
+                    .filter_map(|k| get(k).map(|v| (k.to_string(), v.to_string())))
+                    .collect();
+                if pairs.is_empty() {
+                    return Err(bad("tags", "set at least one of title, artist, album, date, genre, comment, copyright"));
+                }
+                Op::SetTags(pairs)
+            }
             "visualize" => {
                 let shape = get("shape").unwrap_or("landscape").to_string();
                 if !["landscape", "portrait", "square"].contains(&shape.as_str()) {
@@ -243,7 +310,15 @@ impl Op {
                 if spec.is_empty() || !spec.chars().all(|c| c.is_ascii_digit() || ",-zr:".contains(c)) {
                     return Err(bad("spec", &spec));
                 }
-                Op::Pages { spec }
+                let mut rotate = Vec::new();
+                for item in get("rotate").unwrap_or("").split(',').map(str::trim).filter(|x| !x.is_empty()) {
+                    let parsed = item.split_once(':').and_then(|(pg, d)| Some((pg.parse::<u32>().ok()?, d.parse::<u32>().ok()?)));
+                    match parsed {
+                        Some((pg, d)) if pg > 0 && [90, 180, 270].contains(&d) => rotate.push((pg, d)),
+                        _ => return Err(bad("rotate", item)),
+                    }
+                }
+                Op::Pages { spec, rotate }
             }
             other => return Err(Error::Unsupported(format!("unknown tool `{other}`"))),
         })
@@ -335,7 +410,10 @@ const AV: &[Category] = &[Video, Audio];
 pub const TOOLS: &[ToolDef] = &[
     ToolDef { id: "compress", label: "Compress", label_ar: "ضغط", cats: &[Image, Video, Audio, Pdf], multi: false,
         params: &[p("percent", "Reduce by %", "تقليل بنسبة %", "50"), p("target", "or target size (e.g. 5MB)", "أو حجم مستهدف (مثل 5MB)", ""), p("max", "Max side px (images)", "أقصى بُعد بالبكسل (صور)", "")] },
-    ToolDef { id: "strip", label: "Remove metadata", label_ar: "إزالة البيانات الوصفية", cats: &[Image, Video, Audio], multi: false, params: &[] },
+    ToolDef { id: "strip", label: "Remove metadata", label_ar: "إزالة البيانات الوصفية", cats: &[Image, Video, Audio, Pdf], multi: false, params: &[] },
+    ToolDef { id: "tags", label: "Edit tags", label_ar: "تحرير الوسوم", cats: &[Video, Audio], multi: false,
+        params: &[p("title", "Title", "العنوان", ""), p("artist", "Artist", "الفنان", ""), p("album", "Album", "الألبوم", ""),
+            p("date", "Date", "التاريخ", ""), p("genre", "Genre", "النوع", ""), p("comment", "Comment", "تعليق", "")] },
     ToolDef { id: "info", label: "Metadata", label_ar: "البيانات الوصفية", cats: &[Image, Video, Audio, Pdf], multi: false, params: &[] },
     ToolDef { id: "archive", label: "Archive", label_ar: "أرشفة", cats: ANY, multi: false,
         params: &[p("format", "zip / 7z / tar / tgz", "zip / 7z / tar / tgz", "zip")] },
@@ -345,8 +423,12 @@ pub const TOOLS: &[ToolDef] = &[
     ToolDef { id: "crop", label: "Crop", label_ar: "قص", cats: &[Image, Video], multi: false,
         params: &[p("ratio", "Aspect ratio", "نسبة الأبعاد", "1:1"), p("box", "or exact box x,y,w,h", "أو مربع دقيق x,y,w,h", "")] },
     ToolDef { id: "redact", label: "Redact", label_ar: "إخفاء مناطق", cats: &[Image, Video], multi: false,
-        params: &[p("boxes", "Boxes x,y,w,h;…", "المربعات x,y,w,h;…", ""), p("style", "blur or color", "blur أو لون", "blur"), p("start", "From (video)", "من (فيديو)", ""), p("end", "To (video)", "إلى (فيديو)", "")] },
+        params: &[p("boxes", "Boxes x,y,w,h;… or auto (text)", "المربعات x,y,w,h;… أو auto (نصوص)", ""), p("style", "blur or color", "blur أو لون", "blur"), p("start", "From (video)", "من (فيديو)", ""), p("end", "To (video)", "إلى (فيديو)", "")] },
     ToolDef { id: "annotate", label: "Annotate", label_ar: "تعليق توضيحي", cats: &[Image], multi: false, params: &[] },
+    ToolDef { id: "adjust", label: "Adjust colors", label_ar: "ضبط الألوان", cats: &[Image, Video], multi: false,
+        params: &[p("brightness", "Brightness (-1..1)", "السطوع (-1..1)", "0"), p("contrast", "Contrast (0..3)", "التباين (0..3)", "1"),
+            p("saturation", "Saturation (0..3)", "التشبع (0..3)", "1"), p("gamma", "Gamma", "غاما", "1"), p("hue", "Hue (°)", "تدرج اللون (°)", "0"),
+            p("sharpen", "Sharpen (0..3)", "الحدة (0..3)", "0"), p("denoise", "Denoise (0..20)", "إزالة التشويش (0..20)", "0"), p("grain", "Grain (0..60)", "الحبيبات (0..60)", "0")] },
     ToolDef { id: "rotate", label: "Rotate", label_ar: "تدوير", cats: &[Image, Video, Pdf], multi: false,
         params: &[p("degrees", "Degrees (90/180/270)", "الدرجات (90/180/270)", "90")] },
     ToolDef { id: "background", label: "Add background", label_ar: "إضافة خلفية", cats: &[Image], multi: false,
@@ -378,11 +460,11 @@ pub const TOOLS: &[ToolDef] = &[
     ToolDef { id: "merge-pdf", label: "Merge PDFs", label_ar: "دمج PDF", cats: &[Pdf], multi: true, params: &[] },
     ToolDef { id: "split-pdf", label: "Split pages", label_ar: "فصل الصفحات", cats: &[Pdf], multi: false, params: &[] },
     ToolDef { id: "pages", label: "Organize pages", label_ar: "ترتيب الصفحات", cats: &[Pdf], multi: false,
-        params: &[p("spec", "Pages, e.g. 3,1-2,z", "الصفحات، مثل 3,1-2,z", "1-z")] },
+        params: &[p("spec", "Pages, e.g. 3,1-2,z", "الصفحات، مثل 3,1-2,z", "1-z"), p("rotate", "Rotate, e.g. 1:90,3:180", "تدوير، مثل 1:90,3:180", "")] },
 ];
 
 /// Tools the desktop app opens in its visual editor instead of an options form.
-pub const EDITOR_TOOLS: [&str; 3] = ["crop", "redact", "annotate"];
+pub const EDITOR_TOOLS: [&str; 5] = ["crop", "redact", "annotate", "adjust", "pages"];
 
 /// Tools offered for a selection of `count` files sharing `cat` (`None` = mixed selection).
 pub fn tools_for(cat: Option<Category>, count: usize) -> Vec<&'static ToolDef> {
@@ -424,7 +506,19 @@ mod tests {
         );
         assert!(Op::parse("compress", &opts(&[("percent", "99")])).is_err());
         assert!(Op::parse("pages", &opts(&[("spec", "1;rm -rf")])).is_err());
-        assert_eq!(Op::parse("pages", &opts(&[("spec", "3, 1-2, z")])).unwrap(), Op::Pages { spec: "3,1-2,z".into() });
+        assert_eq!(Op::parse("pages", &opts(&[("spec", "3, 1-2, z")])).unwrap(), Op::Pages { spec: "3,1-2,z".into(), rotate: vec![] });
+        assert_eq!(
+            Op::parse("pages", &opts(&[("spec", "2,1"), ("rotate", "1:90, 2:270")])).unwrap(),
+            Op::Pages { spec: "2,1".into(), rotate: vec![(1, 90), (2, 270)] }
+        );
+        assert!(Op::parse("pages", &opts(&[("rotate", "1:45")])).is_err());
+        assert!(Op::parse("adjust", &opts(&[("contrast", "1")])).is_err(), "neutral adjust refused");
+        assert!(matches!(Op::parse("adjust", &opts(&[("saturation", "1.5")])), Ok(Op::Adjust(a)) if a.saturation == 1.5));
+        assert!(Op::parse("adjust", &opts(&[("brightness", "2")])).is_err());
+        assert_eq!(
+            Op::parse("tags", &opts(&[("title", "مرحبا"), ("bogus", "x")])).unwrap(),
+            Op::SetTags(vec![("title".into(), "مرحبا".into())])
+        );
         assert!(Op::parse("trim", &opts(&[("start", "10"), ("end", "5")])).is_err());
         assert!(Op::parse("ocr", &opts(&[("lang", "eng;x")])).is_err());
         assert!(Op::parse("nope", &opts(&[])).is_err());
@@ -434,9 +528,11 @@ mod tests {
                 boxes: vec![Rect { x: 1, y: 2, w: 30, h: 40 }, Rect { x: 5, y: 5, w: 10, h: 10 }],
                 fill: Some([0, 0, 0]),
                 range: Some((2.0, f64::MAX)),
+                auto: None,
             }
         );
         assert!(Op::parse("redact", &opts(&[("boxes", "1,2,0,4")])).is_err());
+        assert!(matches!(Op::parse("redact", &opts(&[("boxes", "auto"), ("lang", "ara+eng")])), Ok(Op::Redact { auto: Some(l), .. }) if l == "ara+eng"));
         assert_eq!(Op::parse("crop", &opts(&[("box", "10,20,300,200")])).unwrap(), Op::Crop(CropSpec::Box(Rect { x: 10, y: 20, w: 300, h: 200 })));
         assert_eq!(Op::parse("split", &opts(&[("at", "1:30, 10,10")])).unwrap(), Op::Split { parts: 2, at: vec![10.0, 90.0] });
         assert!(Op::parse("channels", &opts(&[("left", "3")])).is_err());
@@ -449,7 +545,8 @@ mod tests {
                 t.params.iter().map(|p| (p.key.to_string(), p.default.to_string())).collect();
             let r = Op::parse(t.id, &o);
             // no sensible defaults: bleep needs a range, redact needs boxes, annotate is app-only
-            assert!(r.is_ok() || ["bleep", "redact", "annotate"].contains(&t.id), "{} -> {:?}", t.id, r.err());
+            // ...adjust/tags defaults change nothing, which is refused on purpose
+            assert!(r.is_ok() || ["bleep", "redact", "annotate", "adjust", "tags"].contains(&t.id), "{} -> {:?}", t.id, r.err());
         }
     }
 

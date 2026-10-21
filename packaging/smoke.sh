@@ -53,6 +53,8 @@ check "clip parts (2)"      ffmpeg -- tool split --at 1,2.5 clip.mp4
 check clip-redacted.mp4     ffmpeg -- tool redact --boxes "0,0,200,100" --style "#000000" --start 1 --end 3 clip.mp4
 check clip-cropped.mp4      ffmpeg -- tool crop --box 10,10,301,201 clip.mp4
 check clip-stereo.mp4       ffmpeg -- tool channels --count 2 --left 0 clip.mp4
+check clip-adjusted.mp4     ffmpeg -- tool adjust --saturation 1.5 --sharpen 1 clip.mp4
+check clip-tagged.mp4       ffmpeg -- tool tags --title "Zeidex test" clip.mp4
 check voice-normalized.wav  ffmpeg -- tool normalize voice.wav
 check voice-bleeped.wav     ffmpeg -- tool bleep --start 1 --end 2 voice.wav
 check voice-visualizer.mp4  ffmpeg -- tool visualize voice.wav
@@ -69,6 +71,9 @@ check photo-compressed.png  vips -- tool compress --percent 50 photo.png
 check images.pdf            vips -- tool images-to-pdf photo.png shot.bmp
 check collage.jpg           vips -- tool collage photo.png photo.png
 check photo-redacted.png    ffmpeg -- tool redact --boxes "10,10,200,100;300,200,50,50" photo.png
+check photo-adjusted.png    ffmpeg -- tool adjust --contrast 1.3 --grain 8 photo.png
+gs -q -dSAFER -dBATCH -dNOPAUSE -sDEVICE=png16m -r72 -sOutputFile=card.png doc.ps 2>/dev/null
+check card-redacted.png     gs tesseract -- tool redact --boxes auto card.png
 
 check "doc pages"           gs -- convert --to png doc.pdf
 check doc.txt               gs -- convert --to txt doc.pdf
@@ -78,6 +83,8 @@ check merged.pdf            qpdf -- tool merge-pdf doc.pdf other.pdf
 check "doc pages (2)"       qpdf -- tool split-pdf doc.pdf
 check doc-pages.pdf         qpdf -- tool pages --spec 2,1 doc.pdf
 check doc-rotated.pdf       qpdf -- tool rotate doc.pdf
+check "doc-pages (2).pdf"   qpdf -- tool pages --spec 2,1,1 --rotate 1:90,3:180 doc.pdf
+check doc-clean.pdf         qpdf -- tool strip doc.pdf
 
 check notes.docx            pandoc -- convert --to docx notes.md
 check notes.html            pandoc -- convert --to html notes.md
@@ -89,6 +96,7 @@ check archive               7z -- tool extract archive.tar.gz
 
 [[ -d "clip parts (2)" ]] && n=$(ls "clip parts (2)" | wc -l) && [[ $n -ne 3 ]] && { echo "FAIL  split --at gave $n parts, want 3"; fail=$((fail + 1)); }
 [[ -f joined.mp4 ]] && ! ffprobe -v error -show_entries stream=width -of csv=p=0 joined.mp4 | grep -q 640 && { echo "FAIL  join did not use the first clip's canvas"; fail=$((fail + 1)); }
+[[ -f clip-tagged.mp4 ]] && ! ffprobe -v error -show_entries format_tags=title -of csv=p=0 clip-tagged.mp4 | grep -q "Zeidex test" && { echo "FAIL  tags not written"; fail=$((fail + 1)); }
 grep -qi "ocr test" doc-ocr.txt 2>/dev/null || { has tesseract && { echo "FAIL  OCR text mismatch"; fail=$((fail + 1)); }; }
 echo "passed=$pass failed=$fail skipped=$skip"
 [[ $fail -eq 0 ]]

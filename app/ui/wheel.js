@@ -23,6 +23,7 @@ let chip = -1;
 let chipTimer = 0;
 let hideTimer = 0;
 let formOpen = false;
+let centre = false; // pointer over the hub: dropping there floats the files on the orb
 
 const items = () => (desc ? desc[mode] : []);
 const polar = (r, a) => [C + r * Math.cos(a), C + r * Math.sin(a)];
@@ -70,9 +71,9 @@ function render() {
     svg.append(node('circle', { cx: x, cy: y, r: 14, class: cls }));
     svg.append(node('text', { x, y, class: 'chipt', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, ICON[m]));
   });
-  const caption = hover >= 0 && list[hover] ? window.ZL(list[hover]) : n ? window.ZT(mode) : window.ZT('nothing');
+  const caption = hover >= 0 && list[hover] ? window.ZL(list[hover]) : centre ? window.ZT('float') : n ? window.ZT(mode) : window.ZT('nothing');
   svg.append(node('text', { x: C, y: C + 10, class: 'cap', 'text-anchor': 'middle' }, short(caption, 18)));
-  svg.append(node('text', { x: C, y: C + 36, class: 'x', 'text-anchor': 'middle' }, '×'));
+  svg.append(node('text', { x: C, y: C + 36, class: 'x', 'text-anchor': 'middle' }, '◎'));
 }
 
 function hit(pos) {
@@ -100,6 +101,11 @@ function over(pos) {
   const h = hit(pos);
   const nh = h.seg ?? -1;
   const nc = h.chip ?? -1;
+  const nowCentre = h.chip === -1;
+  if (nowCentre !== centre) {
+    centre = nowCentre;
+    render();
+  }
   if (nc !== chip) {
     clearTimeout(chipTimer);
     chip = nc;
@@ -145,6 +151,7 @@ async function drop(p, pos) {
   const h = hit(pos);
   const it = h.seg != null ? items()[h.seg] : null;
   if (it) choose(it);
+  else if (h.chip === -1) invoke('float_add', { paths: p });
   else invoke('hide_wheel');
 }
 
@@ -154,6 +161,7 @@ function reset() {
   desc = null;
   hover = -1;
   chip = -1;
+  centre = false;
   render();
 }
 

@@ -35,6 +35,7 @@ class El {
     };
   }
   setAttribute(k, v) { this.attrs[k] = String(v); }
+  removeAttribute(k) { delete this.attrs[k]; }
   getAttribute(k) { return this.attrs[k]; }
   append(...c) { this.children.push(...c.map((x) => (typeof x === 'string' ? Object.assign(new El('#text'), { textContent: x }) : x))); }
   prepend(...c) { this.children.unshift(...c); }
@@ -91,7 +92,12 @@ function page(html, query = '') {
     hook_ok: true,
     take_pending: ['/home/u/clip.mp4'],
     get_settings: { convert: 'Shift', tools: 'Alt', actions: 'Control', reveal: true },
-    editor_state: { paths: ['/home/u/p.png', '/home/u/q.png'], tool: query || 'redact', video: false, width: 1600, height: 1200, duration: 0, preview: 'data:image/png;base64,AAAA' },
+    editor_state: query === 'pages'
+      ? { paths: ['/home/u/d.pdf'], tool: 'pages', video: false, width: 0, height: 0, duration: 0, preview: '', pages: ['data:p1', 'data:p2', 'data:p3'] }
+      : { paths: ['/home/u/p.png', '/home/u/q.png'], tool: query || 'redact', video: false, width: 1600, height: 1200, duration: 0, preview: 'data:image/png;base64,AAAA', pages: [] },
+    detect_text: [{ x: 5, y: 6, w: 70, h: 20 }],
+    float_list: ['/home/u/a.txt', '/home/u/b.png'],
+    drag_icon: 'data:image/png;base64,AAAA',
   };
   class FormData {
     constructor(form) {
@@ -133,6 +139,7 @@ function page(html, query = '') {
       },
       event: { listen: async (name, cb) => { (listeners[name] ||= []).push(cb); } },
       webview: { getCurrentWebview: () => ({ onDragDropEvent: async (h) => { dropHandler = h; } }) },
+      drag: { startDrag: async (opts, cb) => { calls.push(['startDrag', opts]); cb({ result: 'Dropped' }); } },
     },
   };
   sandbox.window = sandbox;
@@ -182,9 +189,11 @@ const segs = (p) => p.byId.wheel.children.filter((c) => c.tagName === 'PATH');
     await p.drag({ type: 'over', position: { x: 246, y: 180 } });
     await tick(500);
     ok(segs(p).length === 4 && p.byId.wheel.all().some((e) => e.textContent === 'Actions'), 'wheel: dwelling on a chip switches to actions');
-    const before = p.calls.filter(([c]) => c === 'hide_wheel').length;
+    await p.drag({ type: 'over', position: { x: 210, y: 245 } });
+    ok(p.byId.wheel.all().some((e) => e.textContent === 'Float'), 'wheel: hub shows Float');
     await p.drag({ type: 'drop', paths: ['/v/clip.mp4'], position: { x: 210, y: 245 } });
-    ok(p.calls.filter(([c]) => c === 'hide_wheel').length === before + 1, 'wheel: dropping in the centre cancels');
+    const fl = p.calls.find(([c]) => c === 'float_add');
+    ok(fl && fl[1].paths[0] === '/v/clip.mp4', 'wheel: dropping on the hub floats the files on the orb');
   }
 
   // ---------- editor ----------
@@ -225,6 +234,40 @@ const segs = (p) => p.byId.wheel.children.filter((c) => c.tagName === 'PATH');
     ok(p.byId.err.textContent.includes('draw a box'), 'editor: applying without a box explains why');
   }
   {
+    const p = page('editor.html', 'redact');
+    await tick(10);
+    const detect = p.byId.controls.querySelectorAll('button').find((b) => b.textContent === 'Detect text');
+    await detect.fire('click');
+    await tick();
+    await p.byId.apply.fire('click');
+    const run = p.calls.find(([c]) => c === 'run_job');
+    ok(run && run[1].opts.boxes === '10,12,140,40', `editor: detected text boxes are redacted (${run && run[1].opts.boxes})`);
+  }
+  {
+    const p = page('editor.html', 'adjust');
+    await tick(10);
+    const sat = p.byId.controls.querySelectorAll('input')[2];
+    sat.value = '1.6';
+    sat.fire('input', { target: sat });
+    await p.byId.apply.fire('click');
+    const run = p.calls.find(([c]) => c === 'run_job');
+    ok(run && run[1].id === 'adjust' && run[1].opts.saturation === '1.6' && run[1].opts.contrast === '1', 'editor: adjust sends slider values');
+  }
+  {
+    const p = page('editor.html', 'pages');
+    await tick(10);
+    const cards = () => p.byId.pages.children;
+    ok(cards().length === 3 && p.byId.canvas.hidden, 'organizer: one card per page, canvas hidden');
+    const btns = (i) => cards()[i].querySelectorAll('button');
+    btns(2)[0].fire('click'); // move page 3 earlier -> 1,3,2
+    btns(0)[1].fire('click'); // rotate first card
+    btns(2)[3].fire('click'); // remove last (page 2)
+    btns(0)[2].fire('click'); // duplicate first -> 1,1,3
+    await p.byId.apply.fire('click');
+    const run = p.calls.find(([c]) => c === 'run_job');
+    ok(run && run[1].opts.spec === '1,1,3' && run[1].opts.rotate === '1:90,2:90', `organizer: spec and rotations (${run && JSON.stringify(run[1].opts)})`);
+  }
+  {
     const p = page('editor.html', 'annotate');
     await tick(10);
     const cv = p.byId.canvas;
@@ -234,8 +277,25 @@ const segs = (p) => p.byId.wheel.children.filter((c) => c.tagName === 'PATH');
     p.key('z'); // plain z is not undo
     await p.byId.apply.fire('click');
     const save = p.calls.find(([c]) => c === 'save_annotation');
-    ok(save && save[1].src === '/home/u/p.png' && save[1].data.startsWith('data:image/png;base64,'), 'editor: annotate saves the canvas as PNG');
+    ok(save && save[1].src === '/home/u/p.png' && save[1].data.startsWith('data:image/png;base64,'), 'editor: annotate sends the layer as PNG');
+    ok(save && save[1].width === 1600 && save[1].height === 1200, 'editor: layer is composited at the source size');
     ok(p.calls.some(([c]) => c === 'close_editor'), 'editor: closes after saving');
+  }
+
+  // ---------- orb (Float shelf) ----------
+  {
+    const p = page('shelf.html');
+    await tick();
+    const orb = p.byId.orb;
+    ok(p.byId.badge.textContent === '2' && orb.attrs['data-tauri-drag-region'] === undefined, 'orb: held files shown, window drag off');
+    orb.fire('pointerdown', { button: 0, clientX: 10, clientY: 10 });
+    await orb.fire('pointermove', { clientX: 30, clientY: 10 });
+    await tick();
+    const drag = p.calls.find(([c]) => c === 'startDrag');
+    ok(drag && drag[1].item.length === 2 && drag[1].icon.startsWith('data:image/png'), 'orb: dragging starts a native file drag');
+    ok(p.calls.some(([c]) => c === 'float_clear'), 'orb: a completed drop clears the shelf');
+    p.emit('float-changed', 0);
+    ok(p.byId.badge.hidden && orb.attrs['data-tauri-drag-region'] === '', 'orb: empty shelf moves the window again');
   }
 
   // ---------- home ----------

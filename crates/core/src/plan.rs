@@ -4,7 +4,7 @@
 //! which keeps every routing decision unit-testable without the engines installed.
 
 use crate::format::{category_of_ext, ext_of, stem_of, Category};
-use crate::ops::{Compression, CropSpec, Level, Op, Rect, Size};
+use crate::ops::{Adjust, Compression, CropSpec, Level, Op, Rect, Size};
 use crate::tools::Tool;
 use crate::{Error, Result};
 use std::ffi::{OsStr, OsString};
@@ -33,6 +33,8 @@ pub struct Ctx {
     pub media: Option<MediaInfo>,
     /// Every input's media info, for ops that combine files (join). Empty otherwise.
     pub inputs: Vec<MediaInfo>,
+    /// Text boxes found by OCR for `redact --boxes auto`.
+    pub detected: Vec<Rect>,
     pub image: Option<ImageInfo>,
     pub size: u64,
 }
@@ -121,6 +123,12 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
                 a.extend(args!["-map", "0", "-map_metadata", "-1", "-map_chapters", "-1", "-c", "copy", &out]);
                 s.push(run(Tool::Ffmpeg, a));
                 (out, named(&stem, "clean", to))
+            } else if is(Category::Pdf) {
+                // A document rebuilt from an empty one keeps the pages but not /Info or XMP
+                // (works on every qpdf; --remove-info needs 11.10+).
+                let out = tmp.join("clean.pdf");
+                s.push(run(Tool::Qpdf, args!["--empty", "--pages", src, "1-z", "--", &out]));
+                (out, named(&stem, "clean", "pdf"))
             } else {
                 return Err(unsupported("Removing metadata", &from));
             }
@@ -438,31 +446,41 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             s.push(ffmpeg(a, ctx));
             (out, named(&stem, "bleeped", to))
         }
-        Op::Redact { boxes, fill, range } if is(Category::Image) || is(Category::Video) => {
-            let video = is(Category::Video);
-            let (input, to) = if video {
-                (src.to_path_buf(), av_out_ext(&from, cat))
-            } else if ["jpg", "png", "bmp", "tiff"].contains(&from.as_str()) {
-                (src.to_path_buf(), if from == "jpg" { "jpg" } else { "png" })
-            } else {
-                // FFmpeg's HEIC/AVIF/SVG support is patchy: decode with libvips first.
-                let png = tmp.join("redact-in.png");
-                let decoded = image_src(src, &from, tmp, &mut s);
-                s.push(run(Tool::Vips, args!["copy", &decoded, &png]));
-                (png, "png")
-            };
-            let out = tmp.join(format!("redacted.{to}"));
+        Op::Redact { auto: Some(_), .. } if !is(Category::Image) => return Err(unsupported("Automatic text detection", &from)),
+        Op::Redact { boxes, fill, range, auto } if is(Category::Image) || is(Category::Video) => {
+            let boxes = if auto.is_some() { &ctx.detected } else { boxes };
+            if boxes.is_empty() {
+                return Err(Error::Unsupported("no text was found to redact".into()));
+            }
+            let graph = redact_graph(boxes, *fill, *range);
+            visual_filter(src, &from, cat, &graph, "redacted", ctx, tmp, &mut s, &stem)
+        }
+        Op::Adjust(adj) if is(Category::Image) || is(Category::Video) => {
+            let graph = format!("[0:v]{}[v]", adjust_chain(adj));
+            visual_filter(src, &from, cat, &graph, "adjusted", ctx, tmp, &mut s, &stem)
+        }
+        Op::Overlay { png, width, height } if is(Category::Image) => {
+            let (input, to) = ffmpeg_image_input(src, &from, tmp, &mut s);
+            let out = tmp.join(format!("annotated.{to}"));
             let mut a = ffmpeg_in(&input);
-            a.extend(args!["-filter_complex", redact_graph(boxes, *fill, *range), "-map", "[v]"]);
-            if video {
-                a.extend(args!["-map", "0:a?", "-c:a", "copy"]);
-                a.extend(strs(video_codec(to)));
-            } else {
-                a.extend(args!["-frames:v", "1", "-q:v", "2"]);
+            a.extend(args![
+                "-i", png, "-filter_complex", format!("[1:v]scale={width}:{height}[o];[0:v][o]overlay=0:0[v]"),
+                "-map", "[v]", "-frames:v", "1", "-q:v", "2", &out
+            ]);
+            s.push(run(Tool::Ffmpeg, a));
+            (out, named(&stem, "annotated", to))
+        }
+        Op::SetTags(pairs) if av => {
+            let to = av_out_ext(&from, cat);
+            let out = tmp.join(format!("tagged.{to}"));
+            let mut a = ffmpeg_in(src);
+            a.extend(args!["-map", "0", "-c", "copy"]);
+            for (k, v) in pairs {
+                a.extend(args!["-metadata", format!("{k}={v}")]);
             }
             a.push(out.clone().into());
-            s.push(ffmpeg(a, ctx));
-            (out, named(&stem, "redacted", to))
+            s.push(run(Tool::Ffmpeg, a));
+            (out, named(&stem, "tagged", to))
         }
         Op::Visualize { shape } if is(Category::Audio) => {
             let size = match shape.as_str() {
@@ -494,9 +512,18 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             s.push(run(Tool::Qpdf, args!["--split-pages", src, dir.join(format!("{stem}-%d.pdf"))]));
             (dir, format!("{stem} pages"))
         }
-        Op::Pages { spec } if is(Category::Pdf) => {
+        Op::Pages { spec, rotate } if is(Category::Pdf) => {
             let out = tmp.join("pages.pdf");
-            s.push(run(Tool::Qpdf, args![src, "--pages", ".", spec, "--", &out]));
+            let mut a = args![src, "--pages", ".", spec, "--"];
+            // --rotate applies to output page numbers, after the selection above.
+            for deg in [90, 180, 270] {
+                let pages: Vec<String> = rotate.iter().filter(|(_, d)| *d == deg).map(|(p, _)| p.to_string()).collect();
+                if !pages.is_empty() {
+                    a.push(format!("--rotate=+{deg}:{}", pages.join(",")).into());
+                }
+            }
+            a.push(out.clone().into());
+            s.push(run(Tool::Qpdf, a));
             (out, named(&stem, "pages", "pdf"))
         }
         _ => return Err(unsupported("This tool", &from)),
@@ -524,6 +551,61 @@ pub fn crop_box(w: u32, h: u32, rw: u32, rh: u32) -> (u32, u32) {
     } else {
         (w, (w64 * rh / rw) as u32)
     }
+}
+
+/// Image path FFmpeg decodes reliably, and the extension to write. HEIC/AVIF/SVG/WebP go
+/// through libvips first because FFmpeg's support for them as stills is patchy.
+fn ffmpeg_image_input(src: &Path, from: &str, tmp: &Path, s: &mut Vec<Step>) -> (PathBuf, &'static str) {
+    if ["jpg", "png", "bmp", "tiff"].contains(&from) {
+        return (src.to_path_buf(), if from == "jpg" { "jpg" } else { "png" });
+    }
+    let png = tmp.join("decoded.png");
+    let decoded = image_src(src, from, tmp, s);
+    s.push(run(Tool::Vips, args!["copy", &decoded, &png]));
+    (png, "png")
+}
+
+/// Runs a `[0:v]...[v]` filter graph over an image or a video (audio copied).
+#[allow(clippy::too_many_arguments)]
+fn visual_filter(
+    src: &Path, from: &str, cat: Option<Category>, graph: &str, tag: &str, ctx: &Ctx, tmp: &Path, s: &mut Vec<Step>,
+    stem: &str,
+) -> (PathBuf, String) {
+    let video = cat == Some(Category::Video);
+    let (input, to) = if video { (src.to_path_buf(), av_out_ext(from, cat)) } else { ffmpeg_image_input(src, from, tmp, s) };
+    let out = tmp.join(format!("{tag}.{to}"));
+    let mut a = ffmpeg_in(&input);
+    a.extend(args!["-filter_complex", graph, "-map", "[v]"]);
+    if video {
+        a.extend(args!["-map", "0:a?", "-c:a", "copy"]);
+        a.extend(strs(video_codec(to)));
+    } else {
+        a.extend(args!["-frames:v", "1", "-q:v", "2"]);
+    }
+    a.push(out.clone().into());
+    s.push(ffmpeg(a, ctx));
+    (out, named(stem, tag, to))
+}
+
+/// FFmpeg filter chain for a look adjustment; neutral parts are left out.
+pub fn adjust_chain(a: &Adjust) -> String {
+    let mut f = vec![format!(
+        "eq=brightness={}:contrast={}:saturation={}:gamma={}",
+        a.brightness, a.contrast, a.saturation, a.gamma
+    )];
+    if a.hue != 0.0 {
+        f.push(format!("hue=h={}", a.hue));
+    }
+    if a.denoise > 0.0 {
+        f.push(format!("hqdn3d={}", a.denoise));
+    }
+    if a.sharpen > 0.0 {
+        f.push(format!("unsharp=5:5:{}", a.sharpen));
+    }
+    if a.grain > 0.0 {
+        f.push(format!("noise=alls={}:allf=t", a.grain));
+    }
+    f.join(",")
 }
 
 /// Blur or paint `boxes`. Blur crops each box from a copy, blurs it and overlays it back.
@@ -1294,6 +1376,30 @@ mod tests {
         assert!(argv(&p)[0].1.contains("pan=stereo|c0=0*c0|c1=1*c1"));
         let p = plan_of("crop", &[("box", "1,2,101,51")], &["/in/v.mp4"], media(3.0)).unwrap();
         assert!(argv(&p)[0].1.contains("crop=100:50:1:2"));
+    }
+
+    #[test]
+    fn adjust_overlay_tags_pages_pdfstrip() {
+        let a = Adjust { saturation: 1.4, sharpen: 1.0, ..Adjust::NEUTRAL };
+        assert_eq!(adjust_chain(&a), "eq=brightness=0:contrast=1:saturation=1.4:gamma=1,unsharp=5:5:1");
+        let p = plan_of("adjust", &[("saturation", "1.4")], &["/in/a.webp"], Ctx::default()).unwrap();
+        let tools: Vec<Tool> = argv(&p).into_iter().map(|x| x.0).collect();
+        assert_eq!(tools, vec![Tool::Vips, Tool::Ffmpeg]);
+        assert_eq!(p.name, "a-adjusted.png");
+
+        let op = Op::Overlay { png: "/t/ov.png".into(), width: 4000, height: 3000 };
+        let p = plan(&op, &[PathBuf::from("/in/big.jpg")], &Ctx::default(), Path::new("/t")).unwrap();
+        assert!(argv(&p)[0].1.contains("[1:v]scale=4000:3000[o];[0:v][o]overlay=0:0[v]"));
+        assert_eq!(p.name, "big-annotated.jpg");
+
+        let p = plan_of("tags", &[("title", "Hi there"), ("artist", "Z")], &["/in/s.mp3"], media(3.0)).unwrap();
+        assert!(argv(&p)[0].1.contains("-map 0 -c copy -metadata title=Hi there -metadata artist=Z"));
+
+        let p = plan_of("pages", &[("spec", "3,1,2"), ("rotate", "1:90,3:90,2:180")], &["/in/d.pdf"], Ctx::default()).unwrap();
+        assert_eq!(argv(&p)[0].1, "/in/d.pdf --pages . 3,1,2 -- --rotate=+90:1,3 --rotate=+180:2 /t/pages.pdf");
+
+        let p = plan_of("strip", &[], &["/in/d.pdf"], Ctx::default()).unwrap();
+        assert_eq!(argv(&p)[0], (Tool::Qpdf, "--empty --pages /in/d.pdf 1-z -- /t/clean.pdf".into()));
     }
 
     #[test]

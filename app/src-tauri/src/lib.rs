@@ -44,7 +44,8 @@ struct Described {
     actions: Vec<Choice>,
 }
 
-const ACTIONS: [(&str, &str, &str); 4] = [
+const ACTIONS: [(&str, &str, &str); 5] = [
+    ("float", "Float", "تعليق في الدائرة"),
     ("reveal", "Show in folder", "إظهار في المجلد"),
     ("copy-path", "Copy path", "نسخ المسار"),
     ("move", "Move to…", "نقل إلى…"),
@@ -70,8 +71,6 @@ struct ToolStatus {
 
 static NEXT_JOB: AtomicU64 = AtomicU64::new(1);
 static REVEAL: AtomicBool = AtomicBool::new(true);
-/// Files and tool the editor window was opened for.
-static EDITOR: Mutex<Option<(Vec<String>, String)>> = Mutex::new(None);
 /// Files handed over by `--open` before the home window was ready to receive them.
 static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -122,6 +121,14 @@ fn run_job(app: AppHandle, paths: Vec<String>, kind: String, id: String, opts: H
     // Validate first: on bad options the wheel stays open so the form can show the error.
     let op = if kind == "convert" { Op::Convert { to: id.clone() } } else { Op::parse(&id, &opts).map_err(|e| e.to_string())? };
     hook::hide(&app);
+    let title = if kind == "convert" { format!("→ {}", id.to_uppercase()) } else { id };
+    spawn_job(app, op, paths, title, None);
+    Ok(())
+}
+
+/// Runs `op` on a worker thread, streaming progress to the jobs window. `cleanup` is deleted
+/// afterwards (temporary inputs such as an annotation overlay).
+fn spawn_job(app: AppHandle, op: Op, paths: Vec<PathBuf>, title: String, cleanup: Option<PathBuf>) {
     let job = NEXT_JOB.fetch_add(1, Ordering::Relaxed);
     show(&app, "jobs");
     std::thread::spawn(move || {
@@ -132,7 +139,6 @@ fn run_job(app: AppHandle, paths: Vec<String>, kind: String, id: String, opts: H
             }
             return;
         }
-        let title = if kind == "convert" { format!("→ {}", id.to_uppercase()) } else { id.clone() };
         let mut index = 0;
         let results = runner::run(&op, &paths, |e| {
             let ev = match e {
@@ -146,13 +152,15 @@ fn run_job(app: AppHandle, paths: Vec<String>, kind: String, id: String, opts: H
             };
             let _ = app.emit("job", ev);
         });
+        if let Some(tmp) = cleanup {
+            let _ = std::fs::remove_file(tmp);
+        }
         if REVEAL.load(Ordering::Relaxed) {
             if let Some(Ok(last)) = results.iter().rev().find(|r| r.is_ok()) {
                 let _ = actions::reveal(last);
             }
         }
     });
-    Ok(())
 }
 
 fn action(app: &AppHandle, id: &str, paths: Vec<PathBuf>) -> Result<(), String> {
@@ -160,6 +168,10 @@ fn action(app: &AppHandle, id: &str, paths: Vec<PathBuf>) -> Result<(), String> 
         "reveal" => actions::reveal(&paths[0]).map_err(|e| e.to_string()),
         "terminal" => actions::open_terminal(&paths[0]).map_err(|e| e.to_string()),
         "copy-path" => app.clipboard().write_text(actions::paths_text(&paths)).map_err(|e| e.to_string()),
+        "float" => {
+            float_add(app.clone(), paths.iter().map(|p| p.to_string_lossy().into_owned()).collect());
+            Ok(())
+        }
         "move" => {
             let app = app.clone();
             // The folder picker blocks; keep it off the IPC thread.
@@ -175,6 +187,44 @@ fn action(app: &AppHandle, id: &str, paths: Vec<PathBuf>) -> Result<(), String> 
     }
 }
 
+// ---------- Float shelf: hold files on the orb, then drag them into any app ----------
+
+static FLOAT: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+#[tauri::command]
+fn float_add(app: AppHandle, paths: Vec<String>) {
+    hook::hide(&app);
+    let mut held = FLOAT.lock().unwrap_or_else(|e| e.into_inner());
+    for p in paths {
+        if !held.contains(&p) {
+            held.push(p);
+        }
+    }
+    if let Some(w) = app.get_webview_window("shelf") {
+        let _ = w.show();
+    }
+    let _ = app.emit("float-changed", held.len());
+}
+
+#[tauri::command]
+fn float_list() -> Vec<String> {
+    FLOAT.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+#[tauri::command]
+fn float_clear(app: AppHandle) {
+    FLOAT.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    let _ = app.emit("float-changed", 0);
+}
+
+/// Drag image shown under the cursor while files leave the orb.
+#[tauri::command]
+fn drag_icon() -> String {
+    format!("data:image/png;base64,{}", b64::encode(include_bytes!("../icons/128x128.png")))
+}
+
+// ---------- visual editor ----------
+
 #[derive(Serialize)]
 struct EditorState {
     paths: Vec<String>,
@@ -183,12 +233,19 @@ struct EditorState {
     width: u32,
     height: u32,
     duration: f64,
-    /// PNG data URL; at most `PREVIEW_MAX` px (annotations are saved at this size).
+    /// PNG data URL of the image or a video frame (empty for PDFs).
     preview: String,
+    /// One small PNG data URL per page (page organizer only).
+    pages: Vec<String>,
 }
 
 const PREVIEW_MAX: u32 = 1600;
-const ANNOTATE_MAX: u32 = 2560;
+/// Thumbnail resolution for the page organizer (A4 ≈ 190×270 px).
+const THUMB_DPI: u32 = 24;
+
+/// Files and tool the editor window was opened for, and the preview PNG it shows (for OCR).
+static EDITOR: Mutex<Option<(Vec<String>, String)>> = Mutex::new(None);
+static EDITOR_PREVIEW: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
 #[tauri::command]
 fn open_editor(app: AppHandle, paths: Vec<String>, tool: String) {
@@ -198,39 +255,67 @@ fn open_editor(app: AppHandle, paths: Vec<String>, tool: String) {
     let _ = app.emit("editor-open", ());
 }
 
-/// Async: decoding the preview can take a moment for large HEIC/RAW-ish images.
+/// Async: decoding previews and rendering page thumbnails can take a moment.
 #[tauri::command]
 async fn editor_state() -> Result<EditorState, String> {
     let (paths, tool) = EDITOR.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or("no file open")?;
     let src = PathBuf::from(&paths[0]);
+    let data_url = |png: &[u8]| format!("data:image/png;base64,{}", b64::encode(png));
+    if tool == "pages" {
+        let pages = runner::pdf_thumbnails(&src, THUMB_DPI).map_err(|e| e.to_string())?;
+        let pages = pages.iter().map(|p| data_url(p)).collect();
+        return Ok(EditorState { paths, tool, video: false, width: 0, height: 0, duration: 0.0, preview: String::new(), pages });
+    }
     let video = format::category_of(&src) == Some(format::Category::Video);
     let (width, height) = runner::dimensions(&src).ok_or("could not read the size")?;
     let duration = if video { runner::probe_media(&src).map_or(0.0, |m| m.duration) } else { 0.0 };
-    let max = if tool == "annotate" { ANNOTATE_MAX } else { PREVIEW_MAX };
-    let png = runner::preview_png(&src, max).map_err(|e| e.to_string())?;
-    let preview = format!("data:image/png;base64,{}", b64::encode(&png));
-    Ok(EditorState { paths, tool, video, width, height, duration, preview })
+    let png = runner::preview_png(&src, PREVIEW_MAX).map_err(|e| e.to_string())?;
+    let preview = data_url(&png);
+    *EDITOR_PREVIEW.lock().unwrap_or_else(|e| e.into_inner()) = png;
+    Ok(EditorState { paths, tool, video, width, height, duration, preview, pages: vec![] })
 }
 
-/// Saves the annotated canvas (PNG data URL) beside the original.
+#[derive(Serialize)]
+struct Box4 {
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
+/// Text lines in the editor's preview, in preview pixels (redact → "Detect text").
 #[tauri::command]
-fn save_annotation(src: String, data: String) -> Result<String, String> {
+async fn detect_text(lang: String) -> Result<Vec<Box4>, String> {
+    let png = EDITOR_PREVIEW.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if png.is_empty() {
+        return Err("no preview".into());
+    }
+    let boxes = runner::detect_text_png(&png, &lang).map_err(|e| e.to_string())?;
+    Ok(boxes.into_iter().map(|r| Box4 { x: r.x, y: r.y, w: r.w, h: r.h }).collect())
+}
+
+/// Composites the annotation layer (transparent PNG at preview size) onto the original at
+/// full resolution, as a normal job.
+#[tauri::command]
+fn save_annotation(app: AppHandle, src: String, data: String, width: u32, height: u32) -> Result<(), String> {
     let png = b64::decode(&data).ok_or("bad image data")?;
     if !png.starts_with(b"\x89PNG") {
         return Err("not a PNG".into());
     }
-    let src = PathBuf::from(src);
-    let name = format!("{}-annotated.png", format::stem_of(&src));
-    let out = actions::save_beside(&src, &name, &png).map_err(|e| e.to_string())?;
-    if REVEAL.load(Ordering::Relaxed) {
-        let _ = actions::reveal(&out);
+    if width == 0 || height == 0 {
+        return Err("unknown image size".into());
     }
-    Ok(out.to_string_lossy().into_owned())
+    let overlay = std::env::temp_dir().join(format!("zeidex-overlay-{}.png", NEXT_JOB.load(Ordering::Relaxed)));
+    std::fs::write(&overlay, png).map_err(|e| e.to_string())?;
+    let op = Op::Overlay { png: overlay.clone(), width, height };
+    spawn_job(app, op, vec![PathBuf::from(src)], "annotate".into(), Some(overlay));
+    Ok(())
 }
 
 #[tauri::command]
 fn close_editor(app: AppHandle) {
     *EDITOR.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    EDITOR_PREVIEW.lock().unwrap_or_else(|e| e.into_inner()).clear();
     if let Some(w) = app.get_webview_window("editor") {
         let _ = w.hide();
     }
@@ -395,10 +480,11 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| open_args(app, &args, Path::new(&cwd))))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_drag::init())
         .invoke_handler(tauri::generate_handler![
             describe, run_job, hide_wheel, keep_wheel, wheel_at_shelf, reveal, doctor, hook_ok, integrate_shell,
             pick_files, take_pending, open_in_home, show_home, open_editor, editor_state, save_annotation,
-            close_editor, get_settings, set_settings
+            close_editor, get_settings, set_settings, detect_text, float_add, float_list, float_clear, drag_icon
         ])
         .on_window_event(|window, event| {
             // Closing a window keeps the app alive in the tray, like a menu-bar app.

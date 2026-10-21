@@ -1,13 +1,13 @@
-// Visual editor for the tools that need a region: crop (one box), redact (many boxes,
-// optional time range for video) and annotate (shapes drawn onto the image, saved as PNG).
-// Boxes are kept in preview pixels and scaled to source pixels only when applied.
+// Visual editor: crop (one box), redact (boxes, optional time range, OCR text detection),
+// annotate (shapes on a transparent layer composited at full resolution), adjust (live
+// colour preview) and the PDF page organizer. Boxes stay in preview pixels until applied.
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const $ = (id) => document.getElementById(id);
 const make = (tag, props) => Object.assign(document.createElement(tag), props);
 
 const cv = $('canvas');
-const ctx = cv.getContext('2d');
+let ctx = cv.getContext('2d'); // swapped for an offscreen layer when exporting annotations
 const RATIOS = [['free', 0], ['1:1', 1], ['4:3', 4 / 3], ['3:2', 3 / 2], ['16:9', 16 / 9], ['9:16', 9 / 16], ['4:5', 4 / 5]];
 const COLORS = { blur: 'blur', black: '#000000', white: '#ffffff' };
 
@@ -20,6 +20,14 @@ let drag = null;
 let aspect = 0;
 let style = 'blur';
 let pen = { type: 'rect', color: '#f07b1d', size: 4, text: '' };
+const NEUTRAL = { brightness: 0, contrast: 1, saturation: 1, gamma: 1, hue: 0, sharpen: 0, denoise: 0, grain: 0 };
+// [key, min, max, step]; gamma, sharpen, denoise and grain are not shown in the live preview
+const SLIDERS = [['brightness', -1, 1, 0.02], ['contrast', 0, 3, 0.02], ['saturation', 0, 3, 0.02], ['hue', -180, 180, 1],
+  ['gamma', 0.1, 3, 0.02], ['sharpen', 0, 3, 0.05], ['denoise', 0, 20, 0.5], ['grain', 0, 60, 1]];
+let adj = { ...NEUTRAL };
+let pages = []; // organizer: [{n: source page (1-based), rot: degrees}]
+
+const adjustCss = () => `brightness(${1 + adj.brightness}) contrast(${adj.contrast}) saturate(${adj.saturation}) hue-rotate(${adj.hue}deg)`;
 
 const lineW = () => Math.max(2, Math.round(cv.width / 320)) * pen.size / 4;
 
@@ -100,6 +108,13 @@ function drawShape(s) {
 
 function draw() {
   if (!img) return;
+  if (st.tool === 'adjust') {
+    ctx.filter = adjustCss();
+    ctx.drawImage(img, 0, 0);
+    ctx.filter = 'none';
+    $('info').textContent = `${st.width} × ${st.height} px`;
+    return;
+  }
   ctx.drawImage(img, 0, 0);
   const live = drag && drag.box ? [...boxes, drag.box] : boxes;
   if (st.tool === 'crop' && live.length) {
@@ -158,6 +173,30 @@ function controls() {
       c.append(make('input', { id: 'start', placeholder: window.ZT('from'), size: 6 }));
       c.append(make('input', { id: 'end', placeholder: window.ZT('to'), size: 6 }));
     }
+    const lang = make('input', { id: 'lang', value: window.ZLANG === 'ar' ? 'ara+eng' : 'eng', size: 7, title: 'Tesseract' });
+    c.append(lang, make('button', {
+      textContent: window.ZT('detectText'),
+      onclick: async () => {
+        $('err').textContent = '';
+        try {
+          const found = await invoke('detect_text', { lang: lang.value });
+          if (!found.length) throw window.ZT('noText');
+          boxes.push(...found);
+          draw();
+        } catch (e) {
+          $('err').textContent = String(e);
+        }
+      },
+    }));
+  } else if (st.tool === 'adjust') {
+    for (const [key, min, max, step] of SLIDERS) {
+      const l = make('label', { className: 'slider', textContent: window.ZT(key) });
+      l.append(make('input', { type: 'range', min, max, step, value: adj[key], oninput: (e) => { adj[key] = +e.target.value; draw(); } }));
+      c.append(l);
+    }
+    c.append(make('button', { textContent: window.ZT('reset'), onclick: () => { adj = { ...NEUTRAL }; controls(); draw(); } }));
+  } else if (st.tool === 'pages') {
+    c.append(make('span', { className: 'hint', textContent: window.ZT('pagesHint') }));
   } else {
     for (const t of ['rect', 'arrow', 'text', 'number', 'pen']) {
       c.append(make('button', {
@@ -175,7 +214,7 @@ function controls() {
 }
 
 cv.addEventListener('pointerdown', (e) => {
-  if (!st) return;
+  if (!st || st.tool === 'adjust' || st.tool === 'pages') return;
   cv.setPointerCapture(e.pointerId);
   const p = point(e);
   if (st.tool === 'annotate') {
@@ -219,8 +258,24 @@ async function apply() {
   $('err').textContent = '';
   try {
     if (st.tool === 'annotate') {
-      draw();
-      await invoke('save_annotation', { src: st.paths[0], data: cv.toDataURL('image/png') });
+      if (!shapes.length) throw window.ZT('drawSomething');
+      // Only the annotation layer goes to Rust; it is scaled onto the full-size original.
+      const layer = document.createElement('canvas');
+      layer.width = cv.width;
+      layer.height = cv.height;
+      const screen = ctx;
+      ctx = layer.getContext('2d');
+      shapes.forEach(drawShape);
+      ctx = screen;
+      await invoke('save_annotation', { src: st.paths[0], data: layer.toDataURL('image/png'), width: st.width, height: st.height });
+    } else if (st.tool === 'adjust') {
+      const opts = Object.fromEntries(Object.entries(adj).map(([key, v]) => [key, String(v)]));
+      await invoke('run_job', { paths: st.paths, kind: 'tool', id: 'adjust', opts });
+    } else if (st.tool === 'pages') {
+      if (!pages.length) throw window.ZT('noPages');
+      const spec = pages.map((p) => p.n).join(',');
+      const rotate = pages.map((p, i) => (p.rot ? `${i + 1}:${p.rot}` : '')).filter(Boolean).join(',');
+      await invoke('run_job', { paths: st.paths, kind: 'tool', id: 'pages', opts: { spec, rotate } });
     } else {
       if (!boxes.length) throw window.ZT('drawBox');
       const opts = st.tool === 'crop'
@@ -247,6 +302,28 @@ function undo() {
   draw();
 }
 
+function renderPages() {
+  const grid = $('pages');
+  grid.replaceChildren(...pages.map((p, i) => {
+    const card = make('div', { className: 'page' });
+    const thumb = make('img', { src: st.pages[p.n - 1], alt: `${p.n}` });
+    thumb.style.transform = `rotate(${p.rot}deg)`;
+    const move = (to) => { const [it] = pages.splice(i, 1); pages.splice(to, 0, it); renderPages(); };
+    const btn = (text, title, fn) => make('button', { textContent: text, title: window.ZT(title), onclick: fn });
+    const tools = make('div', { className: 'page-tools' });
+    tools.append(
+      btn('◀', 'moveLeft', () => i > 0 && move(i - 1)),
+      btn('⟳', 'rotate', () => { p.rot = (p.rot + 90) % 360; renderPages(); }),
+      btn('⧉', 'duplicate', () => { pages.splice(i + 1, 0, { ...p }); renderPages(); }),
+      btn('✕', 'remove', () => { pages.splice(i, 1); renderPages(); }),
+      btn('▶', 'moveRight', () => i < pages.length - 1 && move(i + 1)),
+    );
+    card.append(thumb, make('div', { className: 'page-n', textContent: `${i + 1} · p${p.n}` }), tools);
+    return card;
+  }));
+  $('info').textContent = `${pages.length} ${window.ZT('pagesCount')}`;
+}
+
 async function open() {
   $('err').textContent = '';
   try {
@@ -257,9 +334,19 @@ async function open() {
   boxes = [];
   shapes = [];
   aspect = 0;
+  adj = { ...NEUTRAL };
   $('title').textContent = window.ZT(st.tool);
   $('apply').textContent = window.ZT(st.tool === 'annotate' ? 'save' : 'apply');
   controls();
+  const organizer = st.tool === 'pages';
+  $('pages').hidden = !organizer;
+  cv.hidden = organizer;
+  $('undo').hidden = organizer || st.tool === 'adjust';
+  if (organizer) {
+    pages = st.pages.map((_, i) => ({ n: i + 1, rot: 0 }));
+    img = null;
+    return renderPages();
+  }
   img = new Image();
   img.onload = () => {
     cv.width = img.naturalWidth;

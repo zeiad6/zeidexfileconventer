@@ -75,6 +75,11 @@ time range for video) and annotate (box, arrow, text, numbered callout, highligh
 join uses the first clip's canvas, split at exact points, separate left/right levels for
 channels, and remappable wheel keys (R8).
 
-Still out of scope: the photo editor (exposure, dehaze, grain), automatic face/text detection
-(Tangerine relies on Apple Vision here, U3), visual PDF page organizing (replaced by a
-page-range field such as `3,1-2,z`), and drag-out from the Float shelf.
+Implemented in v0.3: colour adjust (eq, hue, sharpen, denoise, grain) with live preview,
+automatic text redaction through Tesseract word boxes, annotations composited onto the
+original at full resolution, a visual PDF page organizer (reorder, rotate, duplicate, remove),
+PDF metadata removal, audio/video tag editing, and the Float shelf with native drag-out
+(tauri-plugin-drag).
+
+Still out of scope: face detection (no portable engine in the chosen stack; U3), dehaze,
+EXIF editing (removal only), and R7 (Enter on a file manager selection).

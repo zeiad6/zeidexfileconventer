@@ -1,7 +1,7 @@
 //! Executes plans: probes inputs, runs engines, reports progress, places results beside originals.
 
 use crate::format::{category_of, stem_of, Category};
-use crate::ops::Op;
+use crate::ops::{Op, Rect};
 use crate::plan::{self, Ctx, ImageInfo, MediaInfo, Step};
 use crate::tools::{self, Tool};
 use crate::{pdf, subtitle, Error, Result};
@@ -174,6 +174,12 @@ fn probe(op: &Op, inputs: &[PathBuf]) -> Ctx {
             }
         }
         Some(Category::Image) if matches!(op, Op::Crop(_) | Op::Background { .. }) => ctx.image = probe_image(src),
+        // Full-size render (the preview never upscales), so OCR boxes are already in source pixels.
+        Some(Category::Image) => {
+            if let Op::Redact { auto: Some(lang), .. } = op {
+                ctx.detected = preview_png(src, u32::MAX).and_then(|png| detect_text_png(&png, lang)).unwrap_or_default();
+            }
+        }
         _ => {}
     }
     ctx
@@ -263,6 +269,83 @@ pub fn preview_png(src: &Path, max: u32) -> Result<Vec<u8>> {
     data
 }
 
+fn scratch_file(tag: &str, ext: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("zeidex-{tag}-{}-{}.{ext}", std::process::id(), JOB.fetch_add(1, Ordering::Relaxed)))
+}
+
+/// Text lines found by Tesseract in a PNG, as boxes in that PNG's pixels (for auto-redact).
+pub fn detect_text_png(png: &[u8], lang: &str) -> Result<Vec<Rect>> {
+    if !lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '_') {
+        return Err(Error::BadOption(format!("lang={lang}")));
+    }
+    let input = scratch_file("ocr", "png");
+    fs::write(&input, png)?;
+    let out = command(&tools::require(Tool::Tesseract)?)
+        .arg(&input)
+        .args(["stdout", "-l", lang, "tsv"])
+        .stdin(Stdio::null())
+        .output();
+    let _ = fs::remove_file(&input);
+    let out = out?;
+    if !out.status.success() {
+        return Err(Error::Failed { tool: "Tesseract".into(), detail: String::from_utf8_lossy(&out.stderr).trim().into() });
+    }
+    Ok(parse_tsv(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// Merges confident words of each Tesseract line into one padded box.
+fn parse_tsv(tsv: &str) -> Vec<Rect> {
+    /// Minimum word confidence (0-100) worth hiding.
+    const MIN_CONF: f64 = 40.0;
+    const PAD: u32 = 4;
+    // (block, paragraph, line) -> bounding box as (x0, y0, x1, y1)
+    type LineKey = (u32, u32, u32);
+    type Bounds = (u32, u32, u32, u32);
+    let mut lines: Vec<(LineKey, Bounds)> = Vec::new();
+    for row in tsv.lines().skip(1) {
+        let c: Vec<&str> = row.split('\t').collect();
+        if c.len() < 12 || c[0] != "5" || c[11].trim().is_empty() {
+            continue;
+        }
+        let n = |i: usize| c[i].parse::<u32>().unwrap_or(0);
+        if c[10].parse::<f64>().unwrap_or(-1.0) < MIN_CONF {
+            continue;
+        }
+        let key = (n(2), n(3), n(4));
+        let (x0, y0, x1, y1) = (n(6), n(7), n(6) + n(8), n(7) + n(9));
+        match lines.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, b)) => *b = (b.0.min(x0), b.1.min(y0), b.2.max(x1), b.3.max(y1)),
+            None => lines.push((key, (x0, y0, x1, y1))),
+        }
+    }
+    lines
+        .into_iter()
+        .map(|(_, (x0, y0, x1, y1))| {
+            let (x, y) = (x0.saturating_sub(PAD), y0.saturating_sub(PAD));
+            Rect { x, y, w: x1 + PAD - x, h: y1 + PAD - y }
+        })
+        .collect()
+}
+
+/// Small PNG per PDF page for the page organizer (Ghostscript at `dpi`).
+pub fn pdf_thumbnails(src: &Path, dpi: u32) -> Result<Vec<Vec<u8>>> {
+    let dir = scratch_file("thumbs", "d");
+    fs::create_dir_all(&dir)?;
+    let mut out_arg = OsString::from("-sOutputFile=");
+    out_arg.push(dir.join("p-%04d.png").as_os_str());
+    let args: Vec<OsString> = vec![
+        "-dSAFER".into(), "-dBATCH".into(), "-dNOPAUSE".into(), "-dQUIET".into(), "-sDEVICE=png16m".into(),
+        format!("-r{dpi}").into(), out_arg, src.as_os_str().to_owned(),
+    ];
+    let result = run_tool(Tool::Ghostscript, &args, None, None, &mut |_| {}).and_then(|_| {
+        let mut files: Vec<PathBuf> = fs::read_dir(&dir)?.flatten().map(|e| e.path()).collect();
+        files.sort();
+        Ok(files.iter().map(fs::read).collect::<std::io::Result<Vec<_>>>()?)
+    });
+    let _ = fs::remove_dir_all(&dir);
+    result
+}
+
 /// Human-readable metadata dump for the Info tool.
 pub fn info(src: &Path) -> Result<String> {
     match category_of(src) {
@@ -301,6 +384,47 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn tesseract_tsv_lines() {
+        let tsv = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n\
+                   4\t1\t1\t1\t1\t0\t10\t20\t200\t30\t-1\t\n\
+                   5\t1\t1\t1\t1\t1\t10\t20\t50\t30\t95.1\tHello\n\
+                   5\t1\t1\t1\t1\t2\t70\t22\t60\t26\t90\tworld\n\
+                   5\t1\t1\t1\t2\t1\t10\t80\t40\t20\t12\tnoise\n\
+                   5\t1\t2\t1\t1\t1\t2\t2\t30\t10\t88\tTop\n";
+        assert_eq!(
+            parse_tsv(tsv),
+            vec![Rect { x: 6, y: 16, w: 128, h: 38 }, Rect { x: 0, y: 0, w: 36, h: 16 }]
+        );
+    }
+
+    /// Needs Ghostscript (and Tesseract for the OCR half); skipped when they are missing.
+    #[test]
+    fn thumbnails_and_text_detection_with_real_engines() {
+        let Some(gs) = tools::locate(Tool::Ghostscript) else { return };
+        let d = scratch("engines");
+        let ps = d.join("t.ps");
+        fs::write(&ps, "%!PS\n/Helvetica findfont 40 scalefont setfont\n60 700 moveto (Hello Zeidex 2026) show\nshowpage\nshowpage\n").unwrap();
+        let pdf = d.join("t.pdf");
+        let made = Command::new(&gs)
+            .args(["-q", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite"])
+            .arg(format!("-sOutputFile={}", pdf.display()))
+            .arg(&ps)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let thumbs = pdf_thumbnails(&pdf, 20).unwrap();
+        assert_eq!(thumbs.len(), 2);
+        assert!(thumbs.iter().all(|t| t.starts_with(b"\x89PNG")));
+        if tools::locate(Tool::Tesseract).is_some() {
+            let page = pdf_thumbnails(&pdf, 72).unwrap().remove(0);
+            let boxes = detect_text_png(&page, "eng").unwrap();
+            assert_eq!(boxes.len(), 1, "{boxes:?}");
+            assert!(boxes[0].w > 200 && boxes[0].y < 150, "{boxes:?}");
+        }
+        fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]
