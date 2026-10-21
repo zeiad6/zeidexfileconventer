@@ -65,7 +65,7 @@ impl Category {
             Category::Image => &["jpg", "png", "webp", "heic", "avif", "tiff", "bmp", "gif", "pdf"],
             Category::Video => &["mp4", "mov", "mkv", "webm", "avi", "wmv", "gif", "mp3", "m4a", "wav"],
             Category::Audio => &["mp3", "m4a", "wav", "flac", "ogg", "opus", "aiff", "wma"],
-            Category::Pdf => &["docx", "pptx", "epub", "txt", "jpg", "png"],
+            Category::Pdf => &["docx", "pptx", "xlsx", "epub", "txt", "md", "jpg", "png"],
             Category::Document => &["pdf", "docx", "odt", "rtf", "md", "txt", "html", "epub"],
             Category::Slides => &["pdf", "pptx", "odp", "png", "jpg"],
             Category::Spreadsheet => &["xlsx", "ods", "csv", "tsv", "pdf", "html"],

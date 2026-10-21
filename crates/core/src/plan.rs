@@ -1796,6 +1796,7 @@ fn convert(src: &Path, from: &str, to: &str, tmp: &Path, ctx: &Ctx, s: &mut Vec<
             }
             "docx" => soffice(src, "docx:MS Word 2007 XML", Some("writer_pdf_import"), tmp, s),
             "pptx" => soffice(src, "pptx", Some("impress_pdf_import"), tmp, s),
+            "xlsx" => soffice(src, "xlsx", Some("calc_pdf_import"), tmp, s),
             _ => calibre(src, to, tmp, s),
         },
         Category::Document => match to {
@@ -1999,6 +2000,12 @@ mod tests {
 
         let p = plan_of("to:epub", &[], &["/in/book.pdf"], Ctx::default()).unwrap();
         assert_eq!(argv(&p)[0].0, Tool::Calibre);
+
+        let p = plan_of("to:xlsx", &[], &["/in/sheet.pdf"], Ctx::default()).unwrap();
+        let a = argv(&p);
+        assert_eq!(a[0].0, Tool::LibreOffice);
+        assert!(a[0].1.contains("--infilter=calc_pdf_import") && a[0].1.contains("--convert-to xlsx"));
+        assert_eq!(p.output, PathBuf::from("/t/lo/sheet.xlsx"));
 
         let p = plan_of("to:png", &[], &["/in/deck.pptx"], Ctx::default()).unwrap();
         let tools: Vec<Tool> = argv(&p).into_iter().map(|x| x.0).collect();
