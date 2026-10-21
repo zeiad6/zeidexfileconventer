@@ -75,7 +75,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["msi"],
     "category": "Utility",
     "shortDescription": "Local file converter",
     "longDescription": "Convert and process images, video, audio, PDFs, office documents, ebooks and archives locally. Drag a file, tap Shift, drop it on a format.",
