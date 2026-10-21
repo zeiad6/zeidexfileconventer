@@ -33,7 +33,7 @@ fi
 cp packaging/flatpak/com.zeidexsoft.convert.yml "${STAGE_DIR}/manifest.yml"
 
 echo "==> Building Flatpak in ${STAGE_DIR}..."
-flatpak-builder --force-clean --repo="${REPO_DIR}" "${BUILD_DIR}" "${STAGE_DIR}/manifest.yml"
+flatpak-builder --user --force-clean --repo="${REPO_DIR}" "${BUILD_DIR}" "${STAGE_DIR}/manifest.yml"
 echo "==> Exporting single-file Flatpak bundle: ${BUNDLE_OUT}..."
 flatpak build-bundle "${REPO_DIR}" "${BUNDLE_OUT}" "${APP_ID}"
 echo "==> Success! Flatpak bundle created at: ${BUNDLE_OUT}"
