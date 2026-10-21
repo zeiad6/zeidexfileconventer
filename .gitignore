@@ -4,3 +4,4 @@
 /app/src-tauri/engines/*
 !/app/src-tauri/engines/.gitkeep
 .zeidex-*/
+/dist/
