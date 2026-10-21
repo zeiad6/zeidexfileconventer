@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zeidex Convert</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="home">
+    <header>
+      <img src="icon.png" alt="">
+      <div>
+        <h1>Zeidex Convert</h1>
+        <div class="hint" data-t="sub"></div>
+      </div>
+    </header>
+    <p class="hint" id="hook"></p>
+
+    <section class="drop" id="drop">
+      <p data-t="drop"></p>
+      <button class="primary" id="choose" data-t="choose"></button>
+    </section>
+
+    <section class="sel" id="sel" hidden>
+      <div class="files" id="files"></div>
+      <div class="tabs" id="tabs" role="tablist"></div>
+      <div class="grid" id="grid"></div>
+      <form class="inline-form" id="form" hidden></form>
+    </section>
+
+    <section class="panel">
+      <h2 data-t="settings"></h2>
+      <form id="settings" class="settings"></form>
+      <p class="hint" id="settingsMsg" aria-live="polite"></p>
+    </section>
+
+    <section class="panel">
+      <h2 data-t="engines"></h2>
+      <table class="engines" id="engines"></table>
+      <div class="row" style="justify-content:flex-start">
+        <button id="integrate" data-t="integrate"></button>
+      </div>
+      <p class="hint" id="integrated"></p>
+    </section>
+  </main>
+  <script src="common.js"></script>
+  <script src="home.js"></script>
+</body>
+</html>

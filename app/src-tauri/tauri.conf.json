@@ -1,0 +1,102 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Zeidex Convert",
+  "version": "0.1.0",
+  "identifier": "com.zeidexsoft.convert",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "home",
+        "title": "Zeidex Convert",
+        "url": "index.html",
+        "width": 820,
+        "height": 640,
+        "minWidth": 420,
+        "minHeight": 480,
+        "center": true
+      },
+      {
+        "label": "wheel",
+        "title": "Zeidex wheel",
+        "url": "wheel.html",
+        "width": 420,
+        "height": 420,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "focus": false,
+        "visible": false
+      },
+      {
+        "label": "shelf",
+        "title": "Zeidex orb",
+        "url": "shelf.html",
+        "width": 88,
+        "height": 88,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "focus": false
+      },
+      {
+        "label": "jobs",
+        "title": "Zeidex — jobs",
+        "url": "jobs.html",
+        "width": 460,
+        "height": 380,
+        "alwaysOnTop": true,
+        "visible": false
+      },
+      {
+        "label": "editor",
+        "title": "Zeidex — editor",
+        "url": "editor.html",
+        "width": 1040,
+        "height": 760,
+        "minWidth": 560,
+        "minHeight": 420,
+        "visible": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Utility",
+    "shortDescription": "Local file converter",
+    "longDescription": "Convert and process images, video, audio, PDFs, office documents, ebooks and archives locally. Drag a file, tap Shift, drop it on a format.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "engines/": "engines/"
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libvips-tools",
+          "ghostscript",
+          "qpdf"
+        ]
+      }
+    }
+  }
+}

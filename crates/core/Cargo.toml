@@ -1,0 +1,8 @@
+[package]
+name = "zeidex-core"
+description = "Format registry, job planning and engine runner for Zeidex Convert"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]

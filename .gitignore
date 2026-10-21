@@ -1,0 +1,6 @@
+/target/
+/app/src-tauri/target/
+/app/src-tauri/gen/
+/app/src-tauri/engines/*
+!/app/src-tauri/engines/.gitkeep
+.zeidex-*/

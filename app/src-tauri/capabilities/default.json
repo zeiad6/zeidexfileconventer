@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "IPC for all Zeidex windows. File work happens in Rust commands, so no fs/shell plugins are exposed.",
+  "windows": [
+    "home",
+    "wheel",
+    "shelf",
+    "jobs",
+    "editor"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging"
+  ]
+}

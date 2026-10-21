@@ -1,0 +1,13 @@
+[package]
+name = "zeidex-cli"
+description = "Command-line front end for Zeidex Convert"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "zeidex"
+path = "src/main.rs"
+
+[dependencies]
+zeidex-core = { path = "../core" }

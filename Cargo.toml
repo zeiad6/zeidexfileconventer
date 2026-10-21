@@ -1,0 +1,10 @@
+# The Tauri app (app/src-tauri) is its own workspace on purpose: core and cli have zero
+# dependencies, so they build and test fully offline without resolving the GUI crate graph.
+[workspace]
+members = ["crates/core", "crates/cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
