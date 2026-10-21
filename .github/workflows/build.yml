@@ -36,7 +36,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg libvips-tools ghostscript qpdf 7zip pandoc tesseract-ocr libimage-exiftool-perl zbar-tools qrencode
+          sudo apt-get install -y ffmpeg libvips-tools ghostscript qpdf 7zip pandoc tesseract-ocr tesseract-ocr-eng libheif-plugins-all libimage-exiftool-perl zbar-tools qrencode
           cargo build -p zeidex-cli
           bash packaging/smoke.sh target/debug/zeidex
 
