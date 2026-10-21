@@ -154,7 +154,48 @@ listen('hook-error', () => { $('hook').textContent = window.ZT('hookOff'); });
 // Ctrl+Shift+Space is also used by other apps (e.g. editors): never pop up, only explain.
 listen('selection-empty', () => { $('hook').textContent = window.ZT('selectionHint'); });
 
+function setupModals() {
+  const DEV_URL = 'https://zeidexlink.zeidexsoft.com/zeidex';
+  const SITE_URL = 'https://zeidexsoft.com';
+
+  const aboutModal = $('aboutModal');
+  const donateModal = $('donateModal');
+
+  $('langToggle').onclick = () => window.toggleLang();
+  $('aboutBtn').onclick = () => aboutModal.showModal();
+  $('donateBtn').onclick = () => donateModal.showModal();
+
+  $('closeAboutBtn').onclick = () => aboutModal.close();
+  $('closeAboutBtn2').onclick = () => aboutModal.close();
+  $('closeDonateBtn').onclick = () => donateModal.close();
+  $('closeDonateBtn2').onclick = () => donateModal.close();
+
+  $('aboutDonateBtn').onclick = () => {
+    aboutModal.close();
+    donateModal.showModal();
+  };
+
+  $('devProfileBtn').onclick = () => window.openExternal(DEV_URL);
+  $('devWebsiteBtn').onclick = () => window.openExternal(SITE_URL);
+  $('starsLinkBtn').onclick = () => window.openExternal(DEV_URL);
+  $('onlinePayBtn').onclick = () => window.openExternal(DEV_URL);
+  $('websitePayBtn').onclick = () => window.openExternal(SITE_URL);
+
+  document.querySelectorAll('[data-copy]').forEach((btn) => {
+    btn.onclick = () => window.copyText(btn.dataset.copy, btn);
+  });
+
+  window.addEventListener('zeidex-lang-change', () => {
+    if (paths.length && desc) render();
+    settings();
+    invoke('hook_ok').then((ok) => {
+      $('hook').textContent = window.ZT(ok ? 'hookOn' : 'hookOff');
+    });
+  });
+}
+
 (async () => {
+  setupModals();
   $('hook').textContent = window.ZT((await invoke('hook_ok')) ? 'hookOn' : 'hookOff');
   engines();
   settings();

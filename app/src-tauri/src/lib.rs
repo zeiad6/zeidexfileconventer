@@ -702,6 +702,27 @@ fn integrate_shell() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd").args(["/c", "start", "", &url]).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(&url).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open").arg(&url).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = url;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn pick_files(app: AppHandle) -> Vec<String> {
     app.dialog()
         .file()
@@ -810,7 +831,8 @@ pub fn run() {
             drag_icon,
             pick_folder,
             frame_at,
-            detect_faces
+            detect_faces,
+            open_url
         ])
         .on_window_event(|window, event| {
             // Closing a window keeps the app alive in the tray, like a menu-bar app.

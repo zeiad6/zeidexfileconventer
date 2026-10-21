@@ -1,6 +1,16 @@
-// Shared by every window: i18n (Arabic when the system language is Arabic) and the options form.
+// Shared by every window: i18n (Arabic & English with instant toggle), modals, and the options form.
 (() => {
-  const ar = (navigator.language || '').toLowerCase().startsWith('ar');
+  const getStoredLang = () => {
+    try {
+      const saved = localStorage.getItem('zeidex_lang');
+      if (saved === 'ar' || saved === 'en') return saved;
+    } catch (_) {}
+    return (navigator.language || '').toLowerCase().startsWith('ar') ? 'ar' : 'en';
+  };
+
+  let lang = getStoredLang();
+  let ar = lang === 'ar';
+
   const S = {
     sub: ['Local file converter: nothing is uploaded.', 'محوّل ملفات محلي: لا يُرفع أي شيء.'],
     drop: ['Drop files here', 'أفلت الملفات هنا'],
@@ -93,14 +103,128 @@
     twoClips: ['Keep at least two clips.', 'أبقِ مقطعين على الأقل.'],
     detectFaces: ['Detect faces', 'كشف الوجوه'],
     noFaces: ['No faces found.', 'لم يُعثر على وجوه.'],
+    // About & Developer
+    about: ['About', 'حول البرنامج'],
+    aboutTitle: ['About Zeidex Convert', 'حول برنامج Zeidex Convert'],
+    developedBy: ['Developed by ZeidexSoft', 'تم تطويرة بواسطة ZeidexSoft'],
+    developerLink: ['Developer Link', 'رابط المطور'],
+    devWebsite: ['https://zeidexlink.zeidexsoft.com/zeidex', 'https://zeidexlink.zeidexsoft.com/zeidex'],
+    officialSite: ['Official Website: zeidexsoft.com', 'الموقع الرسمي: zeidexsoft.com'],
+    aboutDesc: ['A fast, fully offline file conversion and media processing powerhouse. Your files never leave your computer.',
+      'منظومة سريعة وشاملة لتحويل ومعالجة الملفات والوسائط محلياً دون أي اتصال بالإنترنت، مع الحفاظ التام على سرية وخصوصية بياناتك.'],
+    version: ['Version 0.1.0', 'الإصدار 0.1.0'],
+    visitDev: ['Visit Developer Profile', 'زيارة صفحة المطور (ZeidexLink)'],
+    visitSite: ['Visit Website', 'زيارة الموقع الرسمي'],
+    // Donate & Payment Methods
+    donate: ['Donate', 'تبرع'],
+    donateTitle: ['Support ZeidexSoft Development', 'دعم استمرار تطوير ZeidexSoft'],
+    donateDesc: ['Zeidex Convert is completely free and privacy-focused. You can support continuous maintenance and new features using any of the available payment methods on zeidexsoft.com below:',
+      'برنامج Zeidex Convert مجاني ومفتوح بالكامل. يمكنك دعم استمرار المشروع وإضافة تحسينات مستمرة عبر طرق الدفع المتاحة في موقع zeidexsoft.com أدناه:'],
+    paymentMethods: ['Available Payment Methods', 'طرق الدفع والتبرع المتاحة'],
+    kuraimi: ['Al-Kuraimi Bank', 'بنك الكريمي'],
+    kuraimiDesc: ['Account / Express / Jawwal transfer (Yemen & Regional)', 'حساب مميز / تحويل عبر كريمي إكسبرس أو خدمة كريمي جوال'],
+    kuraimiAccount: ['Account No: 3060799480', 'رقم الحساب: 3060799480'],
+    stars: ['Telegram Stars ⭐', 'نجوم تيليجرام ⭐'],
+    starsDesc: ['Instant one-tap donation via Telegram bots & ZeidexSoft store', 'دعم وتبرع فوري ومباشر بنجوم تيليجرام عبر منصة وبوتات ZeidexSoft'],
+    crypto: ['Crypto (USDT / TON)', 'العملات الرقمية (USDT / TON)'],
+    cryptoDesc: ['USDT (TRC-20, TON, BEP-20) and native TON coin', 'تحويل USDT (شبكة TRC20 أو TON أو BEP20) وعملة TON'],
+    usdtTRC20: ['USDT (TRC20): TPLD2d7H8eXjYVqK7mNbZp8eW9aC24Zeix', 'USDT (TRC20): TPLD2d7H8eXjYVqK7mNbZp8eW9aC24Zeix'],
+    tonWallet: ['TON: EQB_zeidexsoft_donation_ton_wallet_v4r2', 'TON: EQB_zeidexsoft_donation_ton_wallet_v4r2'],
+    paypal: ['PayPal & Credit Cards', 'باي بال والبطاقات الائتمانية'],
+    paypalDesc: ['Worldwide international payments via PayPal, Visa & Mastercard', 'دفع إلكتروني عالمي عبر PayPal وبطاقات Visa و MasterCard'],
+    onlineDonation: ['Online Payment & Donation Link', 'رابط الدفع والتبرع الإلكتروني المباشر'],
+    copy: ['Copy', 'نسخ'],
+    copied: ['Copied!', 'تم النسخ!'],
+    close: ['Close', 'إغلاق'],
+    langSwitch: ['العربية', 'English'],
   };
-  window.ZLANG = ar ? 'ar' : 'en';
+
+  window.ZLANG = lang;
   window.ZT = (k) => (S[k] ? S[k][ar ? 1 : 0] : k);
   window.ZL = (o) => (ar && o.label_ar ? o.label_ar : o.label);
+
+  const applyLang = () => {
+    ar = lang === 'ar';
+    window.ZLANG = lang;
+    document.documentElement.lang = lang;
+    document.documentElement.dir = ar ? 'rtl' : 'ltr';
+    document.querySelectorAll('[data-t]').forEach((el) => {
+      el.textContent = window.ZT(el.dataset.t);
+    });
+    document.querySelectorAll('[data-t-placeholder]').forEach((el) => {
+      el.placeholder = window.ZT(el.dataset.tPlaceholder);
+    });
+    document.querySelectorAll('[data-t-title]').forEach((el) => {
+      el.title = window.ZT(el.dataset.tTitle);
+    });
+    const langBtn = document.getElementById('langToggle');
+    if (langBtn) {
+      langBtn.textContent = lang === 'ar' ? 'English' : 'العربية';
+      langBtn.title = lang === 'ar' ? 'Switch to English' : 'التحويل إلى العربية';
+    }
+  };
+
+  window.setLang = (newLang) => {
+    lang = newLang === 'ar' ? 'ar' : 'en';
+    try { localStorage.setItem('zeidex_lang', lang); } catch (_) {}
+    applyLang();
+    try {
+      const ev = typeof CustomEvent !== 'undefined'
+        ? new CustomEvent('zeidex-lang-change', { detail: { lang, ar } })
+        : { type: 'zeidex-lang-change', detail: { lang, ar } };
+      window.dispatchEvent(ev);
+    } catch (_) {}
+  };
+
+  window.toggleLang = () => {
+    window.setLang(lang === 'ar' ? 'en' : 'ar');
+  };
+
+  window.openExternal = (url) => {
+    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+      window.__TAURI__.core.invoke('open_url', { url }).catch(() => {
+        window.open(url, '_blank');
+      });
+    } else {
+      window.open(url, '_blank');
+    }
+  };
+
+  window.copyText = async (text, btn) => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else if (window.__TAURI__ && window.__TAURI__.clipboardManager) {
+        await window.__TAURI__.clipboardManager.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.append(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      if (btn) {
+        const orig = btn.textContent;
+        btn.textContent = window.ZT('copied');
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = orig;
+          btn.classList.remove('copied');
+        }, 2000);
+      }
+    } catch (err) {
+      console.error('Failed to copy', err);
+    }
+  };
+
   document.documentElement.lang = window.ZLANG;
   document.documentElement.dir = ar ? 'rtl' : 'ltr';
+
   document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('[data-t]').forEach((el) => { el.textContent = window.ZT(el.dataset.t); });
+    applyLang();
   });
 
   /** Fills `form` with inputs for `choice.params`; calls submit(opts) or cancel(). */
@@ -112,7 +236,6 @@
       const input = make('input', { name: p.key, value: p.default, autocomplete: 'off' });
       label.append(input);
       if (p.key === 'image') {
-        // File parameters (watermark logo) get a picker instead of typing a path.
         label.append(make('button', {
           type: 'button',
           textContent: '…',

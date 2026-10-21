@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.zeidexsoft.convert</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Zeidex Convert</name>
+  <name xml:lang="ar">Zeidex Convert</name>
+  <summary>Local file converter and media processor by ZeidexSoft</summary>
+  <summary xml:lang="ar">محوّل ومعالج ملفات ووسائط محلي من تطوير ZeidexSoft</summary>
+  <description>
+    <p>
+      Zeidex Convert is a powerful offline file converter and media processor. Convert and process video, audio, images, documents, and archives completely on your local machine with zero uploads.
+    </p>
+    <p xml:lang="ar">
+      برنامج Zeidex Convert هو منظومة قوية لتحويل ومعالجة الملفات والوسائط محلياً دون أي اتصال بالإنترنت مع خصوصية وسرية تامة.
+    </p>
+  </description>
+  <url type="homepage">https://zeidexlink.zeidexsoft.com/zeidex</url>
+  <url type="donation">https://zeidexsoft.com</url>
+  <developer_name>ZeidexSoft</developer_name>
+  <developer_name xml:lang="ar">ZeidexSoft</developer_name>
+  <launchable type="desktop-id">com.zeidexsoft.convert.desktop</launchable>
+  <provides>
+    <binary>zeidex-app</binary>
+  </provides>
+</component>

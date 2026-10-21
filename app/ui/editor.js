@@ -513,6 +513,14 @@ async function open() {
 $('apply').onclick = apply;
 $('cancel').onclick = close;
 $('undo').onclick = undo;
+const langBtn = $('langToggle');
+if (langBtn) langBtn.onclick = () => window.toggleLang();
+window.addEventListener('zeidex-lang-change', () => {
+  if (st) {
+    $('title').textContent = window.ZT(st.tool);
+    renderControls();
+  }
+});
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;
   if (e.key === 'Escape') close();

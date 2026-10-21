@@ -65,6 +65,8 @@ class El {
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
   focus() {}
   setPointerCapture() {}
+  showModal() { this.open = true; }
+  close() { this.open = false; }
   getBoundingClientRect() { return { left: 0, top: 0, width: this.width, height: this.height }; }
   getContext() { return new Proxy({}, { get: (t, k) => (k in t ? t[k] : () => {}), set: (t, k, v) => { t[k] = v; return true; } }); }
   toDataURL() { return `data:image/png;base64,iVBORw0KGgo${'A'.repeat(20000)}`; }
@@ -164,6 +166,7 @@ function page(html, query = '') {
   };
   sandbox.window = sandbox;
   sandbox.addEventListener = (t, f) => { (listeners[`win:${t}`] ||= []).push(f); };
+  sandbox.dispatchEvent = (e) => { (listeners[`win:${e.type || e}`] || []).forEach((f) => f(e)); };
   const ctx = vm.createContext(sandbox);
   for (const m of src.matchAll(/<script src="([^"]+)"/g)) {
     vm.runInContext(fs.readFileSync(path.join(UI, m[1]), 'utf8'), ctx, { filename: m[1] });
@@ -171,6 +174,7 @@ function page(html, query = '') {
   return {
     byId,
     calls,
+    win: sandbox,
     drag: (payload) => dropHandler({ payload }),
     emit: (name, payload) => (listeners[name] || []).forEach((cb) => cb({ payload })),
     key: (key) => (listeners['doc:keydown'] || []).forEach((f) => f({ key, target: { tagName: 'BODY' }, preventDefault() {} })),
@@ -471,6 +475,29 @@ const segs = (p) => p.byId.wheel.children.filter((c) => c.tagName === 'PATH');
     p.byId.grid.children.find((b) => b.textContent === '★ Web image').fire('click');
     const rec = p.calls.find(([c, a]) => c === 'run_job' && a.id === 'recipe');
     ok(rec && rec[1].opts.steps.startsWith('resize max=1600'), 'home: saved recipe runs with its steps');
+
+    // about & donate dialogs
+    p.byId.aboutBtn.fire('click');
+    ok(p.byId.aboutModal.open === true, 'home: about modal opened');
+    p.byId.closeAboutBtn.fire('click');
+    ok(p.byId.aboutModal.open === false, 'home: about modal closed');
+
+    p.byId.donateBtn.fire('click');
+    ok(p.byId.donateModal.open === true, 'home: donate modal opened');
+    p.byId.closeDonateBtn.fire('click');
+    ok(p.byId.donateModal.open === false, 'home: donate modal closed');
+
+    // developer link opens external URL
+    p.byId.devProfileBtn.fire('click');
+    const openCall = p.calls.find(([c, a]) => c === 'open_url');
+    ok(openCall && openCall[1].url === 'https://zeidexlink.zeidexsoft.com/zeidex', 'home: developer link opened');
+
+    // language switcher toggles between Arabic and English
+    const initLang = p.win.ZLANG;
+    p.byId.langToggle.fire('click');
+    ok(p.win.ZLANG !== initLang, 'home: language toggled');
+    p.byId.langToggle.fire('click');
+    ok(p.win.ZLANG === initLang, 'home: language toggled back');
   }
 
   // ---------- jobs ----------

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Zeidex Convert
+Name[ar]=Zeidex Convert
+Comment=Local file converter & media processor
+Comment[ar]=محوّل ملفات ومعالج وسائط محلي
+Exec=zeidex-app %U
+Icon=com.zeidexsoft.convert
+Terminal=false
+Type=Application
+Categories=Utility;AudioVideo;Graphics;
+MimeType=application/octet-stream;
+StartupWMClass=zeidex-app

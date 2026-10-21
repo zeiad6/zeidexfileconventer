@@ -1,0 +1,36 @@
+app-id: com.zeidexsoft.convert
+runtime: org.gnome.Platform
+runtime-version: '46'
+sdk: org.gnome.Sdk
+command: zeidex-app
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --filesystem=host
+  - --filesystem=xdg-download
+  - --talk-name=org.freedesktop.Notifications
+
+modules:
+  - name: zeidex-convert
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 zeidex-app /app/bin/zeidex-app
+      - install -d /app/lib/zeidex-convert/engines
+      - cp -r engines/* /app/lib/zeidex-convert/engines/ 2>/dev/null || true
+      - install -Dm644 com.zeidexsoft.convert.desktop /app/share/applications/com.zeidexsoft.convert.desktop
+      - install -Dm644 com.zeidexsoft.convert.metainfo.xml /app/share/metainfo/com.zeidexsoft.convert.metainfo.xml
+      - install -Dm644 icon.png /app/share/icons/hicolor/128x128/apps/com.zeidexsoft.convert.png
+    sources:
+      - type: file
+        path: zeidex-app
+      - type: file
+        path: com.zeidexsoft.convert.desktop
+      - type: file
+        path: com.zeidexsoft.convert.metainfo.xml
+      - type: file
+        path: icon.png
+      - type: dir
+        path: engines
+        dest: engines
