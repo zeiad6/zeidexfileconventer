@@ -86,7 +86,9 @@ async function settings() {
   }
   const rev = make('label', { className: 'check' });
   rev.append(make('input', { type: 'checkbox', name: 'reveal', checked: s.reveal }), window.ZT('reveal'));
-  box.append(rev);
+  const hot = make('label', { className: 'check' });
+  hot.append(make('input', { type: 'checkbox', name: 'hotkey', checked: s.hotkey !== false }), window.ZT('hotkey'));
+  box.append(rev, hot);
 
   // Recipes and watch rules are lists of rows; each row keeps its own inputs.
   const recipeRows = make('div', { className: 'rows' });
@@ -133,6 +135,7 @@ async function settings() {
       tools: box.querySelector('select[name=tools]').value,
       actions: box.querySelector('select[name=actions]').value,
       reveal: box.querySelector('input[name=reveal]').checked,
+      hotkey: box.querySelector('input[name=hotkey]').checked,
       recipes: [...recipeRows.children].map((r) => ({ name: val(r, '.r-name'), steps: val(r, '.r-steps') })).filter((r) => r.name || r.steps),
       watch: [...watchRows.children].map((r) => ({ dir: val(r, '.w-dir'), exts: val(r, '.w-exts'), steps: val(r, '.w-steps'), enabled: r.querySelector('.w-on').checked }))
         .filter((w) => w.dir || w.steps),
@@ -148,10 +151,8 @@ async function settings() {
 
 listen('open-files', async () => load(await invoke('take_pending')));
 listen('hook-error', () => { $('hook').textContent = window.ZT('hookOff'); });
-listen('selection-empty', () => {
-  invoke('show_home');
-  $('hook').textContent = window.ZT('selectionHint');
-});
+// Ctrl+Shift+Space is also used by other apps (e.g. editors): never pop up, only explain.
+listen('selection-empty', () => { $('hook').textContent = window.ZT('selectionHint'); });
 
 (async () => {
   $('hook').textContent = window.ZT((await invoke('hook_ok')) ? 'hookOn' : 'hookOff');

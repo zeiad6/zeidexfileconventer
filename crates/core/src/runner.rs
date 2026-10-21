@@ -125,7 +125,8 @@ fn run_unit(op: &Op, inputs: &[PathBuf], progress: &mut dyn FnMut(f32)) -> Resul
         }
         let plan = last.ok_or_else(|| Error::Unsupported("empty recipe".into()))?;
         let _guard = PLACE.lock().unwrap_or_else(|p| p.into_inner());
-        let fin = unique_path(&dest.join(&plan.name));
+        let target = dest.join(&plan.name);
+        let fin = if plan.output.is_dir() { unique_dir(&target) } else { unique_path(&target) };
         fs::rename(&plan.output, &fin)?;
         Ok(fin)
     })();
@@ -289,11 +290,16 @@ fn exec(step: &Step, report: &mut dyn FnMut(f32)) -> Result<()> {
         }
         Step::SmallestUnder { target, candidates, dst } => {
             let mut best: Option<(u64, &PathBuf)> = None;
+            let mut last_err = None;
             for (steps, out) in candidates {
-                for st in steps {
-                    exec(st, &mut |_| {})?;
+                // A candidate can fail on its own (an encoder option the engine lacks);
+                // try the others before giving up.
+                if let Err(e) = steps.iter().try_for_each(|st| exec(st, &mut |_| {})) {
+                    last_err = Some(e);
+                    continue;
                 }
-                let size = fs::metadata(out)?.len();
+                let Ok(meta) = fs::metadata(out) else { continue };
+                let size = meta.len();
                 if best.map_or(true, |(b, _)| size < b) {
                     best = Some((size, out));
                 }
@@ -301,7 +307,8 @@ fn exec(step: &Step, report: &mut dyn FnMut(f32)) -> Result<()> {
                     break;
                 }
             }
-            let (_, out) = best.ok_or_else(|| Error::Unsupported("no candidates".into()))?;
+            let (_, out) =
+                best.ok_or_else(|| last_err.unwrap_or_else(|| Error::Unsupported("no candidates".into())))?;
             Ok(fs::rename(out, dst)?)
         }
     }
@@ -619,6 +626,16 @@ pub fn info(src: &Path) -> Result<String> {
     }
 }
 
+/// `name`, then `name (2)`, `name (3)`... for folders, whose names may contain dots.
+pub fn unique_dir(p: &Path) -> PathBuf {
+    if !p.exists() {
+        return p.to_path_buf();
+    }
+    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let parent = p.parent().unwrap_or(Path::new("."));
+    (2..).map(|n| parent.join(format!("{name} ({n})"))).find(|c| !c.exists()).expect("unbounded range")
+}
+
 /// `name.ext`, then `name (2).ext`, `name (3).ext`... until free.
 pub fn unique_path(p: &Path) -> PathBuf {
     if !p.exists() {
@@ -757,6 +774,32 @@ mod tests {
         let pairs = rename(&Op::Rename { pattern: "clip-{n:2}".into(), start: 1 }, &files[..2]).unwrap();
         assert_eq!(pairs[1].1, d.join("clip-02.srt"));
         assert!(d.join("clip-01.srt").exists() && !files[0].exists());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn smallest_under_skips_failing_candidates() {
+        let d = scratch("smallest");
+        let good = d.join("good.txt");
+        let dst = d.join("dst.txt");
+        let step = Step::SmallestUnder {
+            target: 1,
+            candidates: vec![
+                (vec![Step::Copy { src: d.join("missing"), dst: d.join("x") }], d.join("x")),
+                (vec![Step::WriteFile { path: good.clone(), contents: "ok".into() }], good.clone()),
+            ],
+            dst: dst.clone(),
+        };
+        exec(&step, &mut |_| {}).unwrap();
+        assert_eq!(fs::read_to_string(&dst).unwrap(), "ok");
+        let all_bad = Step::SmallestUnder {
+            target: 1,
+            candidates: vec![(vec![Step::Copy { src: d.join("missing"), dst: d.join("y") }], d.join("y"))],
+            dst: d.join("z"),
+        };
+        assert!(exec(&all_bad, &mut |_| {}).is_err(), "real error surfaces when nothing works");
+        fs::create_dir_all(d.join("my.trip pages")).unwrap();
+        assert_eq!(unique_dir(&d.join("my.trip pages")), d.join("my.trip pages (2)"));
         fs::remove_dir_all(&d).unwrap();
     }
 

@@ -2,7 +2,6 @@
 //! Every entry runs `<app> --open <files...>`; the app's single-instance handler takes it from there.
 
 use crate::Result;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 /// (path, contents, executable) for each Linux file manager we support.
@@ -66,12 +65,12 @@ pub fn install(exe: &Path) -> Result<Vec<PathBuf>> {
         let mut written = Vec::new();
         for (path, contents, executable) in linux_entries(&home, exe) {
             if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir)?;
+                std::fs::create_dir_all(dir)?;
             }
-            fs::write(&path, contents)?;
+            std::fs::write(&path, contents)?;
             if executable {
                 use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
             }
             written.push(path);
         }

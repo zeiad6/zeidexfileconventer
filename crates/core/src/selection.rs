@@ -92,10 +92,20 @@ pub fn explorer_selection() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
+    fn uri_drive_letters() {
+        assert_eq!(windows_from_uri("/C:/Users/x"), "C:/Users/x");
+        assert_eq!(windows_from_uri("/home/x"), "/home/x");
+        assert_eq!(percent_decode("a%20b%25c%e2%9c%93"), "a b%c✓");
+        assert_eq!(percent_decode("bad%zz%"), "bad%zz%");
+    }
+
+    /// Unix paths: on Windows the same parsing is covered by `windows_from_uri`.
+    #[cfg(unix)]
+    #[test]
     fn clipboard_formats() {
+        use std::fs;
         let d = std::env::temp_dir().join(format!("zeidex sel {}", std::process::id()));
         fs::create_dir_all(&d).unwrap();
         let f = d.join("a b%.txt");

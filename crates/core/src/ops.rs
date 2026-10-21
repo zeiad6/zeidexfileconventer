@@ -43,6 +43,8 @@ pub struct Adjust {
     pub sharpen: f64,
     pub denoise: f64,
     pub grain: f64,
+    /// Local contrast (large-radius unsharp mask), Tangerine's "clarity".
+    pub clarity: f64,
 }
 
 impl Adjust {
@@ -55,6 +57,7 @@ impl Adjust {
         sharpen: 0.0,
         denoise: 0.0,
         grain: 0.0,
+        clarity: 0.0,
     };
 }
 
@@ -245,6 +248,11 @@ pub enum Op {
         move_dupes: bool,
     },
     MergePdf,
+    /// Pages picked from several PDFs: (file index, page), both 1-based, plus output rotations.
+    Arrange {
+        items: Vec<(usize, u32)>,
+        rotate: Vec<(u32, u32)>,
+    },
     SplitPdf,
     /// `rotate` holds (output page, degrees) pairs.
     Pages {
@@ -266,6 +274,7 @@ impl Op {
                 | Op::AddSubs { .. }
                 | Op::Slideshow { .. }
                 | Op::ReplaceAudio
+                | Op::Arrange { .. }
         )
     }
 
@@ -454,6 +463,7 @@ impl Op {
                     sharpen: r("sharpen", 0.0, 0.0, 3.0)?,
                     denoise: r("denoise", 0.0, 0.0, 20.0)?,
                     grain: r("grain", 0.0, 0.0, 60.0)?,
+                    clarity: r("clarity", 0.0, 0.0, 2.0)?,
                 };
                 if a == Adjust::NEUTRAL {
                     return Err(bad("adjust", "nothing to change"));
@@ -587,6 +597,24 @@ impl Op {
                 Op::Visualize { shape }
             }
             "merge-pdf" => Op::MergePdf,
+            "arrange" => {
+                let mut items = Vec::new();
+                for it in get("items").ok_or_else(|| bad("items", "required, e.g. 1:1,2:1"))?.split(',') {
+                    let parsed = it.trim().split_once(':').and_then(|(f, p)| Some((f.parse().ok()?, p.parse().ok()?)));
+                    match parsed {
+                        Some((f, p)) if f > 0 && p > 0 => items.push((f, p)),
+                        _ => return Err(bad("items", it)),
+                    }
+                }
+                let mut rotate = Vec::new();
+                for r in get("rotate").unwrap_or("").split(',').map(str::trim).filter(|x| !x.is_empty()) {
+                    match r.split_once(':').and_then(|(p, d)| Some((p.parse::<u32>().ok()?, d.parse::<u32>().ok()?))) {
+                        Some((p, d)) if p > 0 && [90, 180, 270].contains(&d) => rotate.push((p, d)),
+                        _ => return Err(bad("rotate", r)),
+                    }
+                }
+                Op::Arrange { items, rotate }
+            }
             "split-pdf" => Op::SplitPdf,
             "pages" => {
                 let spec: String = get("spec").unwrap_or("1-z").chars().filter(|c| !c.is_whitespace()).collect();
@@ -990,6 +1018,7 @@ pub const TOOLS: &[ToolDef] = &[
             p("sharpen", "Sharpen (0..3)", "الحدة (0..3)", "0"),
             p("denoise", "Denoise (0..20)", "إزالة التشويش (0..20)", "0"),
             p("grain", "Grain (0..60)", "الحبيبات (0..60)", "0"),
+            p("clarity", "Clarity (0..2)", "الوضوح (0..2)", "0"),
         ],
     },
     ToolDef {
@@ -1232,7 +1261,7 @@ pub const TOOLS: &[ToolDef] = &[
 ];
 
 /// Tools the desktop app opens in its visual editor instead of an options form.
-pub const EDITOR_TOOLS: [&str; 5] = ["crop", "redact", "annotate", "adjust", "pages"];
+pub const EDITOR_TOOLS: [&str; 6] = ["crop", "redact", "annotate", "adjust", "pages", "merge-pdf"];
 
 /// Tools offered for a selection of `count` files sharing `cat` (`None` = mixed selection,
 /// which gets the tools that work on any file).

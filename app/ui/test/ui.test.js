@@ -104,7 +104,9 @@ function page(html, query = '') {
     },
     pick_folder: '/home/u/new',
     editor_state: query === 'pages'
-      ? { paths: ['/home/u/d.pdf'], tool: 'pages', video: false, width: 0, height: 0, duration: 0, preview: '', pages: ['data:p1', 'data:p2', 'data:p3'] }
+      ? { paths: ['/home/u/d.pdf'], tool: 'pages', video: false, width: 0, height: 0, duration: 0, preview: '', pages: ['data:p1', 'data:p2', 'data:p3'], page_refs: [[1, 1], [1, 2], [1, 3]] }
+      : query === 'merge-pdf'
+      ? { paths: ['/u/a.pdf', '/u/b.pdf'], tool: 'merge-pdf', video: false, width: 0, height: 0, duration: 0, preview: '', pages: ['a1', 'a2', 'b1'], page_refs: [[1, 1], [1, 2], [2, 1]] }
       : { paths: ['/home/u/p.png', '/home/u/q.png'], tool: query || 'redact', video: false, width: 1600, height: 1200, duration: 0, preview: 'data:image/png;base64,AAAA', pages: [] },
     detect_text: [{ x: 5, y: 6, w: 70, h: 20 }],
     float_list: ['/home/u/a.txt', '/home/u/b.png'],
@@ -299,6 +301,17 @@ const segs = (p) => p.byId.wheel.children.filter((c) => c.tagName === 'PATH');
     await p.byId.apply.fire('click');
     const run = p.calls.find(([c]) => c === 'run_job');
     ok(run && run[1].opts.spec === '1,1,3' && run[1].opts.rotate === '1:90,2:90', `organizer: spec and rotations (${run && JSON.stringify(run[1].opts)})`);
+  }
+  {
+    const p = page('editor.html', 'merge-pdf');
+    await tick(10);
+    const cards = () => p.byId.pages.children;
+    ok(cards().length === 3 && cards()[2].querySelector('.page-n').textContent.includes('b.pdf'), 'merge: pages of every PDF, labelled by file');
+    cards()[2].querySelectorAll('button')[0].fire('click'); // b1 earlier -> a1, b1, a2
+    cards()[0].querySelectorAll('button')[0].fire('click'); // no-op at the start
+    await p.byId.apply.fire('click');
+    const run = p.calls.find(([c]) => c === 'run_job');
+    ok(run && run[1].id === 'arrange' && run[1].opts.items === '1:1,2:1,1:2', `merge: arrange items (${run && run[1].opts.items})`);
   }
   {
     const p = page('editor.html', 'annotate');

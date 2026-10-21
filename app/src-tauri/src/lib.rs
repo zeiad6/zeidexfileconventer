@@ -280,8 +280,10 @@ struct EditorState {
     duration: f64,
     /// PNG data URL of the image or a video frame (empty for PDFs).
     preview: String,
-    /// One small PNG data URL per page (page organizer only).
+    /// One small PNG data URL per page (page organizer only), across all selected PDFs.
     pages: Vec<String>,
+    /// For each entry of `pages`: (file index in `paths`, page number), both 1-based.
+    page_refs: Vec<(usize, u32)>,
 }
 
 const PREVIEW_MAX: u32 = 1600;
@@ -306,9 +308,15 @@ async fn editor_state() -> Result<EditorState, String> {
     let (paths, tool) = EDITOR.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or("no file open")?;
     let src = PathBuf::from(&paths[0]);
     let data_url = |png: &[u8]| format!("data:image/png;base64,{}", b64::encode(png));
-    if tool == "pages" {
-        let pages = runner::pdf_thumbnails(&src, THUMB_DPI).map_err(|e| e.to_string())?;
-        let pages = pages.iter().map(|p| data_url(p)).collect();
+    if tool == "pages" || tool == "merge-pdf" {
+        let (mut pages, mut page_refs) = (Vec::new(), Vec::new());
+        for (f, path) in paths.iter().enumerate() {
+            let thumbs = runner::pdf_thumbnails(Path::new(path), THUMB_DPI).map_err(|e| e.to_string())?;
+            for (n, png) in thumbs.iter().enumerate() {
+                pages.push(data_url(png));
+                page_refs.push((f + 1, n as u32 + 1));
+            }
+        }
         return Ok(EditorState {
             paths,
             tool,
@@ -318,6 +326,7 @@ async fn editor_state() -> Result<EditorState, String> {
             duration: 0.0,
             preview: String::new(),
             pages,
+            page_refs,
         });
     }
     let video = format::category_of(&src) == Some(format::Category::Video);
@@ -326,7 +335,7 @@ async fn editor_state() -> Result<EditorState, String> {
     let png = runner::preview_png(&src, PREVIEW_MAX).map_err(|e| e.to_string())?;
     let preview = data_url(&png);
     *EDITOR_PREVIEW.lock().unwrap_or_else(|e| e.into_inner()) = png;
-    Ok(EditorState { paths, tool, video, width, height, duration, preview, pages: vec![] })
+    Ok(EditorState { paths, tool, video, width, height, duration, preview, pages: vec![], page_refs: vec![] })
 }
 
 #[derive(Serialize)]
@@ -359,7 +368,11 @@ fn save_annotation(app: AppHandle, src: String, data: String, width: u32, height
     if width == 0 || height == 0 {
         return Err("unknown image size".into());
     }
-    let overlay = std::env::temp_dir().join(format!("zeidex-overlay-{}.png", NEXT_JOB.load(Ordering::Relaxed)));
+    let overlay = std::env::temp_dir().join(format!(
+        "zeidex-overlay-{}-{}.png",
+        std::process::id(),
+        NEXT_JOB.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::write(&overlay, png).map_err(|e| e.to_string())?;
     let op = Op::Overlay { png: overlay.clone(), width, height };
     spawn_job(app, op, vec![PathBuf::from(src)], "annotate".into(), Some(overlay));
@@ -403,6 +416,8 @@ struct Settings {
     tools: Trigger,
     actions: Trigger,
     reveal: bool,
+    /// Ctrl+Shift+Space opens the wheel on the current selection.
+    hotkey: bool,
     recipes: Vec<Recipe>,
     watch: Vec<WatchRule>,
 }
@@ -414,6 +429,7 @@ impl Default for Settings {
             tools: Trigger::Alt,
             actions: Trigger::Control,
             reveal: true,
+            hotkey: true,
             recipes: vec![Recipe {
                 name: "Web image".into(),
                 steps: "resize max=1600 | compress percent=60 | strip".into(),
@@ -468,6 +484,7 @@ fn settings_path(app: &AppHandle) -> Option<PathBuf> {
 fn apply(s: &Settings) {
     hook::set_keys([s.convert, s.tools, s.actions]);
     REVEAL.store(s.reveal, Ordering::Relaxed);
+    hook::set_hotkey(s.hotkey);
 }
 
 #[tauri::command]

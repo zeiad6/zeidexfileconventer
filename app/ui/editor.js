@@ -20,12 +20,12 @@ let drag = null;
 let aspect = 0;
 let style = 'blur';
 let pen = { type: 'rect', color: '#f07b1d', size: 4, text: '' };
-const NEUTRAL = { brightness: 0, contrast: 1, saturation: 1, gamma: 1, hue: 0, sharpen: 0, denoise: 0, grain: 0 };
-// [key, min, max, step]; gamma, sharpen, denoise and grain are not shown in the live preview
+const NEUTRAL = { brightness: 0, contrast: 1, saturation: 1, gamma: 1, hue: 0, sharpen: 0, clarity: 0, denoise: 0, grain: 0 };
+// [key, min, max, step]; gamma, sharpen, clarity, denoise and grain are not shown in the live preview
 const SLIDERS = [['brightness', -1, 1, 0.02], ['contrast', 0, 3, 0.02], ['saturation', 0, 3, 0.02], ['hue', -180, 180, 1],
-  ['gamma', 0.1, 3, 0.02], ['sharpen', 0, 3, 0.05], ['denoise', 0, 20, 0.5], ['grain', 0, 60, 1]];
+  ['gamma', 0.1, 3, 0.02], ['sharpen', 0, 3, 0.05], ['clarity', 0, 2, 0.05], ['denoise', 0, 20, 0.5], ['grain', 0, 60, 1]];
 let adj = { ...NEUTRAL };
-let pages = []; // organizer: [{n: source page (1-based), rot: degrees}]
+let pages = []; // organizer: [{t: thumbnail index, f: file, n: page (1-based), rot: degrees}]
 
 const adjustCss = () => `brightness(${1 + adj.brightness}) contrast(${adj.contrast}) saturate(${adj.saturation}) hue-rotate(${adj.hue}deg)`;
 
@@ -195,7 +195,7 @@ function controls() {
       c.append(l);
     }
     c.append(make('button', { textContent: window.ZT('reset'), onclick: () => { adj = { ...NEUTRAL }; controls(); draw(); } }));
-  } else if (st.tool === 'pages') {
+  } else if (st.tool === 'pages' || st.tool === 'merge-pdf') {
     c.append(make('span', { className: 'hint', textContent: window.ZT('pagesHint') }));
   } else {
     for (const t of ['rect', 'arrow', 'text', 'number', 'pen']) {
@@ -214,7 +214,7 @@ function controls() {
 }
 
 cv.addEventListener('pointerdown', (e) => {
-  if (!st || st.tool === 'adjust' || st.tool === 'pages') return;
+  if (!st || st.tool === 'adjust' || st.tool === 'pages' || st.tool === 'merge-pdf') return;
   cv.setPointerCapture(e.pointerId);
   const p = point(e);
   if (st.tool === 'annotate') {
@@ -271,11 +271,16 @@ async function apply() {
     } else if (st.tool === 'adjust') {
       const opts = Object.fromEntries(Object.entries(adj).map(([key, v]) => [key, String(v)]));
       await invoke('run_job', { paths: st.paths, kind: 'tool', id: 'adjust', opts });
-    } else if (st.tool === 'pages') {
+    } else if (st.tool === 'pages' || st.tool === 'merge-pdf') {
       if (!pages.length) throw window.ZT('noPages');
-      const spec = pages.map((p) => p.n).join(',');
       const rotate = pages.map((p, i) => (p.rot ? `${i + 1}:${p.rot}` : '')).filter(Boolean).join(',');
-      await invoke('run_job', { paths: st.paths, kind: 'tool', id: 'pages', opts: { spec, rotate } });
+      if (st.paths.length > 1) {
+        const items = pages.map((p) => `${p.f}:${p.n}`).join(',');
+        await invoke('run_job', { paths: st.paths, kind: 'tool', id: 'arrange', opts: { items, rotate } });
+      } else {
+        const spec = pages.map((p) => p.n).join(',');
+        await invoke('run_job', { paths: st.paths, kind: 'tool', id: 'pages', opts: { spec, rotate } });
+      }
     } else {
       if (!boxes.length) throw window.ZT('drawBox');
       const opts = st.tool === 'crop'
@@ -306,7 +311,7 @@ function renderPages() {
   const grid = $('pages');
   grid.replaceChildren(...pages.map((p, i) => {
     const card = make('div', { className: 'page' });
-    const thumb = make('img', { src: st.pages[p.n - 1], alt: `${p.n}` });
+    const thumb = make('img', { src: st.pages[p.t], alt: `${p.n}` });
     thumb.style.transform = `rotate(${p.rot}deg)`;
     const move = (to) => { const [it] = pages.splice(i, 1); pages.splice(to, 0, it); renderPages(); };
     const btn = (text, title, fn) => make('button', { textContent: text, title: window.ZT(title), onclick: fn });
@@ -318,7 +323,8 @@ function renderPages() {
       btn('✕', 'remove', () => { pages.splice(i, 1); renderPages(); }),
       btn('▶', 'moveRight', () => i < pages.length - 1 && move(i + 1)),
     );
-    card.append(thumb, make('div', { className: 'page-n', textContent: `${i + 1} · p${p.n}` }), tools);
+    const origin = st.paths.length > 1 ? `${st.paths[p.f - 1].split(/[\\/]/).pop()} · ` : '';
+    card.append(thumb, make('div', { className: 'page-n', textContent: `${i + 1} · ${origin}p${p.n}` }), tools);
     return card;
   }));
   $('info').textContent = `${pages.length} ${window.ZT('pagesCount')}`;
@@ -338,12 +344,12 @@ async function open() {
   $('title').textContent = window.ZT(st.tool);
   $('apply').textContent = window.ZT(st.tool === 'annotate' ? 'save' : 'apply');
   controls();
-  const organizer = st.tool === 'pages';
+  const organizer = st.tool === 'pages' || st.tool === 'merge-pdf';
   $('pages').hidden = !organizer;
   cv.hidden = organizer;
   $('undo').hidden = organizer || st.tool === 'adjust';
   if (organizer) {
-    pages = st.pages.map((_, i) => ({ n: i + 1, rot: 0 }));
+    pages = st.page_refs.map(([f, n], t) => ({ t, f, n, rot: 0 }));
     img = null;
     return renderPages();
   }

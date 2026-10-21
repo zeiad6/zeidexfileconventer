@@ -85,6 +85,7 @@ check doc-pages.pdf         qpdf -- tool pages --spec 2,1 doc.pdf
 check doc-rotated.pdf       qpdf -- tool rotate doc.pdf
 check "doc-pages (2).pdf"   qpdf -- tool pages --spec 2,1,1 --rotate 1:90,3:180 doc.pdf
 check doc-clean.pdf         qpdf -- tool strip doc.pdf
+check arranged.pdf          qpdf -- tool arrange --items 2:1,1:2,1:1 --rotate 1:90 doc.pdf other.pdf
 
 check notes.docx            pandoc -- convert --to docx notes.md
 check notes.html            pandoc -- convert --to html notes.md

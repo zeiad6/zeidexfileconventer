@@ -615,6 +615,9 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
         // Fallback without probe data: the concat demuxer (needs matching streams).
         Op::Join if av => {
             let to = if is(Category::Video) { "mp4" } else { av_out_ext(&from, cat) };
+            if inputs.iter().any(|p| p.to_string_lossy().contains(['\n', '\r'])) {
+                return Err(Error::BadOption("file names with line breaks cannot be joined".into()));
+            }
             let list = tmp.join("list.txt");
             let contents: String =
                 inputs.iter().map(|p| format!("file '{}'\n", p.to_string_lossy().replace('\'', "'\\''"))).collect();
@@ -1003,6 +1006,34 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             s.push(ffmpeg(a, ctx));
             (out, named(&stem, "visualizer", "mp4"))
         }
+        Op::Arrange { items, rotate } => {
+            if let Some((f, _)) = items.iter().find(|(f, _)| *f > inputs.len()) {
+                return Err(Error::BadOption(format!("file {f} is not in the selection")));
+            }
+            let out = tmp.join("arranged.pdf");
+            let mut a = args!["--empty", "--pages"];
+            // Consecutive pages of the same file share one "file ranges" group.
+            let mut k = 0;
+            while k < items.len() {
+                let f = items[k].0;
+                let mut pages = Vec::new();
+                while k < items.len() && items[k].0 == f {
+                    pages.push(items[k].1.to_string());
+                    k += 1;
+                }
+                a.extend(args![&inputs[f - 1], pages.join(",")]);
+            }
+            a.push("--".into());
+            for deg in [90, 180, 270] {
+                let pages: Vec<String> = rotate.iter().filter(|(_, d)| *d == deg).map(|(p, _)| p.to_string()).collect();
+                if !pages.is_empty() {
+                    a.push(format!("--rotate=+{deg}:{}", pages.join(",")).into());
+                }
+            }
+            a.push(out.clone().into());
+            s.push(run(Tool::Qpdf, a));
+            (out, "arranged.pdf".into())
+        }
         Op::MergePdf => {
             let out = tmp.join("merged.pdf");
             let mut a = args!["--empty", "--pages"];
@@ -1143,6 +1174,9 @@ pub fn adjust_chain(a: &Adjust) -> String {
     }
     if a.sharpen > 0.0 {
         f.push(format!("unsharp=5:5:{}", a.sharpen));
+    }
+    if a.clarity > 0.0 {
+        f.push(format!("unsharp=13:13:{}:13:13:0", a.clarity));
     }
     if a.grain > 0.0 {
         f.push(format!("noise=alls={}:allf=t", a.grain));
@@ -1879,7 +1913,8 @@ mod tests {
                 match st {
                     Step::Run { tool, args, .. } => out.push((
                         *tool,
-                        args.iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" "),
+                        // Forward slashes on every OS so the expectations hold on Windows too.
+                        args.iter().map(|a| a.to_string_lossy().replace('\\', "/")).collect::<Vec<_>>().join(" "),
                     )),
                     Step::SmallestUnder { candidates, .. } => candidates.iter().for_each(|(c, _)| walk(c, out)),
                     _ => {}
@@ -2034,6 +2069,8 @@ mod tests {
     fn adjust_overlay_tags_pages_pdfstrip() {
         let a = Adjust { saturation: 1.4, sharpen: 1.0, ..Adjust::NEUTRAL };
         assert_eq!(adjust_chain(&a), "eq=brightness=0:contrast=1:saturation=1.4:gamma=1,unsharp=5:5:1");
+        let c = Adjust { clarity: 0.8, ..Adjust::NEUTRAL };
+        assert!(adjust_chain(&c).ends_with("unsharp=13:13:0.8:13:13:0"));
         let p = plan_of("adjust", &[("saturation", "1.4")], &["/in/a.webp"], Ctx::default()).unwrap();
         let tools: Vec<Tool> = argv(&p).into_iter().map(|x| x.0).collect();
         assert_eq!(tools, vec![Tool::Vips, Tool::Ffmpeg]);
@@ -2162,6 +2199,23 @@ mod tests {
             })
             .unwrap();
         assert!(html.contains("hero-480.avif 480w, hero-960.avif 960w") && html.contains("src=\"hero-960.webp\""));
+    }
+
+    #[test]
+    fn arrange_across_pdfs() {
+        let p = plan_of(
+            "arrange",
+            &[("items", "2:1,1:3,1:1,2:2"), ("rotate", "2:90")],
+            &["/in/a.pdf", "/in/b.pdf"],
+            Ctx::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            argv(&p)[0].1,
+            "--empty --pages /in/b.pdf 1 /in/a.pdf 3,1 /in/b.pdf 2 -- --rotate=+90:2 /t/arranged.pdf"
+        );
+        assert!(plan_of("arrange", &[("items", "3:1")], &["/in/a.pdf", "/in/b.pdf"], Ctx::default()).is_err());
+        assert!(Op::parse("arrange", &[("items".to_string(), "0:1".to_string())].into()).is_err());
     }
 
     #[test]

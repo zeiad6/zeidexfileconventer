@@ -39,6 +39,12 @@ pub fn set_keys(keys: [Trigger; 3]) {
 }
 
 static OK: AtomicBool = AtomicBool::new(true);
+/// Ctrl+Shift+Space shortcut enabled (Settings).
+static HOTKEY: AtomicBool = AtomicBool::new(true);
+
+pub fn set_hotkey(on: bool) {
+    HOTKEY.store(on, Ordering::Relaxed);
+}
 static VISIBLE: AtomicBool = AtomicBool::new(false);
 /// Set when the wheel must survive the mouse release (a tool needs its options typed in).
 static KEEP: AtomicBool = AtomicBool::new(false);
@@ -70,7 +76,7 @@ pub fn start(app: AppHandle, on_hotkey: fn(&AppHandle)) {
                 EventType::KeyRelease(Key::ControlLeft | Key::ControlRight) => ctrl = false,
                 EventType::KeyPress(Key::ShiftLeft | Key::ShiftRight) => shift = true,
                 EventType::KeyRelease(Key::ShiftLeft | Key::ShiftRight) => shift = false,
-                EventType::KeyPress(Key::Space) if ctrl && shift && !dragging => {
+                EventType::KeyPress(Key::Space) if ctrl && shift && !dragging && HOTKEY.load(Ordering::Relaxed) => {
                     let app = handle.clone();
                     std::thread::spawn(move || on_hotkey(&app));
                 }
