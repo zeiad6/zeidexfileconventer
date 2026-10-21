@@ -35,20 +35,49 @@ pub struct Ctx {
     pub inputs: Vec<MediaInfo>,
     /// Text boxes found by OCR for `redact --boxes auto`.
     pub detected: Vec<Rect>,
+    /// Pixel size of the first input, for ops that size things relative to it.
+    pub dims: Option<(u32, u32)>,
+    pub whisper_model: Option<PathBuf>,
     pub image: Option<ImageInfo>,
     pub size: u64,
 }
 
 #[derive(Debug)]
 pub enum Step {
-    Run { tool: Tool, args: Vec<OsString>, cwd: Option<PathBuf>, progress_secs: Option<f64> },
+    Run {
+        tool: Tool,
+        args: Vec<OsString>,
+        cwd: Option<PathBuf>,
+        progress_secs: Option<f64>,
+    },
     MkDir(PathBuf),
-    Copy { src: PathBuf, dst: PathBuf },
-    WriteFile { path: PathBuf, contents: String },
-    Subtitle { src: PathBuf, dst: PathBuf },
-    JpegsToPdf { jpegs: Vec<PathBuf>, dst: PathBuf },
+    Copy {
+        src: PathBuf,
+        dst: PathBuf,
+    },
+    WriteFile {
+        path: PathBuf,
+        contents: String,
+    },
+    Subtitle {
+        src: PathBuf,
+        dst: PathBuf,
+        shift_ms: i64,
+    },
+    Ico {
+        pngs: Vec<(u32, PathBuf)>,
+        dst: PathBuf,
+    },
+    JpegsToPdf {
+        jpegs: Vec<PathBuf>,
+        dst: PathBuf,
+    },
     /// Try candidates in order; keep the first output that fits `target`, else the smallest.
-    SmallestUnder { target: u64, candidates: Vec<(Vec<Step>, PathBuf)>, dst: PathBuf },
+    SmallestUnder {
+        target: u64,
+        candidates: Vec<(Vec<Step>, PathBuf)>,
+        dst: PathBuf,
+    },
 }
 
 #[derive(Debug)]
@@ -226,9 +255,17 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             s.push(run(
                 Tool::Vips,
                 args![
-                    "embed", &input, &out, p.to_string(), p.to_string(),
-                    (info.width + 2 * p).to_string(), (info.height + 2 * p).to_string(),
-                    "--extend", "background", "--background", bg
+                    "embed",
+                    &input,
+                    &out,
+                    p.to_string(),
+                    p.to_string(),
+                    (info.width + 2 * p).to_string(),
+                    (info.height + 2 * p).to_string(),
+                    "--extend",
+                    "background",
+                    "--background",
+                    bg
                 ],
             ));
             (out, named(&stem, "framed", to))
@@ -252,7 +289,14 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
                 let cell = format!("c{i}.jpg");
                 s.push(run(
                     Tool::Vips,
-                    args!["thumbnail", &input, suffixed(&tmp.join(&cell), "[background=255]"), "800", "--height", "800"],
+                    args![
+                        "thumbnail",
+                        &input,
+                        suffixed(&tmp.join(&cell), "[background=255]"),
+                        "800",
+                        "--height",
+                        "800"
+                    ],
                 ));
                 cells.push(cell);
             }
@@ -260,8 +304,19 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             s.push(Step::Run {
                 tool: Tool::Vips,
                 args: args![
-                    "arrayjoin", cells.join(" "), "collage.jpg[Q=90]", "--across", across.to_string(),
-                    "--shim", gap.to_string(), "--background", "255 255 255", "--halign", "centre", "--valign", "centre"
+                    "arrayjoin",
+                    cells.join(" "),
+                    "collage.jpg[Q=90]",
+                    "--across",
+                    across.to_string(),
+                    "--shim",
+                    gap.to_string(),
+                    "--background",
+                    "255 255 255",
+                    "--halign",
+                    "centre",
+                    "--valign",
+                    "centre"
                 ],
                 cwd: Some(tmp.to_path_buf()),
                 progress_secs: None,
@@ -274,8 +329,17 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
                     let tif = tmp.join("pages.tif");
                     s.push(run(
                         Tool::Ghostscript,
-                        args!["-dSAFER", "-dBATCH", "-dNOPAUSE", "-dQUIET", "-r300", "-sDEVICE=tiffgray",
-                            "-sCompression=lzw", prefixed("-sOutputFile=", &tif), src],
+                        args![
+                            "-dSAFER",
+                            "-dBATCH",
+                            "-dNOPAUSE",
+                            "-dQUIET",
+                            "-r300",
+                            "-sDEVICE=tiffgray",
+                            "-sCompression=lzw",
+                            prefixed("-sOutputFile=", &tif),
+                            src
+                        ],
                     ));
                     tif
                 }
@@ -317,7 +381,12 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
         Op::Speed { factor } if av => {
             let to = av_out_ext(&from, cat);
             let out = tmp.join(format!("speed.{to}"));
-            let media = ctx.media.clone().unwrap_or(MediaInfo { duration: 0.0, has_video: is(Category::Video), has_audio: true, ..MediaInfo::default() });
+            let media = ctx.media.clone().unwrap_or(MediaInfo {
+                duration: 0.0,
+                has_video: is(Category::Video),
+                has_audio: true,
+                ..MediaInfo::default()
+            });
             let mut a = ffmpeg_in(src);
             if media.has_video {
                 a.extend(args!["-filter:v", format!("setpts=PTS/{factor}")]);
@@ -333,7 +402,8 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
         }
         Op::Snapshot { at } if is(Category::Video) => {
             let out = tmp.join("frame.png");
-            let mut a = args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-ss", format!("{at}"), "-i", src];
+            let mut a =
+                args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-ss", format!("{at}"), "-i", src];
             a.extend(args!["-frames:v", "1", &out]);
             s.push(run(Tool::Ffmpeg, a));
             (out, named(&stem, &format!("frame-{}s", *at as u64), "png"))
@@ -363,14 +433,34 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             a.extend(encode_args(to));
             // Re-encode with forced keyframes: stream copy can only cut at existing keyframes.
             if at.is_empty() {
-                let dur = ctx.media.as_ref().map(|m| m.duration).filter(|d| *d > 0.0)
+                let dur = ctx
+                    .media
+                    .as_ref()
+                    .map(|m| m.duration)
+                    .filter(|d| *d > 0.0)
                     .ok_or_else(|| Error::Unsupported("could not read the duration".into()))?;
                 let seg = format!("{:.3}", dur / *parts as f64 + 0.001);
-                a.extend(args!["-force_key_frames", format!("expr:gte(t,n_forced*{seg})"), "-f", "segment", "-segment_time", &seg]);
+                a.extend(args![
+                    "-force_key_frames",
+                    format!("expr:gte(t,n_forced*{seg})"),
+                    "-f",
+                    "segment",
+                    "-segment_time",
+                    &seg
+                ]);
             } else {
                 let times = at.iter().map(|t| format!("{t:.3}")).collect::<Vec<_>>().join(",");
                 // Forced keyframes land exactly on the cut; without a delta the muxer misses them.
-                a.extend(args!["-force_key_frames", &times, "-f", "segment", "-segment_times", &times, "-segment_time_delta", "0.05"]);
+                a.extend(args![
+                    "-force_key_frames",
+                    &times,
+                    "-f",
+                    "segment",
+                    "-segment_times",
+                    &times,
+                    "-segment_time_delta",
+                    "0.05"
+                ]);
             }
             a.extend(args!["-reset_timestamps", "1", &pattern]);
             s.push(ffmpeg(a, ctx));
@@ -379,7 +469,8 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
         Op::Join if av && ctx.inputs.len() == inputs.len() && ctx.inputs.iter().all(|m| m.duration > 0.0) => {
             let to = if is(Category::Video) { "mp4" } else { av_out_ext(&from, cat) };
             let out = tmp.join(format!("joined.{to}"));
-            let mut a = args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-progress", "pipe:1", "-nostats"];
+            let mut a =
+                args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-progress", "pipe:1", "-nostats"];
             for p in inputs {
                 a.extend(args!["-i", p]);
             }
@@ -399,19 +490,39 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
         Op::Join if av => {
             let to = if is(Category::Video) { "mp4" } else { av_out_ext(&from, cat) };
             let list = tmp.join("list.txt");
-            let contents: String = inputs
-                .iter()
-                .map(|p| format!("file '{}'\n", p.to_string_lossy().replace('\'', "'\\''")))
-                .collect();
+            let contents: String =
+                inputs.iter().map(|p| format!("file '{}'\n", p.to_string_lossy().replace('\'', "'\\''"))).collect();
             s.push(Step::WriteFile { path: list.clone(), contents });
             let out = tmp.join(format!("joined.{to}"));
-            let mut a = args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", &list];
+            let mut a = args![
+                "-hide_banner",
+                "-nostdin",
+                "-y",
+                "-loglevel",
+                "error",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                &list
+            ];
             a.extend(encode_args(to));
             a.push(out.clone().into());
             s.push(run(Tool::Ffmpeg, a));
             (out, named("joined", "", to))
         }
-        Op::Normalize if av => audio_filter(src, &from, cat, "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000", "normalized", ctx, tmp, &mut s, &stem),
+        Op::Normalize if av => audio_filter(
+            src,
+            &from,
+            cat,
+            "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000",
+            "normalized",
+            ctx,
+            tmp,
+            &mut s,
+            &stem,
+        ),
         Op::Channels { count, left, right } if av => {
             let to = av_out_ext(&from, cat);
             let out = tmp.join(format!("channels.{to}"));
@@ -446,7 +557,9 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             s.push(ffmpeg(a, ctx));
             (out, named(&stem, "bleeped", to))
         }
-        Op::Redact { auto: Some(_), .. } if !is(Category::Image) => return Err(unsupported("Automatic text detection", &from)),
+        Op::Redact { auto: Some(_), .. } if !is(Category::Image) => {
+            return Err(unsupported("Automatic text detection", &from))
+        }
         Op::Redact { boxes, fill, range, auto } if is(Category::Image) || is(Category::Video) => {
             let boxes = if auto.is_some() { &ctx.detected } else { boxes };
             if boxes.is_empty() {
@@ -464,8 +577,17 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             let out = tmp.join(format!("annotated.{to}"));
             let mut a = ffmpeg_in(&input);
             a.extend(args![
-                "-i", png, "-filter_complex", format!("[1:v]scale={width}:{height}[o];[0:v][o]overlay=0:0[v]"),
-                "-map", "[v]", "-frames:v", "1", "-q:v", "2", &out
+                "-i",
+                png,
+                "-filter_complex",
+                format!("[1:v]scale={width}:{height}[o];[0:v][o]overlay=0:0[v]"),
+                "-map",
+                "[v]",
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
+                &out
             ]);
             s.push(run(Tool::Ffmpeg, a));
             (out, named(&stem, "annotated", to))
@@ -482,6 +604,246 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             s.push(run(Tool::Ffmpeg, a));
             (out, named(&stem, "tagged", to))
         }
+        Op::Watermark { image, pos, opacity, scale } if is(Category::Image) || is(Category::Video) => {
+            let (w, _) = ctx.dims.ok_or_else(|| Error::Unsupported("could not read the picture size".into()))?;
+            let logo_w = ((w as f64 * scale / 100.0) as u32).max(8);
+            let m = (w / 50).max(4);
+            let (x, y) = match pos.as_str() {
+                "tl" => (format!("{m}"), format!("{m}")),
+                "tr" => (format!("W-w-{m}"), format!("{m}")),
+                "bl" => (format!("{m}"), format!("H-h-{m}")),
+                "center" => ("(W-w)/2".into(), "(H-h)/2".into()),
+                _ => (format!("W-w-{m}"), format!("H-h-{m}")),
+            };
+            let graph = format!(
+                "[1:v]scale={logo_w}:-1,format=rgba,colorchannelmixer=aa={opacity}[wm];[0:v][wm]overlay={x}:{y}[v]"
+            );
+            let video = is(Category::Video);
+            let (input, to) = if video {
+                (src.to_path_buf(), av_out_ext(&from, cat))
+            } else {
+                ffmpeg_image_input(src, &from, tmp, &mut s)
+            };
+            let out = tmp.join(format!("watermarked.{to}"));
+            let mut a = ffmpeg_in(&input);
+            a.extend(args!["-i", image, "-filter_complex", graph, "-map", "[v]"]);
+            if video {
+                a.extend(args!["-map", "0:a?", "-c:a", "copy"]);
+                a.extend(strs(video_codec(to)));
+            } else {
+                a.extend(args!["-frames:v", "1", "-q:v", "2"]);
+            }
+            a.push(out.clone().into());
+            s.push(ffmpeg(a, ctx));
+            (out, named(&stem, "watermarked", to))
+        }
+        Op::ShiftSubs { ms } if is(Category::Subtitle) => {
+            let out = tmp.join(format!("shifted.{from}"));
+            s.push(Step::Subtitle { src: src.to_path_buf(), dst: out.clone(), shift_ms: *ms });
+            (out, named(&stem, "shifted", &from))
+        }
+        Op::ExtractSubs if is(Category::Video) => {
+            let out = tmp.join("subs.srt");
+            let mut a = ffmpeg_in(src);
+            a.extend(args!["-map", "0:s:0", "-c:s", "srt", &out]);
+            s.push(run(Tool::Ffmpeg, a));
+            (out, named(&stem, "", "srt"))
+        }
+        Op::AddSubs { burn } => {
+            let find = |c: Category| inputs.iter().find(|p| crate::format::category_of(p) == Some(c));
+            let (Some(video), Some(subs)) = (find(Category::Video), find(Category::Subtitle)) else {
+                return Err(Error::BadOption("select one video and one .srt/.vtt file".into()));
+            };
+            let vext = ext_of(video).unwrap_or_default();
+            let vstem = stem_of(video);
+            let sext = ext_of(subs).unwrap_or_else(|| "srt".into());
+            if *burn {
+                let to = av_out_ext(&vext, Some(Category::Video));
+                let out = tmp.join(format!("burned.{to}"));
+                // Relative subtitle name + cwd: the subtitles filter's own path escaping is
+                // fragile (drive colons, quotes), so keep the path out of the filter string.
+                let local = format!("subs.{sext}");
+                s.push(Step::Copy { src: subs.clone(), dst: tmp.join(&local) });
+                let mut a = ffmpeg_in(video);
+                a.extend(args!["-vf", format!("subtitles={local}"), "-c:a", "copy"]);
+                a.extend(strs(video_codec(to)));
+                a.push(out.clone().into());
+                s.push(Step::Run {
+                    tool: Tool::Ffmpeg,
+                    args: a,
+                    cwd: Some(tmp.to_path_buf()),
+                    progress_secs: ctx.media.as_ref().map(|m| m.duration),
+                });
+                (out, named(&vstem, "subtitled", to))
+            } else {
+                let (to, codec) = match vext.as_str() {
+                    "mp4" | "mov" => (vext.as_str(), "mov_text"),
+                    "webm" => ("webm", "webvtt"),
+                    _ => ("mkv", "srt"),
+                };
+                let to: &'static str = match to {
+                    "mp4" => "mp4",
+                    "mov" => "mov",
+                    "webm" => "webm",
+                    _ => "mkv",
+                };
+                let out = tmp.join(format!("subtitled.{to}"));
+                let mut a = ffmpeg_in(video);
+                a.extend(args!["-i", subs, "-map", "0", "-map", "1:0", "-c", "copy", "-c:s", codec, &out]);
+                s.push(run(Tool::Ffmpeg, a));
+                (out, named(&vstem, "subtitled", to))
+            }
+        }
+        Op::Reverse if av => {
+            let media = ctx.media.clone().unwrap_or_default();
+            if media.duration > REVERSE_MAX_SECS {
+                return Err(Error::Unsupported(format!(
+                    "reverse keeps the whole clip in memory; trim it under {REVERSE_MAX_SECS:.0}s first"
+                )));
+            }
+            let to = av_out_ext(&from, cat);
+            let out = tmp.join(format!("reversed.{to}"));
+            let mut a = ffmpeg_in(src);
+            if media.has_video || is(Category::Video) {
+                a.extend(args!["-vf", "reverse"]);
+            }
+            if media.has_audio || is(Category::Audio) {
+                a.extend(args!["-af", "areverse"]);
+            }
+            a.extend(encode_args(to));
+            a.push(out.clone().into());
+            s.push(ffmpeg(a, ctx));
+            (out, named(&stem, "reversed", to))
+        }
+        Op::Loop { count } if av => {
+            let to = av_out_ext(&from, cat);
+            let out = tmp.join(format!("looped.{to}"));
+            let a = args![
+                "-hide_banner",
+                "-nostdin",
+                "-y",
+                "-loglevel",
+                "error",
+                "-stream_loop",
+                (count - 1).to_string(),
+                "-i",
+                src,
+                "-c",
+                "copy",
+                &out
+            ];
+            s.push(run(Tool::Ffmpeg, a));
+            (out, named(&stem, &format!("x{count}"), to))
+        }
+        Op::Stabilize if is(Category::Video) => {
+            let to = av_out_ext(&from, cat);
+            let out = tmp.join(format!("stable.{to}"));
+            let mut a = ffmpeg_in(src);
+            a.extend(args!["-vf", "deshake", "-c:a", "copy"]);
+            a.extend(strs(video_codec(to)));
+            a.push(out.clone().into());
+            s.push(ffmpeg(a, ctx));
+            (out, named(&stem, "stabilized", to))
+        }
+        Op::Frames { fps } if is(Category::Video) => {
+            let dir = tmp.join("frames");
+            s.push(Step::MkDir(dir.clone()));
+            let mut a = ffmpeg_in(src);
+            a.extend(args!["-vf", format!("fps={fps}"), dir.join(format!("{}-%05d.png", stem.replace('%', "%%")))]);
+            s.push(ffmpeg(a, ctx));
+            (dir, format!("{stem} frames"))
+        }
+        Op::Slideshow { secs } => {
+            let (w, h) = slideshow_canvas(ctx.dims);
+            let mut a = args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error"];
+            let mut graph = Vec::new();
+            let mut pads = String::new();
+            let fade = (secs / 6.0).min(0.5);
+            for (i, img) in inputs.iter().enumerate() {
+                let f = ext_of(img).unwrap_or_default();
+                let (input, _) = ffmpeg_image_input(img, &f, tmp, &mut s);
+                a.extend(args!["-loop", "1", "-t", format!("{secs}"), "-i", &input]);
+                graph.push(format!(
+                    "[{i}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=30,format=yuv420p,\
+                     fade=t=in:st=0:d={fade},fade=t=out:st={}:d={fade}[v{i}]",
+                    secs - fade
+                ));
+                pads += &format!("[v{i}]");
+            }
+            graph.push(format!("{pads}concat=n={}:v=1:a=0[v]", inputs.len()));
+            let out = tmp.join("slideshow.mp4");
+            a.extend(args!["-filter_complex", graph.join(";"), "-map", "[v]"]);
+            a.extend(strs(video_codec("mp4")));
+            a.extend(args!["-movflags", "+faststart", &out]);
+            s.push(Step::Run { tool: Tool::Ffmpeg, args: a, cwd: None, progress_secs: None });
+            (out, "slideshow.mp4".into())
+        }
+        Op::Fade { secs } if av => {
+            let media = ctx
+                .media
+                .clone()
+                .filter(|m| m.duration > 0.0)
+                .ok_or_else(|| Error::Unsupported("could not read the duration".into()))?;
+            let secs = secs.min(media.duration / 2.0);
+            let end = media.duration - secs;
+            let to = av_out_ext(&from, cat);
+            let out = tmp.join(format!("faded.{to}"));
+            let mut a = ffmpeg_in(src);
+            if media.has_video {
+                a.extend(args!["-vf", format!("fade=t=in:st=0:d={secs},fade=t=out:st={end}:d={secs}")]);
+            }
+            if media.has_audio {
+                a.extend(args!["-af", format!("afade=t=in:st=0:d={secs},afade=t=out:st={end}:d={secs}")]);
+            }
+            a.extend(encode_args(to));
+            a.push(out.clone().into());
+            s.push(ffmpeg(a, ctx));
+            (out, named(&stem, "faded", to))
+        }
+        Op::Protect { password } if is(Category::Pdf) => {
+            let out = tmp.join("protected.pdf");
+            s.push(run(Tool::Qpdf, args!["--encrypt", password, password, "256", "--", src, &out]));
+            (out, named(&stem, "protected", "pdf"))
+        }
+        Op::Unlock { password } if is(Category::Pdf) => {
+            let out = tmp.join("unlocked.pdf");
+            s.push(run(Tool::Qpdf, args![format!("--password={password}"), "--decrypt", src, &out]));
+            (out, named(&stem, "unlocked", "pdf"))
+        }
+        Op::Transcribe { lang } if av => {
+            let model = ctx.whisper_model.clone().ok_or_else(|| {
+                Error::Unsupported("no whisper.cpp model: set ZEIDEX_WHISPER_MODEL to a ggml-*.bin file".into())
+            })?;
+            let wav = tmp.join("speech.wav");
+            let mut a = ffmpeg_in(src);
+            a.extend(args!["-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", &wav]);
+            s.push(ffmpeg(a, ctx));
+            let base = tmp.join("transcript");
+            s.push(run(Tool::Whisper, args!["-m", &model, "-f", &wav, "-l", lang, "-osrt", "-of", &base]));
+            (tmp.join("transcript.srt"), named(&stem, "", "srt"))
+        }
+        Op::Icon if is(Category::Image) => {
+            let (input, _) = ffmpeg_image_input(src, &from, tmp, &mut s);
+            let mut pngs = Vec::new();
+            for size in ICON_SIZES {
+                let png = tmp.join(format!("i{size}.png"));
+                s.push(run(
+                    Tool::Ffmpeg,
+                    args![
+                        "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i", &input, "-vf",
+                        format!("scale={size}:{size}:force_original_aspect_ratio=decrease:flags=lanczos,format=rgba,pad={size}:{size}:(ow-iw)/2:(oh-ih)/2:color=black@0"),
+                        "-frames:v", "1", &png
+                    ],
+                ));
+                pngs.push((size, png));
+            }
+            let out = tmp.join("icon.ico");
+            s.push(Step::Ico { pngs, dst: out.clone() });
+            (out, named(&stem, "", "ico"))
+        }
+        Op::Checksum | Op::Rename { .. } | Op::Recipe(_) => {
+            return Err(Error::Unsupported("handled by the runner".into()))
+        }
         Op::Visualize { shape } if is(Category::Audio) => {
             let size = match shape.as_str() {
                 "portrait" => "720x1280",
@@ -491,9 +853,26 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             let out = tmp.join("visualizer.mp4");
             let mut a = ffmpeg_in(src);
             a.extend(args![
-                "-filter_complex", format!("[0:a]showwaves=s={size}:mode=cline:colors=0xF28C28,format=yuv420p[v]"),
-                "-map", "[v]", "-map", "0:a", "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-                "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", &out
+                "-filter_complex",
+                format!("[0:a]showwaves=s={size}:mode=cline:colors=0xF28C28,format=yuv420p[v]"),
+                "-map",
+                "[v]",
+                "-map",
+                "0:a",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-crf",
+                "23",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-shortest",
+                "-movflags",
+                "+faststart",
+                &out
             ]);
             s.push(ffmpeg(a, ctx));
             (out, named(&stem, "visualizer", "mp4"))
@@ -553,13 +932,27 @@ pub fn crop_box(w: u32, h: u32, rw: u32, rh: u32) -> (u32, u32) {
     }
 }
 
+/// Clips longer than this are refused by `reverse` (FFmpeg buffers the whole clip).
+const REVERSE_MAX_SECS: f64 = 120.0;
+const ICON_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
+/// Slideshow frames never exceed this on their long side.
+const SLIDESHOW_MAX: u32 = 1920;
+
+/// Canvas of the first image, scaled down to fit `SLIDESHOW_MAX`, even-sized for H.264.
+fn slideshow_canvas(dims: Option<(u32, u32)>) -> (u32, u32) {
+    let (w, h) = dims.filter(|(w, h)| *w > 0 && *h > 0).unwrap_or((1920, 1080));
+    let k = (SLIDESHOW_MAX as f64 / w.max(h) as f64).min(1.0);
+    (((w as f64 * k) as u32).max(2) & !1, ((h as f64 * k) as u32).max(2) & !1)
+}
+
 /// Image path FFmpeg decodes reliably, and the extension to write. HEIC/AVIF/SVG/WebP go
 /// through libvips first because FFmpeg's support for them as stills is patchy.
 fn ffmpeg_image_input(src: &Path, from: &str, tmp: &Path, s: &mut Vec<Step>) -> (PathBuf, &'static str) {
     if ["jpg", "png", "bmp", "tiff"].contains(&from) {
         return (src.to_path_buf(), if from == "jpg" { "jpg" } else { "png" });
     }
-    let png = tmp.join("decoded.png");
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let png = tmp.join(format!("decoded{}.png", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     let decoded = image_src(src, from, tmp, s);
     s.push(run(Tool::Vips, args!["copy", &decoded, &png]));
     (png, "png")
@@ -568,11 +961,19 @@ fn ffmpeg_image_input(src: &Path, from: &str, tmp: &Path, s: &mut Vec<Step>) -> 
 /// Runs a `[0:v]...[v]` filter graph over an image or a video (audio copied).
 #[allow(clippy::too_many_arguments)]
 fn visual_filter(
-    src: &Path, from: &str, cat: Option<Category>, graph: &str, tag: &str, ctx: &Ctx, tmp: &Path, s: &mut Vec<Step>,
+    src: &Path,
+    from: &str,
+    cat: Option<Category>,
+    graph: &str,
+    tag: &str,
+    ctx: &Ctx,
+    tmp: &Path,
+    s: &mut Vec<Step>,
     stem: &str,
 ) -> (PathBuf, String) {
     let video = cat == Some(Category::Video);
-    let (input, to) = if video { (src.to_path_buf(), av_out_ext(from, cat)) } else { ffmpeg_image_input(src, from, tmp, s) };
+    let (input, to) =
+        if video { (src.to_path_buf(), av_out_ext(from, cat)) } else { ffmpeg_image_input(src, from, tmp, s) };
     let out = tmp.join(format!("{tag}.{to}"));
     let mut a = ffmpeg_in(&input);
     a.extend(args!["-filter_complex", graph, "-map", "[v]"]);
@@ -618,7 +1019,12 @@ pub fn redact_graph(boxes: &[Rect], fill: Option<[u8; 3]>, range: Option<(f64, f
     if let Some([r, g, b]) = fill {
         let draws: Vec<String> = boxes
             .iter()
-            .map(|x| format!("drawbox=x={}:y={}:w={}:h={}:color=0x{r:02X}{g:02X}{b:02X}@1:t=fill{enable}", x.x, x.y, x.w, x.h))
+            .map(|x| {
+                format!(
+                    "drawbox=x={}:y={}:w={}:h={}:color=0x{r:02X}{g:02X}{b:02X}@1:t=fill{enable}",
+                    x.x, x.y, x.w, x.h
+                )
+            })
             .collect();
         return format!("[0:v]{}[v]", draws.join(","));
     }
@@ -739,8 +1145,7 @@ fn images_to_jpegs(inputs: &[PathBuf], tmp: &Path, s: &mut Vec<Step>) -> Vec<Pat
 
 // ---------- audio / video ----------
 
-const GIF_FILTER: &str =
-    "fps=12,scale='min(640,iw)':-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse";
+const GIF_FILTER: &str = "fps=12,scale='min(640,iw)':-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse";
 
 fn ffmpeg_in(src: &Path) -> Vec<OsString> {
     args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-progress", "pipe:1", "-nostats", "-i", src]
@@ -807,8 +1212,15 @@ fn encode_args(to: &str) -> Vec<OsString> {
 
 #[allow(clippy::too_many_arguments)]
 fn audio_filter(
-    src: &Path, from: &str, cat: Option<Category>, filter: &str, tag: &str, ctx: &Ctx, tmp: &Path,
-    s: &mut Vec<Step>, stem: &str,
+    src: &Path,
+    from: &str,
+    cat: Option<Category>,
+    filter: &str,
+    tag: &str,
+    ctx: &Ctx,
+    tmp: &Path,
+    s: &mut Vec<Step>,
+    stem: &str,
 ) -> (PathBuf, String) {
     let to = av_out_ext(from, cat);
     let out = tmp.join(format!("{tag}.{to}"));
@@ -827,8 +1239,15 @@ fn audio_filter(
 
 #[allow(clippy::too_many_arguments)]
 fn compress(
-    src: &Path, from: &str, cat: Option<Category>, how: &Compression, max: Option<u32>, ctx: &Ctx, tmp: &Path,
-    s: &mut Vec<Step>, stem: &str,
+    src: &Path,
+    from: &str,
+    cat: Option<Category>,
+    how: &Compression,
+    max: Option<u32>,
+    ctx: &Ctx,
+    tmp: &Path,
+    s: &mut Vec<Step>,
+    stem: &str,
 ) -> Result<(PathBuf, String)> {
     let target = match how {
         Compression::TargetBytes(b) => Some(*b),
@@ -856,7 +1275,10 @@ fn compress(
                 };
                 let dst = suffixed(&out, &opts);
                 let step = match max {
-                    Some(m) => run(Tool::Vips, args!["thumbnail", &input, dst, m.to_string(), "--height", m.to_string(), "--size", "down"]),
+                    Some(m) => run(
+                        Tool::Vips,
+                        args!["thumbnail", &input, dst, m.to_string(), "--height", m.to_string(), "--size", "down"],
+                    ),
                     None => run(Tool::Vips, args!["copy", &input, dst]),
                 };
                 (vec![step], out)
@@ -886,8 +1308,17 @@ fn compress(
                     let out = tmp.join(format!("gs{i}.pdf"));
                     let step = run(
                         Tool::Ghostscript,
-                        args!["-dSAFER", "-dBATCH", "-dNOPAUSE", "-dQUIET", "-sDEVICE=pdfwrite",
-                            "-dCompatibilityLevel=1.5", format!("-dPDFSETTINGS={preset}"), prefixed("-sOutputFile=", &out), src],
+                        args![
+                            "-dSAFER",
+                            "-dBATCH",
+                            "-dNOPAUSE",
+                            "-dQUIET",
+                            "-sDEVICE=pdfwrite",
+                            "-dCompatibilityLevel=1.5",
+                            format!("-dPDFSETTINGS={preset}"),
+                            prefixed("-sOutputFile=", &out),
+                            src
+                        ],
                     );
                     (vec![step], out)
                 })
@@ -900,9 +1331,7 @@ fn compress(
             let to = if from == "mov" || from == "mkv" { from } else { "mp4" };
             let out = tmp.join(format!("compressed.{to}"));
             let media = ctx.media.clone().unwrap_or_default();
-            let scale = max.map(|m| {
-                format!("scale=w='if(gt(iw,ih),min({m},iw),-2)':h='if(gt(iw,ih),-2,min({m},ih))'")
-            });
+            let scale = max.map(|m| format!("scale=w='if(gt(iw,ih),min({m},iw),-2)':h='if(gt(iw,ih),-2,min({m},ih))'"));
             let mut head = ffmpeg_in(src);
             if let Some(f) = &scale {
                 head.extend(args!["-vf", f]);
@@ -924,9 +1353,37 @@ fn compress(
                     let log = tmp.join("pass");
                     let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
                     let mut p1 = head.clone();
-                    p1.extend(args!["-c:v", "libx264", "-preset", "medium", "-b:v", &vb, "-pass", "1", "-passlogfile", &log, "-an", "-f", "null", null]);
+                    p1.extend(args![
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "medium",
+                        "-b:v",
+                        &vb,
+                        "-pass",
+                        "1",
+                        "-passlogfile",
+                        &log,
+                        "-an",
+                        "-f",
+                        "null",
+                        null
+                    ]);
                     let mut p2 = head;
-                    p2.extend(args!["-c:v", "libx264", "-preset", "medium", "-b:v", &vb, "-pass", "2", "-passlogfile", &log, "-pix_fmt", "yuv420p"]);
+                    p2.extend(args![
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "medium",
+                        "-b:v",
+                        &vb,
+                        "-pass",
+                        "2",
+                        "-passlogfile",
+                        &log,
+                        "-pix_fmt",
+                        "yuv420p"
+                    ]);
                     if media.has_audio {
                         p2.extend(args!["-c:a", "aac", "-b:a", format!("{audio_k:.0}k")]);
                     }
@@ -941,7 +1398,10 @@ fn compress(
                         Level::Medium => "28",
                         Level::Low => "32",
                     };
-                    head.extend(args!["-c:v", "libx264", "-preset", "medium", "-crf", crf, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k"]);
+                    head.extend(args![
+                        "-c:v", "libx264", "-preset", "medium", "-crf", crf, "-pix_fmt", "yuv420p", "-c:a", "aac",
+                        "-b:a", "128k"
+                    ]);
                     head.extend(flags);
                     head.push(out.clone().into());
                     s.push(ffmpeg(head, ctx));
@@ -956,7 +1416,11 @@ fn compress(
             };
             let kbps = match target {
                 Some(bytes) => {
-                    let d = ctx.media.as_ref().map(|m| m.duration).filter(|d| *d > 0.0)
+                    let d = ctx
+                        .media
+                        .as_ref()
+                        .map(|m| m.duration)
+                        .filter(|d| *d > 0.0)
                         .ok_or_else(|| Error::Unsupported("could not read the audio duration".into()))?;
                     (bytes as f64 * 8.0 / 1000.0 / d * 0.97).clamp(24.0, 320.0) as u32
                 }
@@ -1006,7 +1470,9 @@ fn soffice(src: &Path, filter: &str, infilter: Option<&str>, tmp: &Path, s: &mut
     s.push(Step::MkDir(outdir.clone()));
     // Private profile per job: concurrent soffice runs otherwise fight over one profile lock.
     let mut a = args![
-        "--headless", "--norestore", "--nolockcheck",
+        "--headless",
+        "--norestore",
+        "--nolockcheck",
         format!("-env:UserInstallation={}", file_url(&tmp.join("lo-profile")))
     ];
     if let Some(f) = infilter {
@@ -1050,8 +1516,17 @@ fn pdf_to_images(src: &Path, to: &str, tmp: &Path, s: &mut Vec<Step>) -> PathBuf
     let device = if to == "png" { "-sDEVICE=png16m" } else { "-sDEVICE=jpeg" };
     s.push(run(
         Tool::Ghostscript,
-        args!["-dSAFER", "-dBATCH", "-dNOPAUSE", "-dQUIET", "-r300", device, "-dJPEGQ=90",
-            prefixed("-sOutputFile=", &dir.join(format!("page-%03d.{to}"))), src],
+        args![
+            "-dSAFER",
+            "-dBATCH",
+            "-dNOPAUSE",
+            "-dQUIET",
+            "-r300",
+            device,
+            "-dJPEGQ=90",
+            prefixed("-sOutputFile=", &dir.join(format!("page-%03d.{to}"))),
+            src
+        ],
     ));
     dir
 }
@@ -1071,7 +1546,7 @@ fn convert(src: &Path, from: &str, to: &str, tmp: &Path, ctx: &Ctx, s: &mut Vec<
     Ok(match cat {
         Category::Subtitle => {
             let out = tmp.join(format!("sub.{to}"));
-            s.push(Step::Subtitle { src: src.to_path_buf(), dst: out.clone() });
+            s.push(Step::Subtitle { src: src.to_path_buf(), dst: out.clone(), shift_ms: 0 });
             out
         }
         Category::Image if to == "pdf" => {
@@ -1109,7 +1584,15 @@ fn convert(src: &Path, from: &str, to: &str, tmp: &Path, ctx: &Ctx, s: &mut Vec<
                 let out = tmp.join("text.txt");
                 s.push(run(
                     Tool::Ghostscript,
-                    args!["-dSAFER", "-dBATCH", "-dNOPAUSE", "-dQUIET", "-sDEVICE=txtwrite", prefixed("-sOutputFile=", &out), src],
+                    args![
+                        "-dSAFER",
+                        "-dBATCH",
+                        "-dNOPAUSE",
+                        "-dQUIET",
+                        "-sDEVICE=txtwrite",
+                        prefixed("-sOutputFile=", &out),
+                        src
+                    ],
                 ));
                 out
             }
@@ -1249,7 +1732,17 @@ mod tests {
     }
 
     fn media(d: f64) -> Ctx {
-        Ctx { media: Some(MediaInfo { duration: d, has_video: true, has_audio: true, width: 640, height: 360, fps: 25.0 }), ..Ctx::default() }
+        Ctx {
+            media: Some(MediaInfo {
+                duration: d,
+                has_video: true,
+                has_audio: true,
+                width: 640,
+                height: 360,
+                fps: 25.0,
+            }),
+            ..Ctx::default()
+        }
     }
 
     #[test]
@@ -1395,11 +1888,66 @@ mod tests {
         let p = plan_of("tags", &[("title", "Hi there"), ("artist", "Z")], &["/in/s.mp3"], media(3.0)).unwrap();
         assert!(argv(&p)[0].1.contains("-map 0 -c copy -metadata title=Hi there -metadata artist=Z"));
 
-        let p = plan_of("pages", &[("spec", "3,1,2"), ("rotate", "1:90,3:90,2:180")], &["/in/d.pdf"], Ctx::default()).unwrap();
+        let p = plan_of("pages", &[("spec", "3,1,2"), ("rotate", "1:90,3:90,2:180")], &["/in/d.pdf"], Ctx::default())
+            .unwrap();
         assert_eq!(argv(&p)[0].1, "/in/d.pdf --pages . 3,1,2 -- --rotate=+90:1,3 --rotate=+180:2 /t/pages.pdf");
 
         let p = plan_of("strip", &[], &["/in/d.pdf"], Ctx::default()).unwrap();
         assert_eq!(argv(&p)[0], (Tool::Qpdf, "--empty --pages /in/d.pdf 1-z -- /t/clean.pdf".into()));
+    }
+
+    #[test]
+    fn v04_tools() {
+        let img = Ctx { dims: Some((1000, 800)), ..Ctx::default() };
+        let p = plan_of("watermark", &[("image", "/l/logo.png"), ("pos", "tr"), ("scale", "10")], &["/in/a.jpg"], img)
+            .unwrap();
+        assert!(argv(&p)[0]
+            .1
+            .contains("[1:v]scale=100:-1,format=rgba,colorchannelmixer=aa=0.8[wm];[0:v][wm]overlay=W-w-20:20[v]"));
+        assert!(plan_of("watermark", &[("image", "/l.png")], &["/in/a.jpg"], Ctx::default()).is_err(), "needs size");
+
+        let p = plan_of("burn-subs", &[], &["/in/s.srt", "/in/v.mp4"], media(10.0)).unwrap();
+        assert!(matches!(&p.steps[1], Step::Run { cwd: Some(c), .. } if c == Path::new("/t")));
+        assert!(argv(&p)[0].1.contains("-vf subtitles=subs.srt"));
+        assert_eq!(p.name, "v-subtitled.mp4");
+        let p = plan_of("add-subs", &[], &["/in/v.avi", "/in/s.vtt"], Ctx::default()).unwrap();
+        assert!(argv(&p)[0].1.ends_with("-c:s srt /t/subtitled.mkv"));
+        assert!(plan_of("add-subs", &[], &["/in/v.mp4", "/in/w.mp4"], Ctx::default()).is_err());
+
+        let long = media(600.0);
+        assert!(plan_of("reverse", &[], &["/in/v.mp4"], long).is_err());
+        let p = plan_of("loop", &[("count", "3")], &["/in/v.mp4"], Ctx::default()).unwrap();
+        assert!(argv(&p)[0].1.contains("-stream_loop 2 -i /in/v.mp4 -c copy"));
+        let p = plan_of("fade", &[("seconds", "2")], &["/in/v.mp4"], media(10.0)).unwrap();
+        assert!(argv(&p)[0].1.contains("fade=t=out:st=8:d=2") && argv(&p)[0].1.contains("afade=t=in"));
+
+        let p = plan_of(
+            "slideshow",
+            &[("seconds", "3")],
+            &["/in/a.jpg", "/in/b.heic"],
+            Ctx { dims: Some((4000, 3000)), ..Ctx::default() },
+        )
+        .unwrap();
+        let a = argv(&p);
+        assert_eq!(a[0].0, Tool::Vips, "heic decoded first");
+        assert!(a[1].1.contains("scale=1920:1440") && a[1].1.contains("concat=n=2:v=1:a=0[v]"));
+        assert_eq!(slideshow_canvas(Some((801, 601))), (800, 600));
+
+        let p = plan_of("protect", &[("password", "s3cret")], &["/in/d.pdf"], Ctx::default()).unwrap();
+        assert_eq!(argv(&p)[0].1, "--encrypt s3cret s3cret 256 -- /in/d.pdf /t/protected.pdf");
+        assert!(plan_of("transcribe", &[], &["/in/talk.mp3"], media(5.0)).is_err(), "needs a model");
+        let ctx = Ctx { whisper_model: Some("/m/ggml-base.bin".into()), ..media(5.0) };
+        let p = plan_of("transcribe", &[("lang", "ar")], &["/in/talk.mp3"], ctx).unwrap();
+        assert_eq!(
+            argv(&p)[1],
+            (Tool::Whisper, "-m /m/ggml-base.bin -f /t/speech.wav -l ar -osrt -of /t/transcript".into())
+        );
+        assert_eq!(p.name, "talk.srt");
+        let p = plan_of("icon", &[], &["/in/logo.png"], Ctx::default()).unwrap();
+        assert_eq!(argv(&p).len(), 7);
+        assert_eq!(p.name, "logo.ico");
+        let p = plan_of("shift-subs", &[("seconds", "2")], &["/in/s.vtt"], Ctx::default()).unwrap();
+        assert!(matches!(p.steps[0], Step::Subtitle { shift_ms: 2000, .. }));
     }
 
     #[test]

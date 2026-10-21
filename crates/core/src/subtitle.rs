@@ -43,6 +43,15 @@ fn fmt_ts(ms: u64, sep: char) -> String {
     format!("{:02}:{:02}:{:02}{sep}{:03}", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, ms % 1000)
 }
 
+/// Moves every cue by `ms`, clamping at zero.
+pub fn shift(cues: &mut [Cue], ms: i64) {
+    let mv = |t: u64| (t as i64 + ms).max(0) as u64;
+    for c in cues {
+        c.start_ms = mv(c.start_ms);
+        c.end_ms = mv(c.end_ms);
+    }
+}
+
 pub fn write(cues: &[Cue], to: &str) -> String {
     let mut out = String::new();
     match to {
@@ -71,7 +80,8 @@ pub fn write(cues: &[Cue], to: &str) -> String {
 mod tests {
     use super::*;
 
-    const SRT: &str = "1\r\n00:00:01,500 --> 00:00:04,000\r\nHello\r\nworld\r\n\r\n2\r\n00:01:00,000 --> 00:01:02,250\r\nمرحبا\r\n";
+    const SRT: &str =
+        "1\r\n00:00:01,500 --> 00:00:04,000\r\nHello\r\nworld\r\n\r\n2\r\n00:01:00,000 --> 00:01:02,250\r\nمرحبا\r\n";
 
     #[test]
     fn srt_vtt_roundtrip() {
@@ -83,6 +93,14 @@ mod tests {
         assert_eq!(parse(&vtt), cues);
         assert_eq!(write(&parse(&write(&cues, "srt")), "srt"), write(&cues, "srt"));
         assert_eq!(write(&cues, "txt"), "Hello\nworld\nمرحبا\n");
+    }
+
+    #[test]
+    fn shifting_clamps_at_zero() {
+        let mut cues = parse(SRT);
+        shift(&mut cues, -2000);
+        assert_eq!((cues[0].start_ms, cues[0].end_ms), (0, 2000));
+        assert_eq!(cues[1].start_ms, 58_000);
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 mod hook;
 
+use hook::Trigger;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,7 +16,6 @@ use tauri_plugin_dialog::DialogExt;
 use zeidex_core::ops::{self, Op};
 use zeidex_core::runner::{self, Event};
 use zeidex_core::{actions, b64, format, integrate, tools};
-use hook::Trigger;
 
 #[derive(Serialize)]
 struct ParamOut {
@@ -34,6 +34,8 @@ struct Choice {
     label: String,
     label_ar: String,
     params: Vec<ParamOut>,
+    /// Fixed options sent with the choice (saved recipes).
+    preset: HashMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -75,15 +77,34 @@ static REVEAL: AtomicBool = AtomicBool::new(true);
 static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 #[tauri::command]
-fn describe(paths: Vec<String>) -> Described {
+fn describe(app: AppHandle, paths: Vec<String>) -> Described {
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     let cat = format::common_category(&paths);
     let convert = format::common_targets(&paths)
         .into_iter()
-        .map(|t| Choice { kind: "convert", editor: false, id: t.into(), label: t.to_uppercase(), label_ar: t.to_uppercase(), params: vec![] })
+        .map(|t| Choice {
+            kind: "convert",
+            editor: false,
+            id: t.into(),
+            label: t.to_uppercase(),
+            label_ar: t.to_uppercase(),
+            params: vec![],
+            preset: HashMap::new(),
+        })
         .collect();
-    let tools = ops::tools_for(cat, paths.len())
+    let recipes = get_settings(app).recipes;
+    let saved = recipes.into_iter().map(|r| Choice {
+        kind: "tool",
+        editor: false,
+        id: "recipe".into(),
+        label: format!("★ {}", r.name),
+        label_ar: format!("★ {}", r.name),
+        params: vec![],
+        preset: HashMap::from([("steps".to_string(), r.steps)]),
+    });
+    let tools = ops::tools_for_paths(&paths)
         .into_iter()
+        .filter(|t| t.id != "recipe")
         .map(|t| Choice {
             kind: "tool",
             editor: ops::EDITOR_TOOLS.contains(&t.id),
@@ -95,11 +116,21 @@ fn describe(paths: Vec<String>) -> Described {
                 .iter()
                 .map(|p| ParamOut { key: p.key, label: p.label, label_ar: p.label_ar, default: p.default })
                 .collect(),
+            preset: HashMap::new(),
         })
+        .chain(saved)
         .collect();
     let actions = ACTIONS
         .iter()
-        .map(|(id, label, ar)| Choice { kind: "action", editor: false, id: (*id).into(), label: (*label).into(), label_ar: (*ar).into(), params: vec![] })
+        .map(|(id, label, ar)| Choice {
+            kind: "action",
+            editor: false,
+            id: (*id).into(),
+            label: (*label).into(),
+            label_ar: (*ar).into(),
+            params: vec![],
+            preset: HashMap::new(),
+        })
         .collect();
     Described { category: cat.map(|c| c.name()), convert, tools, actions }
 }
@@ -109,7 +140,13 @@ fn file_name(p: &Path) -> String {
 }
 
 #[tauri::command]
-fn run_job(app: AppHandle, paths: Vec<String>, kind: String, id: String, opts: HashMap<String, String>) -> Result<(), String> {
+fn run_job(
+    app: AppHandle,
+    paths: Vec<String>,
+    kind: String,
+    id: String,
+    opts: HashMap<String, String>,
+) -> Result<(), String> {
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     if paths.is_empty() {
         return Err("no files".into());
@@ -119,8 +156,26 @@ fn run_job(app: AppHandle, paths: Vec<String>, kind: String, id: String, opts: H
         return action(&app, &id, paths);
     }
     // Validate first: on bad options the wheel stays open so the form can show the error.
-    let op = if kind == "convert" { Op::Convert { to: id.clone() } } else { Op::parse(&id, &opts).map_err(|e| e.to_string())? };
+    let op = if kind == "convert" {
+        Op::Convert { to: id.clone() }
+    } else {
+        Op::parse(&id, &opts).map_err(|e| e.to_string())?
+    };
     hook::hide(&app);
+    if let Op::Rename { .. } = op {
+        let text = match runner::rename(&op, &paths) {
+            Ok(pairs) => {
+                pairs.iter().map(|(a, b)| format!("{} → {}", file_name(a), file_name(b))).collect::<Vec<_>>().join("\n")
+            }
+            Err(e) => e.to_string(),
+        };
+        show(&app, "jobs");
+        let _ = app.emit(
+            "job",
+            JobEvent::Text { job: NEXT_JOB.fetch_add(1, Ordering::Relaxed), title: "rename".into(), text },
+        );
+        return Ok(());
+    }
     let title = if kind == "convert" { format!("→ {}", id.to_uppercase()) } else { id };
     spawn_job(app, op, paths, title, None);
     Ok(())
@@ -139,18 +194,8 @@ fn spawn_job(app: AppHandle, op: Op, paths: Vec<PathBuf>, title: String, cleanup
             }
             return;
         }
-        let mut index = 0;
         let results = runner::run(&op, &paths, |e| {
-            let ev = match e {
-                Event::Start { index: i, total, file } => {
-                    index = i;
-                    JobEvent::Start { job, index, total, file, title: title.clone() }
-                }
-                Event::Progress(fraction) => JobEvent::Progress { job, index, fraction },
-                Event::Done(p) => JobEvent::Done { job, index, output: p.to_string_lossy().into_owned() },
-                Event::Failed { error, .. } => JobEvent::Failed { job, index, error },
-            };
-            let _ = app.emit("job", ev);
+            let _ = app.emit("job", job_event(job, &title, e));
         });
         if let Some(tmp) = cleanup {
             let _ = std::fs::remove_file(tmp);
@@ -161,6 +206,15 @@ fn spawn_job(app: AppHandle, op: Op, paths: Vec<PathBuf>, title: String, cleanup
             }
         }
     });
+}
+
+fn job_event(job: u64, title: &str, e: Event) -> JobEvent {
+    match e {
+        Event::Start { index, total, file } => JobEvent::Start { job, index, total, file, title: title.to_string() },
+        Event::Progress { index, fraction } => JobEvent::Progress { job, index, fraction },
+        Event::Done { index, output } => JobEvent::Done { job, index, output: output.to_string_lossy().into_owned() },
+        Event::Failed { index, error, .. } => JobEvent::Failed { job, index, error },
+    }
 }
 
 fn action(app: &AppHandle, id: &str, paths: Vec<PathBuf>) -> Result<(), String> {
@@ -176,7 +230,9 @@ fn action(app: &AppHandle, id: &str, paths: Vec<PathBuf>) -> Result<(), String> 
             let app = app.clone();
             // The folder picker blocks; keep it off the IPC thread.
             std::thread::spawn(move || {
-                let Some(dir) = app.dialog().file().blocking_pick_folder().and_then(|d| d.into_path().ok()) else { return };
+                let Some(dir) = app.dialog().file().blocking_pick_folder().and_then(|d| d.into_path().ok()) else {
+                    return;
+                };
                 if let Err(e) = actions::move_to(&paths, &dir) {
                     let _ = app.emit("job", JobEvent::Text { job: 0, title: "Move".into(), text: e.to_string() });
                 }
@@ -264,7 +320,16 @@ async fn editor_state() -> Result<EditorState, String> {
     if tool == "pages" {
         let pages = runner::pdf_thumbnails(&src, THUMB_DPI).map_err(|e| e.to_string())?;
         let pages = pages.iter().map(|p| data_url(p)).collect();
-        return Ok(EditorState { paths, tool, video: false, width: 0, height: 0, duration: 0.0, preview: String::new(), pages });
+        return Ok(EditorState {
+            paths,
+            tool,
+            video: false,
+            width: 0,
+            height: 0,
+            duration: 0.0,
+            preview: String::new(),
+            pages,
+        });
     }
     let video = format::category_of(&src) == Some(format::Category::Video);
     let (width, height) = runner::dimensions(&src).ok_or("could not read the size")?;
@@ -322,17 +387,88 @@ fn close_editor(app: AppHandle) {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+struct Recipe {
+    name: String,
+    steps: String,
+}
+
+/// Process files arriving in `dir` with `steps` (one step or a recipe).
+#[derive(Clone, Serialize, Deserialize)]
+struct WatchRule {
+    dir: String,
+    #[serde(default)]
+    exts: String,
+    steps: String,
+    #[serde(default = "yes")]
+    enabled: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct Settings {
     convert: Trigger,
     tools: Trigger,
     actions: Trigger,
     reveal: bool,
+    recipes: Vec<Recipe>,
+    watch: Vec<WatchRule>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { convert: Trigger::Shift, tools: Trigger::Alt, actions: Trigger::Control, reveal: true }
+        Settings {
+            convert: Trigger::Shift,
+            tools: Trigger::Alt,
+            actions: Trigger::Control,
+            reveal: true,
+            recipes: vec![Recipe {
+                name: "Web image".into(),
+                steps: "resize max=1600 | compress percent=60 | strip".into(),
+            }],
+            watch: vec![],
+        }
+    }
+}
+
+/// Bumped on every settings save; watcher threads of an older generation stop.
+static WATCH_GEN: AtomicU64 = AtomicU64::new(0);
+/// Seconds between folder polls.
+const WATCH_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn start_watchers(app: &AppHandle, rules: &[WatchRule]) {
+    let generation = WATCH_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    for rule in rules.iter().filter(|r| r.enabled) {
+        let Ok(op) = ops::parse_step(&rule.steps) else { continue };
+        let dir = PathBuf::from(&rule.dir);
+        let exts: Vec<String> = rule
+            .exts
+            .split(',')
+            .map(|e| e.trim().trim_start_matches('.').to_ascii_lowercase())
+            .filter(|e| !e.is_empty())
+            .collect();
+        let app = app.clone();
+        let title = format!("watch: {}", file_name(&dir));
+        std::thread::spawn(move || {
+            let mut w = zeidex_core::watch::Watcher::new(&dir, &exts);
+            while WATCH_GEN.load(Ordering::SeqCst) == generation {
+                for file in w.poll() {
+                    let job = NEXT_JOB.fetch_add(1, Ordering::Relaxed);
+                    for out in runner::run(&op, &[file], |e| {
+                        let _ = app.emit("job", job_event(job, &title, e));
+                    })
+                    .into_iter()
+                    .flatten()
+                    {
+                        w.mark_done(&out);
+                    }
+                }
+                std::thread::sleep(WATCH_POLL);
+            }
+        });
     }
 }
 
@@ -359,13 +495,36 @@ fn set_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     if keys[0] == keys[1] || keys[1] == keys[2] || keys[0] == keys[2] {
         return Err("each wheel needs its own key".into());
     }
+    for r in &settings.recipes {
+        if r.name.trim().is_empty() {
+            return Err("every recipe needs a name".into());
+        }
+        ops::parse_recipe(&r.steps).map_err(|e| format!("{}: {e}", r.name))?;
+    }
+    for w in &settings.watch {
+        if !Path::new(&w.dir).is_dir() {
+            return Err(format!("{} is not a folder", w.dir));
+        }
+        ops::parse_step(&w.steps).map_err(|e| format!("{}: {e}", w.dir))?;
+    }
     let path = settings_path(&app).ok_or("no config directory")?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&path, serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    std::fs::write(&path, serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
     apply(&settings);
+    start_watchers(&app, &settings.watch);
     Ok(())
+}
+
+#[tauri::command]
+async fn pick_folder(app: AppHandle) -> Option<String> {
+    app.dialog()
+        .file()
+        .blocking_pick_folder()
+        .and_then(|f| f.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -403,7 +562,11 @@ fn reveal(path: String) -> Result<(), String> {
 fn doctor() -> Vec<ToolStatus> {
     tools::Tool::ALL
         .iter()
-        .map(|t| ToolStatus { name: t.label(), path: tools::locate(*t).map(|p| p.to_string_lossy().into_owned()), hint: t.install_hint() })
+        .map(|t| ToolStatus {
+            name: t.label(),
+            path: tools::locate(*t).map(|p| p.to_string_lossy().into_owned()),
+            hint: t.install_hint(),
+        })
         .collect()
 }
 
@@ -482,9 +645,31 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_drag::init())
         .invoke_handler(tauri::generate_handler![
-            describe, run_job, hide_wheel, keep_wheel, wheel_at_shelf, reveal, doctor, hook_ok, integrate_shell,
-            pick_files, take_pending, open_in_home, show_home, open_editor, editor_state, save_annotation,
-            close_editor, get_settings, set_settings, detect_text, float_add, float_list, float_clear, drag_icon
+            describe,
+            run_job,
+            hide_wheel,
+            keep_wheel,
+            wheel_at_shelf,
+            reveal,
+            doctor,
+            hook_ok,
+            integrate_shell,
+            pick_files,
+            take_pending,
+            open_in_home,
+            show_home,
+            open_editor,
+            editor_state,
+            save_annotation,
+            close_editor,
+            get_settings,
+            set_settings,
+            detect_text,
+            float_add,
+            float_list,
+            float_clear,
+            drag_icon,
+            pick_folder
         ])
         .on_window_event(|window, event| {
             // Closing a window keeps the app alive in the tray, like a menu-bar app.
@@ -498,7 +683,9 @@ pub fn run() {
                 tools::set_bundle_dirs(vec![res.join("engines")]);
             }
             let handle = app.handle().clone();
-            apply(&get_settings(handle.clone()));
+            let settings = get_settings(handle.clone());
+            apply(&settings);
+            start_watchers(&handle, &settings.watch);
 
             let menu = Menu::with_items(
                 app,
@@ -529,7 +716,8 @@ pub fn run() {
             if let Some(shelf) = app.get_webview_window("shelf") {
                 if let Ok(Some(m)) = shelf.primary_monitor() {
                     let (p, s) = (m.position(), m.size());
-                    let _ = shelf.set_position(PhysicalPosition::new(p.x + s.width as i32 - 160, p.y + s.height as i32 - 220));
+                    let _ = shelf
+                        .set_position(PhysicalPosition::new(p.x + s.width as i32 - 160, p.y + s.height as i32 - 220));
                 }
             }
 

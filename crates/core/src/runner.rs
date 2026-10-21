@@ -11,57 +11,120 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::thread;
 
+/// Progress of one unit (`index`) of a job. Units can run in parallel, so events of
+/// different units interleave.
 #[derive(Debug)]
 pub enum Event {
     Start { index: usize, total: usize, file: String },
-    Progress(f32),
-    Done(PathBuf),
-    Failed { file: String, error: String },
+    Progress { index: usize, fraction: f32 },
+    Done { index: usize, output: PathBuf },
+    Failed { index: usize, file: String, error: String },
+}
+
+/// Default number of files processed at once. Engines are multithreaded themselves, so a
+/// few parallel units are enough to keep every core busy on batches of small files.
+pub fn default_parallelism() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get()).div_ceil(2).clamp(1, 4)
 }
 
 /// Runs `op` on `inputs`: one output per file, or one for the whole selection for multi ops.
-pub fn run(op: &Op, inputs: &[PathBuf], mut on: impl FnMut(Event)) -> Vec<Result<PathBuf>> {
+pub fn run(op: &Op, inputs: &[PathBuf], on: impl FnMut(Event) + Send) -> Vec<Result<PathBuf>> {
+    run_with(op, inputs, default_parallelism(), on)
+}
+
+/// `run` with an explicit number of files processed at the same time.
+pub fn run_with(op: &Op, inputs: &[PathBuf], parallel: usize, on: impl FnMut(Event) + Send) -> Vec<Result<PathBuf>> {
     let inputs: Vec<PathBuf> = inputs.iter().map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone())).collect();
     let units: Vec<Vec<PathBuf>> =
         if op.is_multi() { vec![inputs] } else { inputs.into_iter().map(|p| vec![p]).collect() };
     let total = units.len();
-    let mut results = Vec::with_capacity(total);
-    for (index, unit) in units.iter().enumerate() {
-        let file = unit[0].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        on(Event::Start { index, total, file: file.clone() });
-        let r = run_unit(op, unit, &mut on);
-        match &r {
-            Ok(p) => on(Event::Done(p.clone())),
-            Err(e) => on(Event::Failed { file, error: e.to_string() }),
+    let on = Mutex::new(on);
+    let emit = |e: Event| (on.lock().unwrap_or_else(|p| p.into_inner()))(e);
+    let next = AtomicUsize::new(0);
+    let results: Vec<Mutex<Option<Result<PathBuf>>>> = (0..total).map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..parallel.clamp(1, total.max(1)) {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(unit) = units.get(index) else { break };
+                let file = unit[0].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                emit(Event::Start { index, total, file: file.clone() });
+                let r = run_unit(op, unit, &mut |fraction| emit(Event::Progress { index, fraction }));
+                match &r {
+                    Ok(p) => emit(Event::Done { index, output: p.clone() }),
+                    Err(e) => emit(Event::Failed { index, file, error: e.to_string() }),
+                }
+                *results[index].lock().unwrap_or_else(|p| p.into_inner()) = Some(r);
+            });
         }
-        results.push(r);
-    }
+    });
     results
+        .into_iter()
+        .map(|m| {
+            m.into_inner()
+                .unwrap_or_else(|p| p.into_inner())
+                .unwrap_or_else(|| Err(Error::Unsupported("not run".into())))
+        })
+        .collect()
 }
 
 static JOB: AtomicUsize = AtomicUsize::new(0);
+/// Serialises "pick a free name + rename" so parallel units never claim the same name.
+static PLACE: Mutex<()> = Mutex::new(());
 
-fn run_unit(op: &Op, inputs: &[PathBuf], on: &mut dyn FnMut(Event)) -> Result<PathBuf> {
+fn run_unit(op: &Op, inputs: &[PathBuf], progress: &mut dyn FnMut(f32)) -> Result<PathBuf> {
     let src = &inputs[0];
     if !src.exists() {
         return Err(Error::BadOption(format!("{} does not exist", src.display())));
+    }
+    match op {
+        Op::Checksum => return checksum(src),
+        Op::Rename { .. } => {
+            return Err(Error::Unsupported("rename works on the whole selection: use runner::rename".into()))
+        }
+        _ => {}
     }
     let dest = src.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
     // Scratch dir beside the output so the final rename never crosses filesystems.
     let tmp = dest.join(format!(".zeidex-{}-{}", std::process::id(), JOB.fetch_add(1, Ordering::Relaxed)));
     fs::create_dir_all(&tmp)?;
     let result = (|| {
-        let ctx = probe(op, inputs);
-        let plan = plan::plan(op, inputs, &ctx, &tmp)?;
-        let n = plan.steps.len().max(1) as f32;
-        for (i, step) in plan.steps.iter().enumerate() {
-            exec(step, &mut |f| on(Event::Progress((i as f32 + f) / n)))?;
+        let steps: Vec<&Op> = match op {
+            Op::Recipe(steps) => steps.iter().collect(),
+            single => vec![single],
+        };
+        let mut input = inputs.to_vec();
+        let mut last = None;
+        for (k, step) in steps.iter().enumerate() {
+            let stage = tmp.join(format!("stage{k}"));
+            fs::create_dir_all(&stage)?;
+            let ctx = probe(step, &input);
+            let plan = plan::plan(step, &input, &ctx, &stage)?;
+            let n = (plan.steps.len().max(1) * steps.len()) as f32;
+            let base = (k * plan.steps.len().max(1)) as f32;
+            for (i, s) in plan.steps.iter().enumerate() {
+                exec(s, &mut |f| progress((base + i as f32 + f) / n))?;
+            }
+            if !plan.output.exists() {
+                return Err(Error::Failed { tool: "engine".into(), detail: "no output file was produced".into() });
+            }
+            if k + 1 < steps.len() {
+                if plan.output.is_dir() {
+                    return Err(Error::Unsupported("recipe steps must produce one file".into()));
+                }
+                // Keep the original stem so the next step (and the final name) build on it.
+                let ext = plan.output.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+                let carried = stage.join(format!("{}.{ext}", stem_of(src)));
+                fs::rename(&plan.output, &carried)?;
+                input = vec![carried];
+            }
+            last = Some(plan);
         }
-        if !plan.output.exists() {
-            return Err(Error::Failed { tool: "engine".into(), detail: "no output file was produced".into() });
-        }
+        let plan = last.ok_or_else(|| Error::Unsupported("empty recipe".into()))?;
+        let _guard = PLACE.lock().unwrap_or_else(|p| p.into_inner());
         let fin = unique_path(&dest.join(&plan.name));
         fs::rename(&plan.output, &fin)?;
         Ok(fin)
@@ -70,16 +133,43 @@ fn run_unit(op: &Op, inputs: &[PathBuf], on: &mut dyn FnMut(Event)) -> Result<Pa
     result
 }
 
+/// Writes `<file>.sha256` (sha256sum format) beside the file and returns its path.
+fn checksum(src: &Path) -> Result<PathBuf> {
+    if src.is_dir() {
+        return Err(Error::Unsupported("checksums are for files".into()));
+    }
+    let digest = crate::sha256::of_reader(fs::File::open(src)?)?;
+    let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let _guard = PLACE.lock().unwrap_or_else(|p| p.into_inner());
+    let out = unique_path(&src.with_file_name(format!("{name}.sha256")));
+    fs::write(&out, format!("{digest}  {name}\n"))?;
+    Ok(out)
+}
+
+/// Batch rename in place; returns (old, new) pairs.
+pub fn rename(op: &Op, inputs: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>> {
+    let Op::Rename { pattern, start } = op else { return Err(Error::Unsupported("not a rename".into())) };
+    let plan = crate::rename::plan(inputs, pattern, *start)?;
+    crate::rename::apply(&plan)?;
+    Ok(plan)
+}
+
 fn exec(step: &Step, report: &mut dyn FnMut(f32)) -> Result<()> {
     match step {
         Step::Run { tool, args, cwd, progress_secs } => run_tool(*tool, args, cwd.as_deref(), *progress_secs, report),
         Step::MkDir(p) => Ok(fs::create_dir_all(p)?),
         Step::Copy { src, dst } => Ok(fs::copy(src, dst).map(|_| ())?),
         Step::WriteFile { path, contents } => Ok(fs::write(path, contents)?),
-        Step::Subtitle { src, dst } => {
+        Step::Subtitle { src, dst, shift_ms } => {
             let text = String::from_utf8_lossy(&fs::read(src)?).into_owned();
             let to = dst.extension().and_then(|e| e.to_str()).unwrap_or("srt");
-            Ok(fs::write(dst, subtitle::write(&subtitle::parse(&text), to))?)
+            let mut cues = subtitle::parse(&text);
+            subtitle::shift(&mut cues, *shift_ms);
+            Ok(fs::write(dst, subtitle::write(&cues, to))?)
+        }
+        Step::Ico { pngs, dst } => {
+            let data = pngs.iter().map(|(s, p)| Ok((*s, fs::read(p)?))).collect::<std::io::Result<Vec<_>>>()?;
+            Ok(crate::ico::write_ico(&data, &mut fs::File::create(dst)?)?)
         }
         Step::JpegsToPdf { jpegs, dst } => {
             let data = jpegs.iter().map(fs::read).collect::<std::io::Result<Vec<_>>>()?;
@@ -119,7 +209,11 @@ fn command(bin: &Path) -> Command {
 }
 
 fn run_tool(
-    tool: Tool, args: &[OsString], cwd: Option<&Path>, progress_secs: Option<f64>, report: &mut dyn FnMut(f32),
+    tool: Tool,
+    args: &[OsString],
+    cwd: Option<&Path>,
+    progress_secs: Option<f64>,
+    report: &mut dyn FnMut(f32),
 ) -> Result<()> {
     let bin = tools::require(tool)?;
     let mut cmd = command(&bin);
@@ -157,7 +251,10 @@ fn run_tool(
 pub fn capture(tool: Tool, args: &[&str], path: &Path) -> Result<String> {
     let out = command(&tools::require(tool)?).args(args).arg(path).stdin(Stdio::null()).output()?;
     if !out.status.success() {
-        return Err(Error::Failed { tool: tool.label().into(), detail: String::from_utf8_lossy(&out.stderr).trim().into() });
+        return Err(Error::Failed {
+            tool: tool.label().into(),
+            detail: String::from_utf8_lossy(&out.stderr).trim().into(),
+        });
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -177,10 +274,17 @@ fn probe(op: &Op, inputs: &[PathBuf]) -> Ctx {
         // Full-size render (the preview never upscales), so OCR boxes are already in source pixels.
         Some(Category::Image) => {
             if let Op::Redact { auto: Some(lang), .. } = op {
-                ctx.detected = preview_png(src, u32::MAX).and_then(|png| detect_text_png(&png, lang)).unwrap_or_default();
+                ctx.detected =
+                    preview_png(src, u32::MAX).and_then(|png| detect_text_png(&png, lang)).unwrap_or_default();
             }
         }
         _ => {}
+    }
+    if matches!(op, Op::Watermark { .. } | Op::Slideshow { .. }) {
+        ctx.dims = dimensions(src);
+    }
+    if matches!(op, Op::Transcribe { .. }) {
+        ctx.whisper_model = tools::whisper_model();
     }
     ctx
 }
@@ -188,7 +292,14 @@ fn probe(op: &Op, inputs: &[PathBuf]) -> Ctx {
 pub fn probe_media(src: &Path) -> Option<MediaInfo> {
     let out = capture(
         Tool::Ffprobe,
-        &["-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height,avg_frame_rate", "-of", "default=noprint_wrappers=1"],
+        &[
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration:stream=codec_type,width,height,avg_frame_rate",
+            "-of",
+            "default=noprint_wrappers=1",
+        ],
         src,
     )
     .ok()?;
@@ -239,7 +350,11 @@ pub fn dimensions(src: &Path) -> Option<(u32, u32)> {
 
 /// PNG preview no larger than `max` px: the image itself, or a frame from a video.
 pub fn preview_png(src: &Path, max: u32) -> Result<Vec<u8>> {
-    let out = std::env::temp_dir().join(format!("zeidex-preview-{}-{}.png", std::process::id(), JOB.fetch_add(1, Ordering::Relaxed)));
+    let out = std::env::temp_dir().join(format!(
+        "zeidex-preview-{}-{}.png",
+        std::process::id(),
+        JOB.fetch_add(1, Ordering::Relaxed)
+    ));
     let m = max.to_string();
     let via_ffmpeg = |seek: &str| -> Result<()> {
         let scale = format!("scale='min({max},iw)':'min({max},ih)':force_original_aspect_ratio=decrease");
@@ -257,8 +372,19 @@ pub fn preview_png(src: &Path, max: u32) -> Result<Vec<u8>> {
             let at = probe_media(src).map_or(0.0, |m| (m.duration / 3.0).min(5.0));
             via_ffmpeg(&format!("{at:.2}"))
         }
-        Some(Category::Image) if tools::locate(Tool::Vips).is_some() && crate::format::ext_of(src).as_deref() != Some("bmp") => {
-            let args: Vec<OsString> = vec!["thumbnail".into(), src.as_os_str().to_owned(), out.as_os_str().to_owned(), m.clone().into(), "--height".into(), m.into(), "--size".into(), "down".into()];
+        Some(Category::Image)
+            if tools::locate(Tool::Vips).is_some() && crate::format::ext_of(src).as_deref() != Some("bmp") =>
+        {
+            let args: Vec<OsString> = vec![
+                "thumbnail".into(),
+                src.as_os_str().to_owned(),
+                out.as_os_str().to_owned(),
+                m.clone().into(),
+                "--height".into(),
+                m.into(),
+                "--size".into(),
+                "down".into(),
+            ];
             run_tool(Tool::Vips, &args, None, None, &mut |_| {})
         }
         Some(Category::Image) => via_ffmpeg("0"),
@@ -270,7 +396,11 @@ pub fn preview_png(src: &Path, max: u32) -> Result<Vec<u8>> {
 }
 
 fn scratch_file(tag: &str, ext: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("zeidex-{tag}-{}-{}.{ext}", std::process::id(), JOB.fetch_add(1, Ordering::Relaxed)))
+    std::env::temp_dir().join(format!(
+        "zeidex-{tag}-{}-{}.{ext}",
+        std::process::id(),
+        JOB.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 /// Text lines found by Tesseract in a PNG, as boxes in that PNG's pixels (for auto-redact).
@@ -288,7 +418,10 @@ pub fn detect_text_png(png: &[u8], lang: &str) -> Result<Vec<Rect>> {
     let _ = fs::remove_file(&input);
     let out = out?;
     if !out.status.success() {
-        return Err(Error::Failed { tool: "Tesseract".into(), detail: String::from_utf8_lossy(&out.stderr).trim().into() });
+        return Err(Error::Failed {
+            tool: "Tesseract".into(),
+            detail: String::from_utf8_lossy(&out.stderr).trim().into(),
+        });
     }
     Ok(parse_tsv(&String::from_utf8_lossy(&out.stdout)))
 }
@@ -334,8 +467,14 @@ pub fn pdf_thumbnails(src: &Path, dpi: u32) -> Result<Vec<Vec<u8>>> {
     let mut out_arg = OsString::from("-sOutputFile=");
     out_arg.push(dir.join("p-%04d.png").as_os_str());
     let args: Vec<OsString> = vec![
-        "-dSAFER".into(), "-dBATCH".into(), "-dNOPAUSE".into(), "-dQUIET".into(), "-sDEVICE=png16m".into(),
-        format!("-r{dpi}").into(), out_arg, src.as_os_str().to_owned(),
+        "-dSAFER".into(),
+        "-dBATCH".into(),
+        "-dNOPAUSE".into(),
+        "-dQUIET".into(),
+        "-sDEVICE=png16m".into(),
+        format!("-r{dpi}").into(),
+        out_arg,
+        src.as_os_str().to_owned(),
     ];
     let result = run_tool(Tool::Ghostscript, &args, None, None, &mut |_| {}).and_then(|_| {
         let mut files: Vec<PathBuf> = fs::read_dir(&dir)?.flatten().map(|e| e.path()).collect();
@@ -350,7 +489,9 @@ pub fn pdf_thumbnails(src: &Path, dpi: u32) -> Result<Vec<Vec<u8>>> {
 pub fn info(src: &Path) -> Result<String> {
     match category_of(src) {
         Some(Category::Image) => capture(Tool::VipsHeader, &["-a"], src),
-        Some(Category::Video | Category::Audio) => capture(Tool::Ffprobe, &["-hide_banner", "-show_format", "-show_streams"], src),
+        Some(Category::Video | Category::Audio) => {
+            capture(Tool::Ffprobe, &["-hide_banner", "-show_format", "-show_streams"], src)
+        }
         Some(Category::Pdf) => {
             let pages = capture(Tool::Qpdf, &["--show-npages"], src)?;
             let check = capture(Tool::Qpdf, &["--check"], src).unwrap_or_default();
@@ -369,10 +510,7 @@ pub fn unique_path(p: &Path) -> PathBuf {
     let stem = stem_of(p);
     let rest = &name[stem.len()..];
     let parent = p.parent().unwrap_or(Path::new("."));
-    (2..)
-        .map(|n| parent.join(format!("{stem} ({n}){rest}")))
-        .find(|c| !c.exists())
-        .expect("unbounded range")
+    (2..).map(|n| parent.join(format!("{stem} ({n}){rest}"))).find(|c| !c.exists()).expect("unbounded range")
 }
 
 #[cfg(test)]
@@ -394,10 +532,7 @@ mod tests {
                    5\t1\t1\t1\t1\t2\t70\t22\t60\t26\t90\tworld\n\
                    5\t1\t1\t1\t2\t1\t10\t80\t40\t20\t12\tnoise\n\
                    5\t1\t2\t1\t1\t1\t2\t2\t30\t10\t88\tTop\n";
-        assert_eq!(
-            parse_tsv(tsv),
-            vec![Rect { x: 6, y: 16, w: 128, h: 38 }, Rect { x: 0, y: 0, w: 36, h: 16 }]
-        );
+        assert_eq!(parse_tsv(tsv), vec![Rect { x: 6, y: 16, w: 128, h: 38 }, Rect { x: 0, y: 0, w: 36, h: 16 }]);
     }
 
     /// Needs Ghostscript (and Tesseract for the OCR half); skipped when they are missing.
@@ -457,13 +592,53 @@ mod tests {
         fs::write(d.join("talk.vtt"), "taken").unwrap();
         let mut events = Vec::new();
         let r = run(&Op::Convert { to: "vtt".into() }, std::slice::from_ref(&src), |e| events.push(format!("{e:?}")));
+        assert!(events.iter().all(|e| e.contains("index: 0")));
         let out = r[0].as_ref().unwrap();
         assert_eq!(out, &d.join("talk (2).vtt"));
         assert!(fs::read_to_string(out).unwrap().starts_with("WEBVTT"));
         assert!(fs::read_to_string(&src).unwrap().contains("00:00:01,000"), "original untouched");
-        let leftovers: Vec<_> = fs::read_dir(&d).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with(".zeidex")).collect();
+        let leftovers: Vec<_> = fs::read_dir(&d)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".zeidex"))
+            .collect();
         assert!(leftovers.is_empty());
         assert!(events.first().unwrap().starts_with("Start") && events.last().unwrap().starts_with("Done"));
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn parallel_batch_recipe_checksum_rename() {
+        let d = scratch("batch");
+        let files: Vec<PathBuf> = (0..6).map(|i| d.join(format!("s{i}.srt"))).collect();
+        for f in &files {
+            fs::write(f, "1\n00:00:01,000 --> 00:00:02,000\nHi\n").unwrap();
+        }
+        let seen = Mutex::new(Vec::new());
+        let r = run_with(&Op::Convert { to: "vtt".into() }, &files, 3, |e| {
+            if let Event::Done { index, .. } = e {
+                seen.lock().unwrap().push(index);
+            }
+        });
+        assert!(r.iter().all(|x| x.is_ok()));
+        assert_eq!(r[4].as_ref().unwrap(), &d.join("s4.vtt"), "results keep input order");
+        let mut idx = seen.into_inner().unwrap();
+        idx.sort();
+        assert_eq!(idx, vec![0, 1, 2, 3, 4, 5]);
+
+        // recipe: shift then convert, name built on the original stem
+        let recipe = crate::ops::parse_recipe("shift-subs seconds=2 | convert to=vtt").unwrap();
+        let out = run(&Op::Recipe(recipe), &files[..1], |_| {}).remove(0).unwrap();
+        assert_eq!(out, d.join("s0 (2).vtt"));
+        assert!(fs::read_to_string(&out).unwrap().contains("00:00:03.000 --> 00:00:04.000"));
+
+        let sum = run(&Op::Checksum, &files[..1], |_| {}).remove(0).unwrap();
+        let text = fs::read_to_string(&sum).unwrap();
+        assert!(text.ends_with("  s0.srt\n") && text.len() == 64 + 2 + 6 + 1);
+
+        let pairs = rename(&Op::Rename { pattern: "clip-{n:2}".into(), start: 1 }, &files[..2]).unwrap();
+        assert_eq!(pairs[1].1, d.join("clip-02.srt"));
+        assert!(d.join("clip-01.srt").exists() && !files[0].exists());
         fs::remove_dir_all(&d).unwrap();
     }
 

@@ -97,6 +97,43 @@ check archive               7z -- tool extract archive.tar.gz
 [[ -d "clip parts (2)" ]] && n=$(ls "clip parts (2)" | wc -l) && [[ $n -ne 3 ]] && { echo "FAIL  split --at gave $n parts, want 3"; fail=$((fail + 1)); }
 [[ -f joined.mp4 ]] && ! ffprobe -v error -show_entries stream=width -of csv=p=0 joined.mp4 | grep -q 640 && { echo "FAIL  join did not use the first clip's canvas"; fail=$((fail + 1)); }
 [[ -f clip-tagged.mp4 ]] && ! ffprobe -v error -show_entries format_tags=title -of csv=p=0 clip-tagged.mp4 | grep -q "Zeidex test" && { echo "FAIL  tags not written"; fail=$((fail + 1)); }
+# ---- v0.4: beyond Tangerine ----
+cp photo.png logo.png
+check photo-watermarked.png ffmpeg ffprobe -- tool watermark --image logo.png --pos tr --scale 15 photo.png
+check clip-watermarked.mp4  ffmpeg ffprobe -- tool watermark --image logo.png --opacity 0.5 clip.mp4
+check photo.ico             ffmpeg -- tool icon photo.png
+check slideshow.mp4         ffmpeg ffprobe -- tool slideshow --seconds 1 photo.png shot.bmp
+check clip-faded.mp4        ffmpeg ffprobe -- tool fade --seconds 0.5 clip.mp4
+check clip-reversed.mp4     ffmpeg ffprobe -- tool reverse clip.mp4
+check clip-x2.mp4           ffmpeg -- tool loop --count 2 clip.mp4
+check clip-stabilized.mp4   ffmpeg -- tool stabilize clip.mp4
+check "clip frames"         ffmpeg -- tool frames --fps 2 clip.mp4
+check clip-subtitled.mp4    ffmpeg -- tool add-subs clip.mp4 subs.srt
+cp clip-subtitled.mp4 withsubs.mp4
+check withsubs.srt          ffmpeg -- tool extract-subs withsubs.mp4
+check "clip-subtitled (2).mp4" ffmpeg -- tool burn-subs clip.mp4 subs.srt
+check subs-shifted.srt      -- tool shift-subs --seconds 2 subs.srt
+check clip.mp4.sha256       -- tool checksum clip.mp4
+check clip-faded-trimmed.mp4 ffmpeg ffprobe -- recipe "fade seconds=0.5 | trim start=1 end=3" clip-faded.mp4
+if has ffmpeg; then
+  cp voice.wav a1.wav; cp voice.wav a2.wav; cp voice.wav a3.wav
+  if "$Z" convert --to mp3 --jobs 3 a1.wav a2.wav a3.wav >/dev/null 2>err.log && [[ -s a1.mp3 && -s a2.mp3 && -s a3.mp3 ]]; then
+    echo "ok    convert --jobs 3 (parallel batch)"; pass=$((pass + 1))
+  else echo "FAIL  parallel batch"; fail=$((fail + 1)); fi
+  mkdir inbox
+  "$Z" watch inbox --ext wav --do "convert to=flac" >watch.log 2>&1 &
+  wpid=$!
+  sleep 1; cp voice.wav inbox/new.wav
+  for _ in $(seq 1 15); do [[ -s inbox/new.flac ]] && break; sleep 1; done
+  kill $wpid 2>/dev/null
+  if [[ -s inbox/new.flac ]]; then echo "ok    watch folder"; pass=$((pass + 1)); else echo "FAIL  watch folder"; cat watch.log; fail=$((fail + 1)); fi
+fi
+mkdir ren && touch ren/x.txt ren/y.txt
+if "$Z" tool rename --pattern "note-{n:2}" ren/x.txt ren/y.txt >/dev/null && [[ -f ren/note-01.txt && -f ren/note-02.txt ]]; then
+  echo "ok    batch rename"; pass=$((pass + 1))
+else echo "FAIL  batch rename"; fail=$((fail + 1)); fi
+[[ -f clip.mp4.sha256 ]] && has sha256sum && ! sha256sum -c clip.mp4.sha256 >/dev/null 2>&1 && { echo "FAIL  checksum does not verify with sha256sum"; fail=$((fail + 1)); }
+[[ -f photo.ico ]] && has file && ! file photo.ico | grep -qi "icon" && { echo "FAIL  ico not recognised"; fail=$((fail + 1)); }
 grep -qi "ocr test" doc-ocr.txt 2>/dev/null || { has tesseract && { echo "FAIL  OCR text mismatch"; fail=$((fail + 1)); }; }
 echo "passed=$pass failed=$fail skipped=$skip"
 [[ $fail -eq 0 ]]

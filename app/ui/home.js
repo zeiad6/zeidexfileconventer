@@ -38,7 +38,7 @@ function render() {
 function choose(it) {
   if (it.editor) return invoke('open_editor', { paths, tool: it.id });
   const go = (opts) => invoke('run_job', { paths, kind: it.kind, id: it.id, opts });
-  if (!it.params.length) return go({});
+  if (!it.params.length) return go(it.preset || {});
   window.ZForm($('form'), it, async (opts) => { await go(opts); $('form').hidden = true; }, () => { $('form').hidden = true; });
 }
 
@@ -87,14 +87,61 @@ async function settings() {
   const rev = make('label', { className: 'check' });
   rev.append(make('input', { type: 'checkbox', name: 'reveal', checked: s.reveal }), window.ZT('reveal'));
   box.append(rev);
-  box.onchange = async () => {
-    const f = new FormData(box);
-    const next = { convert: f.get('convert'), tools: f.get('tools'), actions: f.get('actions'), reveal: f.get('reveal') === 'on' };
+
+  // Recipes and watch rules are lists of rows; each row keeps its own inputs.
+  const recipeRows = make('div', { className: 'rows' });
+  const recipeRow = (r = { name: '', steps: '' }) => {
+    const row = make('div', { className: 'row-item' });
+    row.append(
+      make('input', { className: 'r-name', placeholder: window.ZT('recipeName'), value: r.name }),
+      make('input', { className: 'r-steps wide', placeholder: window.ZT('recipeSteps'), value: r.steps }),
+      make('button', { type: 'button', textContent: '✕', onclick: () => row.remove() }),
+    );
+    recipeRows.append(row);
+  };
+  (s.recipes || []).forEach(recipeRow);
+  const watchRows = make('div', { className: 'rows' });
+  const watchRow = (w = { dir: '', exts: '', steps: '', enabled: true }) => {
+    const row = make('div', { className: 'row-item' });
+    const dir = make('input', { className: 'w-dir wide', value: w.dir, readOnly: true, placeholder: window.ZT('folder') });
+    row.append(
+      make('button', { type: 'button', textContent: window.ZT('folder'), onclick: async () => { const d = await invoke('pick_folder'); if (d) dir.value = d; } }),
+      dir,
+      make('input', { className: 'w-exts', placeholder: window.ZT('watchExts'), value: w.exts }),
+      make('input', { className: 'w-steps wide', placeholder: window.ZT('watchSteps'), value: w.steps }),
+      make('label', { className: 'check inline', textContent: window.ZT('on') }),
+      make('button', { type: 'button', textContent: '✕', onclick: () => row.remove() }),
+    );
+    row.querySelector('label').prepend(make('input', { type: 'checkbox', className: 'w-on', checked: w.enabled }));
+    watchRows.append(row);
+  };
+  (s.watch || []).forEach(watchRow);
+  const section = (title, rows, add) => {
+    const wrap = make('div', { className: 'list' });
+    wrap.append(make('h3', { textContent: window.ZT(title) }), rows, make('button', { type: 'button', textContent: window.ZT('add'), onclick: () => add() }));
+    return wrap;
+  };
+  box.append(section('recipes', recipeRows, recipeRow), section('watchFolders', watchRows, watchRow));
+  const save = make('button', { type: 'submit', className: 'primary', textContent: window.ZT('saveSettings') });
+  box.append(save);
+
+  box.onsubmit = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    const val = (row, cls) => row.querySelector(cls).value.trim();
+    const next = {
+      convert: box.querySelector('select[name=convert]').value,
+      tools: box.querySelector('select[name=tools]').value,
+      actions: box.querySelector('select[name=actions]').value,
+      reveal: box.querySelector('input[name=reveal]').checked,
+      recipes: [...recipeRows.children].map((r) => ({ name: val(r, '.r-name'), steps: val(r, '.r-steps') })).filter((r) => r.name || r.steps),
+      watch: [...watchRows.children].map((r) => ({ dir: val(r, '.w-dir'), exts: val(r, '.w-exts'), steps: val(r, '.w-steps'), enabled: r.querySelector('.w-on').checked }))
+        .filter((w) => w.dir || w.steps),
+    };
     try {
       await invoke('set_settings', { settings: next });
       $('settingsMsg').textContent = window.ZT('saved');
-    } catch (e) {
-      $('settingsMsg').textContent = String(e);
+    } catch (err) {
+      $('settingsMsg').textContent = String(err);
     }
   };
 }

@@ -81,5 +81,11 @@ original at full resolution, a visual PDF page organizer (reorder, rotate, dupli
 PDF metadata removal, audio/video tag editing, and the Float shelf with native drag-out
 (tauri-plugin-drag).
 
+Beyond Tangerine in v0.4: parallel batches, recipes (tool chains, saved in Settings and
+shown in the Tools wheel), watch folders, batch rename, SHA-256 checksums, logo watermarks,
+local speech-to-SRT with whisper.cpp, subtitle shift/extract/add/burn, video reverse, loop,
+stabilize, frame export, image slideshows, fades, PDF password protect/unlock, and
+multi-size .ico export.
+
 Still out of scope: face detection (no portable engine in the chosen stack; U3), dehaze,
 EXIF editing (removal only), and R7 (Enter on a file manager selection).

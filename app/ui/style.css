@@ -169,6 +169,15 @@ html.clear, html.clear body { background: transparent; overflow: hidden; }
 select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 6px; }
 label.check { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; grid-column: 1 / -1; }
 label.check input { width: auto; margin: 0; }
+.settings .list { grid-column: 1 / -1; margin-top: 10px; }
+.settings h3 { font-size: 13px; margin: 6px 0; }
+.rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.row-item { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.row-item input { width: 120px; }
+.row-item input.wide { flex: 1; min-width: 180px; }
+label.check.inline { grid-column: auto; font-size: 12px; }
+.settings > button[type=submit] { grid-column: 1 / -1; justify-self: start; margin-top: 8px; }
+#params label button, .inline-form label button { margin-top: 4px; }
 
 /* ---------- editor ---------- */
 body.editor { display: flex; flex-direction: column; height: 100vh; }

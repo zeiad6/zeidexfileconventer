@@ -4,13 +4,17 @@
 pub mod actions;
 pub mod b64;
 pub mod format;
+pub mod ico;
 pub mod integrate;
 pub mod ops;
 pub mod pdf;
 pub mod plan;
+pub mod rename;
 pub mod runner;
+pub mod sha256;
 pub mod subtitle;
 pub mod tools;
+pub mod watch;
 
 use std::fmt;
 

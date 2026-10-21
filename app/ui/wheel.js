@@ -133,7 +133,7 @@ function closeForm() {
 
 function choose(it) {
   if (it.editor) return invoke('open_editor', { paths, tool: it.id });
-  if (!it.params.length) return invoke('run_job', { paths, kind: it.kind, id: it.id, opts: {} });
+  if (!it.params.length) return invoke('run_job', { paths, kind: it.kind, id: it.id, opts: it.preset || {} });
   formOpen = true;
   invoke('keep_wheel');
   window.ZForm(form, it, async (opts) => {

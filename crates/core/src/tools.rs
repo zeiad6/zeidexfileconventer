@@ -19,10 +19,11 @@ pub enum Tool {
     Pandoc,
     Calibre,
     Tesseract,
+    Whisper,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 11] = [
+    pub const ALL: [Tool; 12] = [
         Tool::Ffmpeg,
         Tool::Ffprobe,
         Tool::Vips,
@@ -34,6 +35,7 @@ impl Tool {
         Tool::Pandoc,
         Tool::Calibre,
         Tool::Tesseract,
+        Tool::Whisper,
     ];
 
     pub fn label(self) -> &'static str {
@@ -49,6 +51,7 @@ impl Tool {
             Tool::Pandoc => "Pandoc",
             Tool::Calibre => "Calibre",
             Tool::Tesseract => "Tesseract OCR",
+            Tool::Whisper => "whisper.cpp",
         }
     }
 
@@ -65,6 +68,7 @@ impl Tool {
             Tool::Pandoc => "ZEIDEX_PANDOC",
             Tool::Calibre => "ZEIDEX_EBOOK_CONVERT",
             Tool::Tesseract => "ZEIDEX_TESSERACT",
+            Tool::Whisper => "ZEIDEX_WHISPER",
         }
     }
 
@@ -83,6 +87,7 @@ impl Tool {
                 Tool::Pandoc => &["pandoc.exe"],
                 Tool::Calibre => &["ebook-convert.exe"],
                 Tool::Tesseract => &["tesseract.exe"],
+                Tool::Whisper => &["whisper-cli.exe", "whisper.exe"],
             }
         } else {
             match self {
@@ -97,6 +102,7 @@ impl Tool {
                 Tool::Pandoc => &["pandoc"],
                 Tool::Calibre => &["ebook-convert"],
                 Tool::Tesseract => &["tesseract"],
+                Tool::Whisper => &["whisper-cli", "whisper-cpp"],
             }
         }
     }
@@ -113,6 +119,9 @@ impl Tool {
                 Tool::Pandoc => "winget install JohnMacFarlane.Pandoc",
                 Tool::Calibre => "winget install calibre.calibre",
                 Tool::Tesseract => "winget install UB-Mannheim.TesseractOCR",
+                Tool::Whisper => {
+                    "whisper.cpp release (github.com/ggml-org/whisper.cpp) + set ZEIDEX_WHISPER_MODEL to a ggml-*.bin"
+                }
             }
         } else {
             match self {
@@ -125,6 +134,9 @@ impl Tool {
                 Tool::Pandoc => "sudo apt install pandoc",
                 Tool::Calibre => "sudo apt install calibre",
                 Tool::Tesseract => "sudo apt install tesseract-ocr tesseract-ocr-ara",
+                Tool::Whisper => {
+                    "build whisper.cpp (github.com/ggml-org/whisper.cpp) + set ZEIDEX_WHISPER_MODEL to a ggml-*.bin"
+                }
             }
         }
     }
@@ -208,12 +220,23 @@ pub fn locate(tool: Tool) -> Option<PathBuf> {
         }
     }
     let names = tool.names();
-    let in_dirs = |dirs: &[PathBuf]| {
-        dirs.iter().flat_map(|d| names.iter().map(move |n| d.join(n))).find(|p| p.is_file())
-    };
-    in_dirs(&bundle_dirs())
-        .or_else(|| names.iter().find_map(|n| which(n)))
-        .or_else(|| in_dirs(&tool.known_dirs()))
+    let in_dirs =
+        |dirs: &[PathBuf]| dirs.iter().flat_map(|d| names.iter().map(move |n| d.join(n))).find(|p| p.is_file());
+    in_dirs(&bundle_dirs()).or_else(|| names.iter().find_map(|n| which(n))).or_else(|| in_dirs(&tool.known_dirs()))
+}
+
+/// whisper.cpp model: `ZEIDEX_WHISPER_MODEL`, else the first `*.bin` in a bundled `models/` dir.
+pub fn whisper_model() -> Option<PathBuf> {
+    if let Some(p) = env::var_os("ZEIDEX_WHISPER_MODEL").map(PathBuf::from).filter(|p| p.is_file()) {
+        return Some(p);
+    }
+    bundle_dirs()
+        .iter()
+        .map(|d| d.join("models"))
+        .filter_map(|d| d.read_dir().ok())
+        .flat_map(|rd| rd.flatten())
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|e| e == "bin"))
 }
 
 pub fn require(tool: Tool) -> crate::Result<PathBuf> {

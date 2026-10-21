@@ -46,6 +46,16 @@
     keyActions: ['Actions wheel key', 'مفتاح عجلة الإجراءات'],
     reveal: ['Show results in the file manager', 'إظهار النتائج في مدير الملفات'],
     saved: ['Saved', 'تم الحفظ'],
+    recipes: ['Recipes (shown in the Tools wheel)', 'الوصفات (تظهر في عجلة الأدوات)'],
+    recipeName: ['Name', 'الاسم'],
+    recipeSteps: ['Steps, e.g. resize max=1600 | compress percent=60', 'الخطوات، مثل resize max=1600 | compress percent=60'],
+    watchFolders: ['Watch folders', 'مجلدات مراقَبة'],
+    watchExts: ['Extensions (heic,png)', 'الامتدادات (heic,png)'],
+    watchSteps: ['Do, e.g. convert to=jpg', 'نفّذ، مثل convert to=jpg'],
+    folder: ['Folder…', 'مجلد…'],
+    on: ['On', 'مفعّل'],
+    add: ['Add', 'إضافة'],
+    saveSettings: ['Save', 'حفظ'],
     adjust: ['Adjust colors', 'ضبط الألوان'],
     pages: ['Organize pages', 'ترتيب الصفحات'],
     brightness: ['Brightness', 'السطوع'],
@@ -85,7 +95,19 @@
     form.replaceChildren(make('h3', { textContent: window.ZL(choice) }));
     for (const p of choice.params) {
       const label = make('label', { textContent: window.ZL(p) });
-      label.append(make('input', { name: p.key, value: p.default, autocomplete: 'off' }));
+      const input = make('input', { name: p.key, value: p.default, autocomplete: 'off' });
+      label.append(input);
+      if (p.key === 'image') {
+        // File parameters (watermark logo) get a picker instead of typing a path.
+        label.append(make('button', {
+          type: 'button',
+          textContent: '…',
+          onclick: async () => {
+            const picked = await window.__TAURI__.core.invoke('pick_files');
+            if (picked && picked.length) input.value = picked[0];
+          },
+        }));
+      }
       form.append(label);
     }
     const err = make('p', { className: 'err', role: 'alert' });

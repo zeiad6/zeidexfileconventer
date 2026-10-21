@@ -33,8 +33,11 @@ pub fn reveal(path: &Path) -> Result<()> {
         let uri = crate::plan::file_url(path);
         let shown = Command::new("dbus-send")
             .args([
-                "--session", "--dest=org.freedesktop.FileManager1", "--type=method_call",
-                "/org/freedesktop/FileManager1", "org.freedesktop.FileManager1.ShowItems",
+                "--session",
+                "--dest=org.freedesktop.FileManager1",
+                "--type=method_call",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
             ])
             .arg(format!("array:string:{uri}"))
             .arg("string:")

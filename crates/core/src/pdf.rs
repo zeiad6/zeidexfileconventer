@@ -126,12 +126,8 @@ mod tests {
         // Byte offsets: index `out`, not the lossy text (the binary header comment shifts it).
         let tail = std::str::from_utf8(&out[xref_at..]).unwrap();
         assert!(tail.starts_with("xref"));
-        let entries: Vec<usize> = tail
-            .lines()
-            .skip(3)
-            .take_while(|l| l.ends_with(" n "))
-            .map(|l| l[..10].parse().unwrap())
-            .collect();
+        let entries: Vec<usize> =
+            tail.lines().skip(3).take_while(|l| l.ends_with(" n ")).map(|l| l[..10].parse().unwrap()).collect();
         assert_eq!(entries.len(), 8);
         for (i, off) in entries.iter().enumerate() {
             assert!(out[*off..].starts_with(format!("{} 0 obj", i + 1).as_bytes()), "object {}", i + 1);

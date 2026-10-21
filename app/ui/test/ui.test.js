@@ -37,8 +37,13 @@ class El {
   setAttribute(k, v) { this.attrs[k] = String(v); }
   removeAttribute(k) { delete this.attrs[k]; }
   getAttribute(k) { return this.attrs[k]; }
-  append(...c) { this.children.push(...c.map((x) => (typeof x === 'string' ? Object.assign(new El('#text'), { textContent: x }) : x))); }
-  prepend(...c) { this.children.unshift(...c); }
+  append(...c) {
+    const kids = c.map((x) => (typeof x === 'string' ? Object.assign(new El('#text'), { textContent: x }) : x));
+    kids.forEach((k) => { k.parent = this; });
+    this.children.push(...kids);
+  }
+  prepend(...c) { c.forEach((k) => { k.parent = this; }); this.children.unshift(...c); }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter((k) => k !== this); }
   replaceChildren(...c) { this.children = []; this.append(...c); }
   addEventListener(t, f) { (this.listeners[t] ||= []).push(f); }
   fire(t, e = {}) {
@@ -85,13 +90,19 @@ function page(html, query = '') {
         choice('tool', 'crop', 'Crop', [], true),
         choice('tool', 'trim', 'Trim'),
         choice('tool', 'speed', 'Speed'),
+        { ...choice('tool', 'recipe', '★ Web image'), preset: { steps: 'resize max=1600 | compress percent=60' } },
       ],
       actions: ['reveal', 'copy-path', 'move', 'terminal'].map((a) => choice('action', a, a)),
     },
     doctor: [{ name: 'FFmpeg', path: '/usr/bin/ffmpeg', hint: '' }, { name: 'libvips', path: null, hint: 'apt' }],
     hook_ok: true,
     take_pending: ['/home/u/clip.mp4'],
-    get_settings: { convert: 'Shift', tools: 'Alt', actions: 'Control', reveal: true },
+    get_settings: {
+      convert: 'Shift', tools: 'Alt', actions: 'Control', reveal: true,
+      recipes: [{ name: 'Web image', steps: 'resize max=1600 | strip' }],
+      watch: [{ dir: '/home/u/in', exts: 'heic', steps: 'convert to=jpg', enabled: true }],
+    },
+    pick_folder: '/home/u/new',
     editor_state: query === 'pages'
       ? { paths: ['/home/u/d.pdf'], tool: 'pages', video: false, width: 0, height: 0, duration: 0, preview: '', pages: ['data:p1', 'data:p2', 'data:p3'] }
       : { paths: ['/home/u/p.png', '/home/u/q.png'], tool: query || 'redact', video: false, width: 1600, height: 1200, duration: 0, preview: 'data:image/png;base64,AAAA', pages: [] },
@@ -166,7 +177,7 @@ const segs = (p) => p.byId.wheel.children.filter((c) => c.tagName === 'PATH');
     ok(segs(p).length === 10, 'wheel: 10 convert segments for a video');
     ok(segs(p).filter((s) => s.attrs.class.includes('hot')).length === 1, 'wheel: segment under the pointer is highlighted');
     p.emit('wheel-mode', 'tools');
-    ok(segs(p).length === 4, 'wheel: Alt switches to the tools ring');
+    ok(segs(p).length === 5, 'wheel: Alt switches to the tools ring');
     // first tools segment spans the top-right quarter: compress (has options)
     await p.drag({ type: 'drop', paths: ['/v/clip.mp4'], position: { x: 260, y: 40 } });
     await tick();
@@ -304,14 +315,35 @@ const segs = (p) => p.byId.wheel.children.filter((c) => c.tagName === 'PATH');
     await tick(10);
     ok(p.byId.grid.children.length === 10, 'home: pending file shows its conversions');
     ok(p.byId.engines.children.length === 2, 'home: engines table filled');
-    const tools = p.byId.settings.querySelector('select[name=tools]');
+    const box = p.byId.settings;
+    const tools = box.querySelector('select[name=tools]');
     tools.value = 'Shift';
-    await p.byId.settings.onchange();
+    await box.onsubmit({ preventDefault() {} });
     ok(p.byId.settingsMsg.textContent.includes('own key'), 'home: duplicate wheel keys are rejected');
     tools.value = 'Meta';
-    await p.byId.settings.onchange();
+    // add a recipe row, remove the watch rule, add a new watch rule through the folder picker
+    const lists = box.querySelectorAll('.list');
+    lists[0].children[2].fire('click');
+    const rows = lists[0].children[1].children;
+    rows[1].querySelector('.r-name').value = 'Thumbs';
+    rows[1].querySelector('.r-steps').value = 'resize max=300 | strip';
+    lists[1].children[1].children[0].querySelectorAll('button')[1].fire('click');
+    lists[1].children[2].fire('click');
+    const wrow = lists[1].children[1].children[0];
+    await wrow.querySelector('button').fire('click');
+    await tick();
+    wrow.querySelector('.w-steps').value = 'convert to=webp';
+    await box.onsubmit({ preventDefault() {} });
     const set = p.calls.filter(([c]) => c === 'set_settings').pop();
-    ok(set && set[1].settings.tools === 'Meta' && set[1].settings.reveal === true, 'home: settings saved');
+    const st = set && set[1].settings;
+    ok(st && st.tools === 'Meta' && st.reveal === true, 'home: settings saved');
+    ok(st && st.recipes.length === 2 && st.recipes[1].name === 'Thumbs', 'home: recipes edited');
+    ok(st && st.watch.length === 1 && st.watch[0].dir === '/home/u/new' && st.watch[0].steps === 'convert to=webp', 'home: watch rule picked and saved');
+    // saved recipe runs with its preset steps
+    p.byId.tabs.children[1].fire('click');
+    p.byId.grid.children.find((b) => b.textContent === '★ Web image').fire('click');
+    const rec = p.calls.find(([c, a]) => c === 'run_job' && a.id === 'recipe');
+    ok(rec && rec[1].opts.steps.startsWith('resize max=1600'), 'home: saved recipe runs with its steps');
   }
 
   // ---------- jobs ----------

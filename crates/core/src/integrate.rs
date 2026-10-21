@@ -51,13 +51,18 @@ pub fn install(exe: &Path) -> Result<Vec<PathBuf>> {
             .status()?
             .success();
         if !ok {
-            return Err(crate::Error::Failed { tool: "powershell".into(), detail: "could not create the shortcut".into() });
+            return Err(crate::Error::Failed {
+                tool: "powershell".into(),
+                detail: "could not create the shortcut".into(),
+            });
         }
         Ok(vec![sendto])
     }
     #[cfg(not(windows))]
     {
-        let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| crate::Error::Unsupported("HOME is not set".into()))?;
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| crate::Error::Unsupported("HOME is not set".into()))?;
         let mut written = Vec::new();
         for (path, contents, executable) in linux_entries(&home, exe) {
             if let Some(dir) = path.parent() {

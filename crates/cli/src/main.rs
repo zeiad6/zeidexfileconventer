@@ -5,7 +5,7 @@ use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use zeidex_core::format::{common_category, common_targets};
-use zeidex_core::ops::{tools_for, Op, TOOLS};
+use zeidex_core::ops::{parse_step, tools_for_paths, Op, TOOLS};
 use zeidex_core::runner::{self, Event};
 use zeidex_core::tools::{locate, Tool};
 use zeidex_core::{integrate, Error};
@@ -17,6 +17,8 @@ USAGE:
   zeidex targets <files...>                 formats and tools available for the files
   zeidex convert --to <ext> <files...>      convert, output saved beside each original
   zeidex tool <id> [--key value]... <files...>
+  zeidex recipe \"<step> | <step> ...\" <files...>   chain tools, e.g. \"resize max=1600 | compress percent=60 | strip\"
+  zeidex watch <dir> --do \"<step or recipe>\" [--ext heic,png]   process files as they arrive (Ctrl+C stops)
   zeidex info <file>                        print metadata
   zeidex tools                              list tool ids and their options
   zeidex doctor                             show which engines were found
@@ -27,6 +29,11 @@ EXAMPLES:
   zeidex tool compress --target 8MB clip.mov
   zeidex tool ocr --lang ara+eng --to pdf scan.pdf
   zeidex tool merge-pdf a.pdf b.pdf
+  zeidex tool rename --pattern \"trip-{n:3}\" *.jpg
+  zeidex watch ~/Downloads --ext heic --do \"convert to=jpg\"
+
+OPTIONS:
+  --jobs N    files processed at the same time (default: half the CPU cores, max 4)
 ";
 
 fn main() -> ExitCode {
@@ -69,14 +76,27 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
             let cat = common_category(&files);
             println!("category: {}", cat.map_or("mixed", |c| c.name()));
             println!("convert:  {}", common_targets(&files).join(" "));
-            let ids: Vec<&str> = tools_for(cat, files.len()).iter().map(|t| t.id).collect();
+            let ids: Vec<&str> = tools_for_paths(&files).iter().map(|t| t.id).collect();
             println!("tools:    {}", ids.join(" "));
             Ok(true)
         }
         "convert" => {
             let (opts, files) = split_args(rest)?;
             let to = opts.get("to").ok_or_else(|| Error::BadOption("--to <ext> is required".into()))?;
-            run(&Op::Convert { to: to.to_ascii_lowercase() }, &files)
+            run(&Op::Convert { to: to.to_ascii_lowercase() }, &files, &opts)
+        }
+        "recipe" => {
+            let (spec, rest) = rest.split_first().ok_or_else(|| Error::BadOption("recipe steps required".into()))?;
+            let (opts, files) = split_args(rest)?;
+            run(&Op::Recipe(zeidex_core::ops::parse_recipe(spec)?), &files, &opts)
+        }
+        "watch" => {
+            let (opts, dirs) = split_args(rest)?;
+            let dir = dirs.first().ok_or_else(|| Error::BadOption("folder required".into()))?;
+            let op = parse_step(opts.get("do").ok_or_else(|| Error::BadOption("--do \"<step>\" is required".into()))?)?;
+            let exts: Vec<String> =
+                opts.get("ext").map_or(vec![], |e| e.split(',').map(|x| x.trim().to_ascii_lowercase()).collect());
+            watch(dir, &exts, &op)
         }
         "tool" => {
             let (id, rest) = rest.split_first().ok_or_else(|| Error::BadOption("tool id required".into()))?;
@@ -85,14 +105,27 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
             if op == Op::Info {
                 return info(&files);
             }
-            run(&op, &files)
+            if let Op::Rename { .. } = op {
+                for (old, new) in runner::rename(&op, &files)? {
+                    println!("{} -> {}", old.display(), new.display());
+                }
+                return Ok(true);
+            }
+            run(&op, &files, &opts)
         }
         "info" => info(&split_args(rest)?.1),
         "tools" => {
             for t in TOOLS {
                 let cats: Vec<&str> = t.cats.iter().map(|c| c.name()).collect();
                 let params: Vec<String> = t.params.iter().map(|p| format!("--{} {:?}", p.key, p.default)).collect();
-                println!("{:<14} {:<22} [{}]{} {}", t.id, t.label, cats.join(","), if t.multi { " (2+ files)" } else { "" }, params.join(" "));
+                println!(
+                    "{:<14} {:<22} [{}]{} {}",
+                    t.id,
+                    t.label,
+                    cats.join(","),
+                    if t.multi { " (2+ files)" } else { "" },
+                    params.join(" ")
+                );
             }
             Ok(true)
         }
@@ -132,21 +165,51 @@ fn info(files: &[PathBuf]) -> Result<bool, Error> {
     Ok(true)
 }
 
-fn run(op: &Op, files: &[PathBuf]) -> Result<bool, Error> {
+/// Polls `dir` once a second and runs `op` on every new, fully written file.
+fn watch(dir: &std::path::Path, exts: &[String], op: &Op) -> Result<bool, Error> {
+    if !dir.is_dir() {
+        return Err(Error::BadOption(format!("{} is not a folder", dir.display())));
+    }
+    let mut w = zeidex_core::watch::Watcher::new(dir, exts);
+    eprintln!("watching {} (Ctrl+C to stop)", dir.display());
+    loop {
+        for file in w.poll() {
+            for r in runner::run(op, std::slice::from_ref(&file), |_| {}) {
+                match r {
+                    Ok(out) => {
+                        w.mark_done(&out);
+                        println!("{} -> {}", file.display(), out.display());
+                    }
+                    Err(e) => eprintln!("{}: {e}", file.display()),
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
+
+fn run(op: &Op, files: &[PathBuf], opts: &HashMap<String, String>) -> Result<bool, Error> {
     if files.is_empty() {
         return Err(Error::BadOption("no input files".into()));
     }
+    let jobs = match opts.get("jobs") {
+        Some(j) => j.parse::<usize>().map_err(|_| Error::BadOption(format!("jobs={j}")))?.max(1),
+        None => runner::default_parallelism(),
+    };
     let tty = std::io::stderr().is_terminal();
     let clear = if tty { "\r\x1b[2K" } else { "" };
-    let results = runner::run(op, files, |e| match e {
-        Event::Start { index, total, file } => eprint!("[{}/{}] {file} ", index + 1, total),
-        Event::Progress(f) if tty => {
-            eprint!("\r\x1b[2K  {:>3}%", (f * 100.0) as u32);
+    // With parallel units, per-file progress lines would interleave: show it only for one file.
+    let live = tty && (jobs == 1 || files.len() == 1 || op.is_multi());
+    let results = runner::run_with(op, files, jobs, |e| match e {
+        Event::Start { index, total, file } if live => eprint!("[{}/{}] {file} ", index + 1, total),
+        Event::Start { .. } => {}
+        Event::Progress { fraction, .. } if live => {
+            eprint!("\r\x1b[2K  {:>3}%", (fraction * 100.0) as u32);
             let _ = std::io::stderr().flush();
         }
-        Event::Progress(_) => {}
-        Event::Done(p) => eprintln!("{clear}  -> {}", p.display()),
-        Event::Failed { error, .. } => eprintln!("{clear}  failed: {error}"),
+        Event::Progress { .. } => {}
+        Event::Done { output, .. } => eprintln!("{clear}  -> {}", output.display()),
+        Event::Failed { file, error, .. } => eprintln!("{clear}  {file}: {error}"),
     });
     for p in results.iter().flatten() {
         println!("{}", p.display());
