@@ -18,6 +18,7 @@ pub mod selection;
 pub mod sha256;
 pub mod subtitle;
 pub mod tools;
+pub mod update;
 pub mod watch;
 
 use std::fmt;

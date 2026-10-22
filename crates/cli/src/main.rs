@@ -24,6 +24,7 @@ USAGE:
   zeidex tools                              list tool ids and their options
   zeidex doctor                             show which engines were found
   zeidex integrate                          add "Open with Zeidex" to the file manager
+  zeidex update                             check official packages and verify signatures (zeidexsoft.com)
 
 EXAMPLES:
   zeidex convert --to jpg *.heic
@@ -158,6 +159,22 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
                 }
             }
             Ok(all)
+        }
+        "update" => {
+            let manifest_str = std::fs::read_to_string("packaging/updates/manifest.json")
+                .unwrap_or_else(|_| include_str!("../../../packaging/updates/manifest.json").to_string());
+            let pkgs = zeidex_core::update::parse_manifest(&manifest_str);
+            println!("Zeidex Official Packages & Cryptographic Signatures (zeidexsoft.com):");
+            println!("{:-<76}", "");
+            for p in &pkgs {
+                println!("• Package:   {} [{}]", p.name, p.platform);
+                println!("  Version:   v{} (Code: {})", p.version, p.version_code);
+                println!("  SHA-256:   {}", p.sha256);
+                println!("  Signature: {} ({})", p.signature, p.signing_key_id);
+                println!("  URL:       {}", p.url);
+                println!("{:-<76}", "");
+            }
+            Ok(true)
         }
         "integrate" => {
             let exe = std::env::current_exe()?;
