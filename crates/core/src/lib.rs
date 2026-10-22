@@ -8,6 +8,7 @@ pub mod faces;
 pub mod format;
 pub mod ico;
 pub mod integrate;
+pub mod motion;
 pub mod ops;
 pub mod pdf;
 pub mod plan;

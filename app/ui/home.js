@@ -62,6 +62,38 @@ window.__TAURI__.webview.getCurrentWebview().onDragDropEvent((e) => {
   $('drop').classList.toggle('over', t === 'enter' || t === 'over');
   if (t === 'drop') load(e.payload.paths);
 });
+
+// Browser drag-and-drop support: images and links dragged directly from a browser (Chrome, Edge, Firefox)
+const dropArea = $('drop');
+dropArea.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  dropArea.classList.add('over');
+});
+dropArea.addEventListener('dragleave', () => {
+  dropArea.classList.remove('over');
+});
+dropArea.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  dropArea.classList.remove('over');
+  const html = e.dataTransfer.getData('text/html');
+  const uri = e.dataTransfer.getData('text/uri-list');
+  let url = null;
+  if (html) {
+    const m = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+    if (m) url = m[1];
+  }
+  if (!url && uri) {
+    url = uri.split('\n').map((s) => s.trim()).find((s) => s && !s.startsWith('#'));
+  }
+  if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+    try {
+      const localPath = await invoke('download_dragged_url', { url });
+      if (localPath) load([localPath]);
+    } catch (err) {
+      console.warn('browser drag download failed', err);
+    }
+  }
+});
 $('choose').onclick = async () => load(await invoke('pick_files'));
 $('integrate').onclick = async () => {
   try {

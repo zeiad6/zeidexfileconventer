@@ -28,6 +28,20 @@ pub fn linux_entries(home: &Path, exe: &Path) -> Vec<(PathBuf, String, bool)> {
             ),
             true,
         ),
+        (
+            share.join("Thunar/sendto/zeidex.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Open with Zeidex\nExec=\"{exe}\" --open %F\nIcon=document-save-as\nTerminal=false\n"
+            ),
+            false,
+        ),
+        (
+            home.join(".config/autostart/zeidex.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Zeidex Convert\nExec=\"{exe}\" --background\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
+            ),
+            false,
+        ),
     ]
 }
 
@@ -85,8 +99,10 @@ mod tests {
     #[test]
     fn entries_quote_the_exe() {
         let e = linux_entries(Path::new("/home/u"), Path::new("/opt/Zeidex Convert/zeidex"));
-        assert_eq!(e.len(), 3);
+        assert_eq!(e.len(), 5);
         assert!(e[0].1.contains("exec \"/opt/Zeidex Convert/zeidex\" --open \"$@\""));
         assert!(e[2].0.ends_with("kio/servicemenus/zeidex.desktop") && e[2].2);
+        assert!(e[3].0.ends_with("Thunar/sendto/zeidex.desktop") && !e[3].2);
+        assert!(e[4].0.ends_with("autostart/zeidex.desktop") && !e[4].2);
     }
 }

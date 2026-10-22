@@ -296,6 +296,9 @@ fn exec(step: &Step, report: &mut dyn FnMut(f32)) -> Result<()> {
             let mut out = fs::File::create(dst)?;
             Ok(pdf::jpegs_to_pdf(&data, &mut out)?)
         }
+        Step::ExtractMotion { src, dst } => {
+            crate::motion::extract_motion_video(src, dst)
+        }
         Step::SmallestUnder { target, candidates, dst } => {
             let mut best: Option<(u64, &PathBuf)> = None;
             let mut last_err = None;

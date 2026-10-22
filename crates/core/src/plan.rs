@@ -80,6 +80,11 @@ pub enum Step {
         jpegs: Vec<PathBuf>,
         dst: PathBuf,
     },
+    /// Extract MP4 video from a Motion Photo or Live Photo
+    ExtractMotion {
+        src: PathBuf,
+        dst: PathBuf,
+    },
     /// Try candidates in order; keep the first output that fits `target`, else the smallest.
     SmallestUnder {
         target: u64,
@@ -144,6 +149,11 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             let out = convert(src, &from, to, tmp, ctx, &mut s)?;
             let name = if out.extension().is_none() { format!("{stem} pages") } else { named(&stem, "", to) };
             (out, name)
+        }
+        Op::ExtractMotion => {
+            let out = tmp.join("motion.mp4");
+            s.push(Step::ExtractMotion { src: src.to_path_buf(), dst: out.clone() });
+            (out, named(&stem, "motion", "mp4"))
         }
         Op::Compress { how, max } => compress(src, &from, cat, how, *max, ctx, tmp, &mut s, &stem)?,
         Op::StripMetadata => {
@@ -1354,12 +1364,16 @@ fn ffmpeg(args: Vec<OsString>, ctx: &Ctx) -> Step {
 }
 
 fn is_audio_ext(ext: &str) -> bool {
-    matches!(ext, "mp3" | "m4a" | "wav" | "flac" | "ogg" | "opus" | "aiff" | "wma")
+    matches!(
+        ext,
+        "mp3" | "m4a" | "wav" | "flac" | "ogg" | "opus" | "aiff" | "wma"
+            | "ac3" | "amr" | "caf" | "weba" | "mka" | "ape" | "wv" | "w64"
+    )
 }
 
 fn av_out_ext(from: &str, cat: Option<Category>) -> &'static str {
     const VIDEO: [&str; 6] = ["mp4", "mov", "mkv", "webm", "avi", "wmv"];
-    const AUDIO: [&str; 8] = ["mp3", "m4a", "wav", "flac", "ogg", "opus", "aiff", "wma"];
+    const AUDIO: [&str; 9] = ["mp3", "m4a", "wav", "flac", "ogg", "opus", "aiff", "wma", "ac3"];
     let pool: &[&'static str] = if cat == Some(Category::Audio) { &AUDIO } else { &VIDEO };
     pool.iter().copied().find(|e| *e == from).unwrap_or(if cat == Some(Category::Audio) { "m4a" } else { "mp4" })
 }
@@ -1382,6 +1396,7 @@ fn audio_codec(ext: &str) -> &'static [&'static str] {
         "opus" | "webm" => &["-c:a", "libopus", "-b:a", "128k"],
         "aiff" => &["-c:a", "pcm_s16be"],
         "wma" | "wmv" => &["-c:a", "wmav2", "-b:a", "192k"],
+        "ac3" => &["-c:a", "ac3", "-b:a", "384k"],
         _ => &["-c:a", "aac", "-b:a", "192k"],
     }
 }
@@ -1685,11 +1700,15 @@ fn soffice(src: &Path, filter: &str, infilter: Option<&str>, tmp: &Path, s: &mut
     outdir.join(name)
 }
 
-const PANDOC_IN: [&str; 7] = ["md", "txt", "html", "docx", "odt", "epub", "rtf"];
+const PANDOC_IN: &[&str] = &[
+    "md", "txt", "html", "docx", "odt", "epub", "rtf", "rst", "tex", "org", "adoc", "typ",
+];
 
 fn pandoc(src: &Path, from: &str, to: &str, tmp: &Path, s: &mut Vec<Step>) -> PathBuf {
     let reader = match from {
         "md" | "txt" => "markdown",
+        "tex" => "latex",
+        "adoc" => "asciidoc",
         other => other,
     };
     let writer = match to {
@@ -1744,7 +1763,13 @@ fn convert(src: &Path, from: &str, to: &str, tmp: &Path, ctx: &Ctx, s: &mut Vec<
     Ok(match cat {
         Category::Subtitle => {
             let out = tmp.join(format!("sub.{to}"));
-            s.push(Step::Subtitle { src: src.to_path_buf(), dst: out.clone(), shift_ms: 0 });
+            if matches!(from, "srt" | "vtt") && matches!(to, "srt" | "vtt" | "txt") {
+                s.push(Step::Subtitle { src: src.to_path_buf(), dst: out.clone(), shift_ms: 0 });
+            } else {
+                let mut a = ffmpeg_in(src);
+                a.push(out.clone().into());
+                s.push(ffmpeg(a, ctx));
+            }
             out
         }
         Category::Image if to == "pdf" => {
@@ -1759,6 +1784,22 @@ fn convert(src: &Path, from: &str, to: &str, tmp: &Path, ctx: &Ctx, s: &mut Vec<
             s.push(run(Tool::Vips, args!["copy", &input, &png]));
             let out = tmp.join("image.bmp");
             s.push(run(Tool::Ffmpeg, args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i", &png, &out]));
+            out
+        }
+        Category::Image if to == "ico" => {
+            let png = tmp.join("to-ico.png");
+            let input = image_src(src, from, tmp, s);
+            s.push(run(Tool::Vips, args!["copy", &input, &png]));
+            let out = tmp.join("image.ico");
+            s.push(Step::Ico {
+                pngs: vec![(16, png.clone()), (32, png.clone()), (48, png.clone()), (256, png)],
+                dst: out.clone(),
+            });
+            out
+        }
+        Category::Image if from == "livp" || to == "mp4" => {
+            let out = tmp.join("motion.mp4");
+            s.push(Step::ExtractMotion { src: src.to_path_buf(), dst: out.clone() });
             out
         }
         Category::Image => {
@@ -1800,10 +1841,10 @@ fn convert(src: &Path, from: &str, to: &str, tmp: &Path, ctx: &Ctx, s: &mut Vec<
             _ => calibre(src, to, tmp, s),
         },
         Category::Document => match to {
-            "pdf" if from == "md" => via("docx", s)?,
+            "pdf" if from == "md" || matches!(from, "rst" | "tex" | "org" | "adoc" | "typ") => via("docx", s)?,
             "md" | "epub" if PANDOC_IN.contains(&from) => pandoc(src, from, to, tmp, s),
             "md" | "epub" => via("docx", s)?,
-            _ if from == "md" => pandoc(src, from, to, tmp, s),
+            _ if from == "md" || matches!(from, "rst" | "tex" | "org" | "adoc" | "typ") => pandoc(src, from, to, tmp, s),
             "txt" => soffice(src, "txt:Text (encoded):UTF8", None, tmp, s),
             _ => soffice(src, to, None, tmp, s),
         },

@@ -723,6 +723,33 @@ fn open_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn download_dragged_url(url: String) -> Result<String, String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("invalid URL".into());
+    }
+    let file_name = url.rsplit('/').next().unwrap_or("download").split('?').next().unwrap_or("download");
+    let ext = file_name.rsplit_once('.').map(|(_, e)| e).unwrap_or("png");
+    let tmp_dir = std::env::temp_dir().join("zeidex_browser_drag");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let target = tmp_dir.join(format!(
+        "dragged_{}.{ext}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    ));
+    let status = std::process::Command::new("curl")
+        .args(["-fsSL", &url, "-o"])
+        .arg(&target)
+        .status()
+        .map_err(|e| format!("curl execution failed: {e}"))?;
+    if !status.success() {
+        return Err("download failed".into());
+    }
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 async fn pick_files(app: AppHandle) -> Vec<String> {
     app.dialog()
         .file()
@@ -832,7 +859,8 @@ pub fn run() {
             pick_folder,
             frame_at,
             detect_faces,
-            open_url
+            open_url,
+            download_dragged_url
         ])
         .on_window_event(|window, event| {
             // Closing a window keeps the app alive in the tray, like a menu-bar app.

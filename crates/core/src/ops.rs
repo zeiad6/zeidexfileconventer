@@ -104,6 +104,7 @@ pub enum Op {
     Extract {
         password: Option<String>,
     },
+    ExtractMotion,
     Resize(Size),
     Crop(CropSpec),
     Rotate {
@@ -330,6 +331,7 @@ impl Op {
                 Op::Archive { kind, password, split }
             }
             "extract" => Op::Extract { password: get("password").map(str::to_string) },
+            "motion" => Op::ExtractMotion,
             "resize" => match (get("scale"), get("max")) {
                 (Some(s), _) => {
                     Op::Resize(Size::Percent(s.trim_end_matches('%').parse().map_err(|_| bad("scale", s))?))
@@ -834,6 +836,14 @@ pub const TOOLS: &[ToolDef] = &[
     },
     ToolDef {
         id: "icon", label: "Make .ico", label_ar: "إنشاء أيقونة ico", cats: &[Image], multi: false, params: &[]
+    },
+    ToolDef {
+        id: "motion",
+        label: "Extract Motion Video",
+        label_ar: "استخراج فيديو الصورة الحية",
+        cats: &[Image],
+        multi: false,
+        params: &[],
     },
     ToolDef {
         id: "slideshow",

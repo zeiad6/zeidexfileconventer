@@ -30,6 +30,7 @@ EXAMPLES:
   zeidex tool compress --target 8MB clip.mov
   zeidex tool ocr --lang ara+eng --to pdf scan.pdf
   zeidex tool merge-pdf a.pdf b.pdf
+  zeidex tool motion photo.jpg
   zeidex tool rename --pattern "trip-{n:3}" *.jpg
   zeidex watch ~/Downloads --ext heic --do "convert to=jpg"
 

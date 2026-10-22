@@ -89,9 +89,64 @@ pub fn explorer_selection() -> Vec<PathBuf> {
     Vec::new()
 }
 
+/// What may follow a Shapefile's name or companion files for primary formats.
+const SHAPEFILE_PARTS: &[&str] = &[
+    "shx", "dbf", "prj", "cpg", "sbn", "sbx", "fbn", "fbx", "ain", "aih", "atx", "ixs", "mxs", "qix", "qmd", "qpj", "shp.xml",
+];
+
+/// Filters out companion files (e.g. .dbf, .shx dropped alongside .shp) so they are not processed as separate items.
+pub fn filter_companions(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut shapefile_stems = std::collections::HashSet::new();
+    for p in paths {
+        if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+            if ext.eq_ignore_ascii_case("shp") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    let dir = p.parent().unwrap_or_else(|| std::path::Path::new(""));
+                    shapefile_stems.insert(dir.join(stem));
+                }
+            }
+        }
+    }
+    if shapefile_stems.is_empty() {
+        return paths.to_vec();
+    }
+    paths
+        .iter()
+        .filter(|p| {
+            let dir = p.parent().unwrap_or_else(|| std::path::Path::new(""));
+            let Some(file_name) = p.file_name().and_then(|n| n.to_str()) else { return true };
+            for stem_path in &shapefile_stems {
+                if let Some(stem) = stem_path.file_name().and_then(|s| s.to_str()) {
+                    if dir == stem_path.parent().unwrap_or_else(|| std::path::Path::new("")) && file_name.starts_with(stem) {
+                        let remainder = &file_name[stem.len()..];
+                        if remainder.starts_with('.') {
+                            let sub_ext = remainder[1..].to_ascii_lowercase();
+                            if SHAPEFILE_PARTS.contains(&sub_ext.as_str()) {
+                                return false; // companion file, skip!
+                            }
+                        }
+                    }
+                }
+            }
+            true
+        })
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_shapefile_companions() {
+        let shp = PathBuf::from("/tmp/roads.shp");
+        let dbf = PathBuf::from("/tmp/roads.dbf");
+        let shx = PathBuf::from("/tmp/roads.shx");
+        let other = PathBuf::from("/tmp/other.dbf");
+        let filtered = filter_companions(&[shp.clone(), dbf, shx, other.clone()]);
+        assert_eq!(filtered, vec![shp, other]);
+    }
 
     #[test]
     fn uri_drive_letters() {
