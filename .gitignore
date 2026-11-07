@@ -5,3 +5,4 @@
 !/app/src-tauri/engines/.gitkeep
 .zeidex-*/
 /dist/
+brag-output/
