@@ -88,14 +88,15 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
   (`arcPath`) rather than utility-class material — a deliberate split, not an unfinished port.
   Framer Motion animates the ring swap and the sub-ring, which is what makes the wheel read as
   one wheel morphing instead of a redraw.
-- **The UI contract is tested, not eyeballed**: `app/test` runs 47 Vitest specs (158 assertions)
+- **The UI contract is tested, not eyeballed**: `app/test` runs 48 Vitest specs (159 assertions)
   in jsdom against a fake `window.__TAURI__`, covering the same ground as the previous 73
   plain-`node` assertions — ring segment counts per mode, dwell-opened sub-rings, mode keys,
   keyboard/click paths, hub cancel, preview-pixel → source-pixel editor maths, crop aspect,
   organizer/join ordering, pending-frame cancellation, settings validation, recipes, watch
   rules, rail routing, traffic lights and resize strips, shelf drag-out, and job rows. The ids
   the old build exposed (`#grid`, `#tabs`, `#form`, `#sel`, `#view-*`, `#nav*`, `#win*`,
-  `#orb`, `#badge`, `#params`, `#wheel`) are preserved as the automation contract.
+  `#orb`, `#badge`, `#params`, `#wheel`) are preserved as the automation contract, and one spec
+  asserts the whole list against the rendered DOM so the contract cannot rot silently.
 
 ## 6. Known gaps
 
