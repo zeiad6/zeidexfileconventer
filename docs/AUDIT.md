@@ -60,6 +60,10 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
   `strip-exif` / `strip-metadata` aliases.
 - **Offline guarantee** is enforced by tests: no networking crate may appear in a manifest, and a
   real conversion must not open a socket (`crates/core/tests/offline.rs`).
+- **Extraction safety** is enforced by a test that writes a ZIP by hand with `../../escape.txt`
+  and `/escape.txt` entries, runs the real extraction pipeline, and walks the scratch tree to
+  assert nothing landed outside the archive's own folder
+  (`crates/core/tests/extract_safety.rs`; skipped when no 7-Zip binary is installed).
 - **Backdrop** (`win_studio.rs`): the studio window asks for Mica at creation and the build
   script then applies the ladder explicitly — Mica above build 22621, Acrylic above 17763, plain
   blur below — plus a theme-matched dark frame and rounded corners. The page paints a
@@ -87,7 +91,7 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
   overwrite; only the separator differs.
 - The desktop UI is framework-free (plain ES modules + CSS) rather than the React 19 /
   Tailwind v4 stack in the brief. That keeps the installer small, removes the Node toolchain
-  from the CI build, and lets all 72 UI assertions run under plain `node`. The window, wheel and
+  from the CI build, and lets all 73 UI assertions run under plain `node`. The window, wheel and
   shelf contracts are the same, so a React port is a presentation-layer change, not an
   architectural one. Tracked as a deviation, not claimed as done.
 - Android cannot encode MP3/WAV/FLAC/OGG or transcode video; those actions return a message that
