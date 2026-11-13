@@ -134,10 +134,41 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
   the official key but not with the device's key was reported as "authentic", after which the
   installer refused it. The client now requires HTTPS and a 64-hex digest, and accepts a package
   only when its signer matches the installed app. Tests enforce manifest↔`BuildConfig` version
-  parity and reject placeholder digests.
+  parity and reject placeholder digests. The downloader also walks every HTTPS source now: the
+  manifest lists the site URL first and the release asset as `mirror_url`, and the site answered
+  that path with HTML, so the mirror was the only working file but was never tried.
 - **Update channel, still open (needs hosting, not code):** `https://zeidexsoft.com/updates/manifest.json`
   and `/downloads/<apk>` answer with the site's SPA HTML, and the fallback lives in a private
   repository, so an anonymous device cannot read any manifest. Separately, the `v1.2.0` asset on
   the Android repository is signed by `fb4994b5…`, while the client, both manifests and the
   keystore use `d24bf9df…`; a device carrying the former cannot install the latter in place.
   `android/RELEASING.md` records the upload and key-recovery steps.
+
+## Packaging
+
+- **Windows** now ships both an MSI (for Intune/Group Policy) and an NSIS setup, which needs no
+  installer service and offers a per-user or per-machine install with English and Arabic UI.
+- **Linux** ships four formats from one build: `.deb`, `.rpm`, Flatpak and an AppImage. The
+  AppImage is the distro-independent package — it needs no package manager and no root. It is
+  built on Ubuntu 22.04 deliberately: the AppImage inherits the build host's glibc (2.35), which
+  covers Debian 12+, Ubuntu 22.04+, Fedora 36+, Mint 21+ and openSUSE 15.5+. Building on 24.04
+  would have demanded glibc 2.39 and refused to start on all of those. It needs `libfuse2` (or
+  `--appimage-extract-and-run`) and does not target musl distributions such as Alpine; Flatpak
+  covers those. `bundle.targets` is `"all"`, so each host builds every format it supports.
+- **macOS** has DMG builds for Apple Silicon (`macos-latest`) and Intel (`macos-15-intel`) with a
+  minimum of 11.0. They are unsigned — no Apple Developer certificate exists for this project — so
+  the README documents the right-click → Open step. Bundled engines are 7zz, rhwp and Pandoc;
+  FFmpeg, Ghostscript and qpdf come from Homebrew, and the Engines panel now prints `brew install`
+  hints instead of the Windows `winget` or Linux `apt` lines it used to show on every platform.
+- **CLI** archives are built for Linux x64 and arm64, macOS arm64 and Windows x64. The arm64
+  Linux binary is cross-compiled from the x64 runner; `zeidex-core` has no C dependencies, so a
+  linker is the only requirement. `engines.json` already described macOS and arm64 downloads, but
+  `fetch-engines.sh` hardcoded `linux64`/`x64` URLs, so an arm64 Linux build silently bundled x64
+  binaries. The fetcher now resolves the platform from `engines.json`, verifies every SHA-256
+  before extracting, and builds the same component set on Linux and macOS.
+- **Publishing is tag-driven.** The package jobs used to `gh release upload --clobber` on every
+  push to `main`, which replaced the published bytes and invalidated the digests recorded in the
+  update registry without anyone noticing. They now build on every push but upload only for a `v*`
+  tag, and each platform publishes a `SHA256SUMS-*.txt`. Released files are therefore immutable,
+  and a registry row stays true until the next release.
+

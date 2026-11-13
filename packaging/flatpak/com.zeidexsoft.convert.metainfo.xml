@@ -23,4 +23,12 @@
   <provides>
     <binary>zeidex-app</binary>
   </provides>
+  <releases>
+    <release version="0.2.0" date="2026-11-13">
+      <description>
+        <p>Packaging release: AppImage, deb and rpm alongside the Flatpak, an NSIS setup next to the MSI, DMG builds for Apple Silicon and Intel, and standalone CLI archives for Linux, macOS and Windows.</p>
+      </description>
+    </release>
+    <release version="0.1.0" date="2026-10-22"/>
+  </releases>
 </component>

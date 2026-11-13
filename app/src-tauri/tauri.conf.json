@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Zeidex Convert",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.zeidexsoft.convert",
   "build": {
     "frontendDist": "../ui-dist"
@@ -81,7 +81,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi"],
+    "targets": "all",
+    "publisher": "Zeidexsoft",
+    "copyright": "© 2026 Zeidexsoft",
+    "homepage": "https://zeidexsoft.com",
     "category": "Utility",
     "shortDescription": "Local file converter",
     "longDescription": "Convert and process images, video, audio, PDFs, office documents, ebooks and archives locally. Drag a file, tap Shift, drop it on a format.",
@@ -95,6 +98,16 @@
     "resources": {
       "engines/": "engines/"
     },
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "languages": ["English", "Arabic"],
+        "displayLanguageSelector": true
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
     "linux": {
       "deb": {
         "depends": [
@@ -102,6 +115,16 @@
           "ghostscript",
           "qpdf"
         ]
+      },
+      "rpm": {
+        "depends": [
+          "vips-tools",
+          "ghostscript",
+          "qpdf"
+        ]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
       }
     }
   }

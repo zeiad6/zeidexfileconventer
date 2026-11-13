@@ -1,28 +1,109 @@
 #!/usr/bin/env bash
-# Bundles portable FFmpeg and 7-Zip into the Linux build so the AppImage works out of the box.
-# libvips, Ghostscript and qpdf come from the distro (declared as .deb dependencies);
-# LibreOffice, Pandoc, Calibre and Tesseract are optional and listed in the Engines panel.
+# Bundles the redistributable engines into app/src-tauri/engines for the current Unix platform.
+#
+# The archive URLs and SHA-256 digests come from packaging/engines.json, so a version bump happens
+# in one place. Engines whose licences or sizes make bundling a bad fit (Ghostscript AGPL,
+# LibreOffice, Calibre, Tesseract) are not downloaded: the app's Engines panel prints the install
+# command for each missing tool, and the Linux .deb/.rpm declare the distro packages.
+#
+# Linux:  FFmpeg + FFprobe, 7-Zip, rhwp, Pandoc
+# macOS:  7-Zip, rhwp, Pandoc (FFmpeg comes from Homebrew; see the note above)
 set -euo pipefail
 
-dst="$(cd "$(dirname "$0")/.." && pwd)/app/src-tauri/engines"
+root="$(cd "$(dirname "$0")/.." && pwd)"
+dst="$root/app/src-tauri/engines"
+json="$root/packaging/engines.json"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$dst"
-auth=()
-[[ -n "${GITHUB_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
 
-asset_url() { # repo, regex
-  curl -fsSL "${auth[@]}" -H "User-Agent: zeidex-ci" "https://api.github.com/repos/$1/releases/latest" |
-    python3 -c "import sys,json,re;print(next(a['browser_download_url'] for a in json.load(sys.stdin)['assets'] if re.match(r'$2',a['name'])))"
+if [ -n "${ZEIDEX_ENGINE_PLATFORM:-}" ]; then
+  plat="$ZEIDEX_ENGINE_PLATFORM"
+else
+  case "$(uname -s):$(uname -m)" in
+    Linux:x86_64) plat=linux-x64 ;;
+    Linux:aarch64 | Linux:arm64) plat=linux-arm64 ;;
+    Darwin:arm64) plat=osx-arm64 ;;
+    Darwin:x86_64) plat=osx-x64 ;;
+    *)
+      echo "unsupported platform: $(uname -s) $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+case "$plat" in
+  linux-*) components="ffmpeg 7zip rhwp pandoc" ;;
+  osx-*) components="7zip rhwp pandoc" ;;
+  *)
+    echo "unsupported engine platform: $plat" >&2
+    exit 1
+    ;;
+esac
+
+field() { # component, key
+  python3 - "$json" "$plat" "$1" "$2" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+entry = doc["platforms"][sys.argv[2]]["components"][sys.argv[3]]
+print(entry[sys.argv[4]])
+PY
 }
 
-curl -fsSL "$(asset_url BtbN/FFmpeg-Builds '^ffmpeg-master-latest-linux64-gpl\.tar\.xz$')" -o "$tmp/ffmpeg.tar.xz"
-tar -xJf "$tmp/ffmpeg.tar.xz" -C "$tmp"
-cp "$tmp"/ffmpeg-*/bin/ffmpeg "$tmp"/ffmpeg-*/bin/ffprobe "$dst/"
+fetch() { # component, binary names...
+  local comp="$1"
+  shift
+  local url sha kind archive found name
+  url="$(field "$comp" url)"
+  sha="$(field "$comp" sha256 | tr 'A-F' 'a-f')"
+  kind="$(field "$comp" kind)"
+  archive="$tmp/$comp.archive"
 
-curl -fsSL "$(asset_url ip7z/7zip '^7z[0-9]+-linux-x64\.tar\.xz$')" -o "$tmp/7z.tar.xz"
-mkdir -p "$tmp/7z" && tar -xJf "$tmp/7z.tar.xz" -C "$tmp/7z"
-cp "$tmp/7z/7zz" "$dst/"
+  echo "==> $comp: $url"
+  curl -fsSL "$url" -o "$archive"
 
-chmod +x "$dst"/*
+  local actual
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$archive" | awk '{print $1}')"
+  else
+    actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+  fi
+  if [ "$actual" != "$sha" ]; then
+    echo "checksum mismatch for $comp" >&2
+    echo "  expected $sha" >&2
+    echo "  actual   $actual" >&2
+    exit 1
+  fi
+
+  mkdir -p "$tmp/$comp"
+  case "$kind" in
+    tar.xz) tar -xJf "$archive" -C "$tmp/$comp" ;;
+    tar.gz) tar -xzf "$archive" -C "$tmp/$comp" ;;
+    zip) unzip -q "$archive" -d "$tmp/$comp" ;;
+    *)
+      echo "unsupported archive kind '$kind' for $comp" >&2
+      exit 1
+      ;;
+  esac
+
+  for name in "$@"; do
+    found="$(find "$tmp/$comp" -type f -name "$name" | head -n 1)"
+    if [ -z "$found" ]; then
+      echo "$name was not found inside $comp" >&2
+      exit 1
+    fi
+    cp "$found" "$dst/$name"
+    chmod +x "$dst/$name"
+  done
+}
+
+for component in $components; do
+  case "$component" in
+    ffmpeg) fetch ffmpeg ffmpeg ffprobe ;;
+    7zip) fetch 7zip 7zz ;;
+    rhwp) fetch rhwp rhwp ;;
+    pandoc) fetch pandoc pandoc ;;
+  esac
+done
+
 ls -la "$dst"

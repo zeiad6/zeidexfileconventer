@@ -144,6 +144,22 @@ impl Tool {
                     "whisper.cpp release (github.com/ggml-org/whisper.cpp) + set ZEIDEX_WHISPER_MODEL to a ggml-*.bin"
                 }
             }
+        } else if cfg!(target_os = "macos") {
+            match self {
+                Tool::Ffmpeg | Tool::Ffprobe => "brew install ffmpeg",
+                Tool::Vips | Tool::VipsHeader => "brew install vips",
+                Tool::Ghostscript => "brew install ghostscript",
+                Tool::Qpdf => "brew install qpdf",
+                Tool::SevenZip => "brew install sevenzip (the bundled 7zz is used when present)",
+                Tool::LibreOffice => "brew install --cask libreoffice",
+                Tool::Pandoc => "brew install pandoc",
+                Tool::Calibre => "brew install --cask calibre",
+                Tool::Tesseract => "brew install tesseract tesseract-lang",
+                Tool::ExifTool => "brew install exiftool",
+                Tool::Zbar => "brew install zbar",
+                Tool::Qrencode => "brew install qrencode",
+                Tool::Whisper => "brew install whisper-cpp + set ZEIDEX_WHISPER_MODEL to a ggml-*.bin",
+            }
         } else {
             match self {
                 Tool::Ffmpeg | Tool::Ffprobe => "sudo apt install ffmpeg",

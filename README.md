@@ -1,6 +1,6 @@
 # Zeidex Convert
 
-محوّل ملفات محلي لـ **Windows و Linux**: اسحب ملفاً، واضغط Shift، وأفلته على الصيغة التي تريدها.
+محوّل ملفات محلي لـ **Windows و macOS و Linux**: اسحب ملفاً، واضغط Shift، وأفلته على الصيغة التي تريدها.
 لا يُرفع أي ملف إلى أي خادم.
 
 إعادة بناء بأسلوب clean-room لفكرة [Tangerine File Converter](https://apps.apple.com/us/app/tangerine-file-converter/id6813034065) (وهو تطبيق لـ macOS فقط)، مع ميزات إضافية.
@@ -16,20 +16,20 @@
 
 ## المحرّكات المدمجة
 
-| المحرّك | الاستخدام | مضمَّن في Windows | Linux |
-|---|---|---|---|
-| FFmpeg | الفيديو والصوت وBMP وGIF | ✓ | ✓ (AppImage) |
-| libvips | الصور: HEIC وAVIF وWebP وSVG، والقص، والكولاج | ✓ | تبعية `.deb` |
-| qpdf | دمج PDF وتقسيمه وترتيب صفحاته وتدويرها | ✓ | تبعية `.deb` |
-| 7-Zip | ZIP و7z وTAR وGZIP وفك RAR | ✓ | ✓ |
-| Ghostscript | ضغط PDF، و PDF→صور بدقة 300DPI، و PDF→نص | winget (رخصة AGPL) | تبعية `.deb` |
-| LibreOffice | DOCX وPPTX وXLSX وODT وPages ↔ PDF | winget | apt |
-| Pandoc | Markdown وHTML وEPUB وDOCX | winget | apt |
-| Calibre | **PDF→EPUB** (غير موجود في Tangerine؛ طلبه أحد المراجعين) وMOBI وAZW3 | winget | apt |
-| Tesseract | **OCR**: إنشاء PDF قابل للبحث أو TXT من صور وملفات ممسوحة، والعربية مدعومة | winget | apt |
-| ExifTool | تحرير EXIF/GPS وقراءة بيانات أغنى وإزالة بلا خسارة (اختياري) | winget | apt |
-| ZBar / qrencode | قراءة QR والباركود / توليد QR (اختياري) | يدوي / scoop | apt |
-| whisper.cpp | **تفريغ صوتي إلى SRT** محلياً (اختياري؛ يحتاج نموذج `ggml-*.bin` عبر `ZEIDEX_WHISPER_MODEL` أو `engines/models/`) | يدوي | يدوي |
+| المحرّك | الاستخدام | مضمَّن في Windows | Linux | macOS |
+|---|---|---|---|---|
+| FFmpeg | الفيديو والصوت وBMP وGIF | ✓ | ✓ (AppImage) | brew |
+| libvips | الصور: HEIC وAVIF وWebP وSVG، والقص، والكولاج | ✓ | تبعية `.deb` | brew |
+| qpdf | دمج PDF وتقسيمه وترتيب صفحاته وتدويرها | ✓ | تبعية `.deb` | brew |
+| 7-Zip | ZIP و7z وTAR وGZIP وفك RAR | ✓ | ✓ | ✓ |
+| Ghostscript | ضغط PDF، و PDF→صور بدقة 300DPI، و PDF→نص | winget (رخصة AGPL) | تبعية `.deb` | brew |
+| LibreOffice | DOCX وPPTX وXLSX وODT وPages ↔ PDF | winget | apt | brew cask |
+| Pandoc | Markdown وHTML وEPUB وDOCX | winget | apt | ✓ |
+| Calibre | **PDF→EPUB** (غير موجود في Tangerine؛ طلبه أحد المراجعين) وMOBI وAZW3 | winget | apt | brew cask |
+| Tesseract | **OCR**: إنشاء PDF قابل للبحث أو TXT من صور وملفات ممسوحة، والعربية مدعومة | winget | apt | brew |
+| ExifTool | تحرير EXIF/GPS وقراءة بيانات أغنى وإزالة بلا خسارة (اختياري) | winget | apt | brew |
+| ZBar / qrencode | قراءة QR والباركود / توليد QR (اختياري) | يدوي / scoop | apt | brew |
+| whisper.cpp | **تفريغ صوتي إلى SRT** محلياً (اختياري؛ يحتاج نموذج `ggml-*.bin` عبر `ZEIDEX_WHISPER_MODEL` أو `engines/models/`) | يدوي | يدوي | brew |
 
 لوحة **Engines** في التطبيق، والأمر `zeidex-convert doctor`، يعرضان ما هو مفقود مع أمر التثبيت المناسب.
 للبحث عن كل محرّك ترتيب ثابت: المتغيّر `ZEIDEX_<TOOL>`، ثم مجلد `engines/` المضمَّن، ثم `PATH`، ثم مسارات التثبيت المعروفة.
@@ -138,16 +138,31 @@ bash packaging/smoke.sh target/release/zeidex-convert   # تحويلات حقي�
 cd app && npm ci && npm test && npm run build   # واجهة React 19 على jsdom، ثم بناء ui-dist
 
 # التطبيق (يتطلب تبعيات Tauri على Linux: webkit2gtk-4.1, libxtst, ...)
-bash packaging/fetch-engines.sh           # أو packaging/fetch-engines.ps1 على Windows
-cd app/src-tauri && cargo tauri build
+bash packaging/fetch-engines.sh           # لينكس وماك: يختار المعمارية تلقائياً
+./packaging/fetch-engines.ps1             # ويندوز (PowerShell)
+cd app && npm run bundle:linux            # أو bundle:windows / bundle:macos
 ```
 
-`.github/workflows/build.yml` ينفّذ clippy واختبارات Rust واختبارات الواجهة (Vitest على jsdom) وبناء Vite و smoke test على Linux بكل المحرّكات، ثم يبني:
-- Windows: MSI
-- Linux: Flatpak
-- Android: APK من مستودع `android/` الفرعي
+## حزم التثبيت لكل نظام 📦
 
-`bundle.targets` مضبوط على `msi` لأن CI يبني MSI على Windows و Flatpak على Linux عبر سكربت مستقل؛ بقية صيغ Tauri (deb/rpm/AppImage) تحتاج إضافة الهدف إلى هذا الحقل. الملفات تُرفع كـ artifacts، ودفع وسم مثل `v0.1.0` ينشئ GitHub Release بها. مهمة أندرويد تحتاج سرًّا اسمه `ANDROID_SUBMODULE_TOKEN` (fine-grained PAT بصلاحية Contents: read على مستودع أندرويد) لأن المستودع خاص؛ بدونه تُتخطى المهمة بتحذير بدل أن تفشل.
+| النظام | الحزمة | ملاحظات |
+| --- | --- | --- |
+| Windows 10/11 (x64) | `*.msi` و `*-setup.exe` | MSI للنشر المؤسسي (Intune/Group Policy)، وNSIS setup لمستخدم عادي مع اختيار التثبيت للجميع أو للمستخدم الحالي، بواجهة إنجليزية/عربية |
+| Linux (x64) | `*.AppImage` | **حزمة موحّدة لكل التوزيعات**: لا تحتاج تثبيتًا ولا مدير حزم. مبنية على Ubuntu 22.04 (glibc 2.35) لتعمل على Debian 12+ وUbuntu 22.04+ وFedora 36+ وMint 21+ وopenSUSE 15.5+. تستخدم `libwebkit2gtk-4.1` الموجود افتراضياً في توزيعات سطح المكتب |
+| Linux (Debian/Ubuntu/Mint/Pop) | `*.deb` | يعتمد على `libvips-tools` و`ghostscript` و`qpdf` من المستودع |
+| Linux (Fedora/RHEL/openSUSE) | `*.rpm` | نفس المحرّكات من مستودع التوزيعة |
+| Linux (أي توزيعة) | `*.flatpak` | معزول بـ GNOME Runtime 46، يعمل على أي توزيعة فيها Flatpak |
+| macOS 11+ | `*.dmg` | نسختان: Apple Silicon وIntel. غير موقّعة بشهادة Apple، لذا أول تشغيل: نقر يمين ← Open أو `xattr -dr com.apple.quarantine "/Applications/Zeidex Convert.app"` |
+| Android 8+ | `zeidex-convert-v1.2.0.apk` | من مستودع أندرويد، موقّعة بمفتاح `d24bf9df…` |
+| سطر الأوامر | `zeidex-convert-<version>-<target>.tar.gz` / `.zip` | Linux x64 وarm64، macOS arm64، Windows x64 |
+
+ملاحظات التوافق:
+- AppImage يحتاج `libfuse2` على التوزيعات التي لا توفّره (Ubuntu 22.04+)، أو شغّله بـ `./Zeidex*.AppImage --appimage-extract-and-run`.
+- لا يدعم AppImage توزيعات musl مثل Alpine؛ استخدم Flatpak أو حزمة التوزيعة.
+- محرّكات الصور/PDF في AppImage تأتي من النظام أو من لوحة Engines؛ FFmpeg و7-Zip مضمّنان. على macOS يُضمَّن 7zz وrhwp وpandoc، والباقي عبر `brew install` (اللوحة تعرض الأمر لكل أداة).
+- كل إصدار يُرفق ملف `SHA256SUMS-<platform>.txt`؛ تحقّق بـ `sha256sum -c SHA256SUMS-linux.txt`.
+
+`.github/workflows/build.yml` ينفّذ clippy واختبارات Rust واختبارات الواجهة (Vitest على jsdom) وبناء Vite و smoke test على Linux بكل المحرّكات، ثم يبني الحزم أعلاه ويرفعها كـ artifacts في الـ PRs فقط. **النشر يتم عند دفع وسم `v*` فقط**، فتظل ملفات الإصدار ثابتة وتطابق البصمات المسجّلة؛ الدفع إلى `main` يبني ويتحقق دون أن يستبدل ملفات إصدار قديم. مهمة أندرويد تحتاج سرًّا اسمه `ANDROID_SUBMODULE_TOKEN` (fine-grained PAT بصلاحية Contents: read على مستودع أندرويد) لأن المستودع خاص؛ بدونه تُتخطى المهمة بتحذير بدل أن تفشل.
 
 ## تطبيق أندرويد (Android) 📱
 
