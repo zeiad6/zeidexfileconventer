@@ -28,8 +28,13 @@
   </aside>
 
   <main class="stage">
-    <header class="topbar">
-      <div class="topbar-lead">
+    <header class="topbar" data-tauri-drag-region>
+      <div class="lights">
+        <button type="button" class="light close" id="winClose" aria-label="Close" title="Close"></button>
+        <button type="button" class="light min" id="winMin" aria-label="Minimize" title="Minimize"></button>
+        <button type="button" class="light max" id="winMax" aria-label="Maximize" title="Maximize"></button>
+      </div>
+      <div class="topbar-lead" data-tauri-drag-region>
         <span class="topbar-title" id="viewTitle" data-t="navConvert"></span>
         <span class="hint" id="hook"></span>
       </div>
@@ -234,6 +239,16 @@
       </div>
     </div>
   </dialog>
+
+  <!-- Undecorated window: the eight edges resize through startResizeDragging. -->
+  <div class="rs n" data-resize="North"></div>
+  <div class="rs s" data-resize="South"></div>
+  <div class="rs e" data-resize="East"></div>
+  <div class="rs w" data-resize="West"></div>
+  <div class="rs ne" data-resize="NorthEast"></div>
+  <div class="rs nw" data-resize="NorthWest"></div>
+  <div class="rs se" data-resize="SouthEast"></div>
+  <div class="rs sw" data-resize="SouthWest"></div>
 
   <script src="common.js"></script>
   <script src="home.js"></script>

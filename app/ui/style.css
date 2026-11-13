@@ -122,6 +122,31 @@ label input { margin-top: 3px; color: var(--text); font-size: 14px; }
 .rail-foot { margin-top: auto; padding: 0 4px; }
 .rail-foot .btn-subtle { width: 100%; }
 .stage { display: flex; flex-direction: column; min-width: 0; }
+/* macOS-style window buttons: the window is undecorated so the header reads like a title bar. */
+.lights { display: flex; gap: 8px; padding-inline-end: 4px; }
+.light {
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: default;
+}
+.light.close { background: #ff5f57; }
+.light.min { background: #febc2e; }
+.light.max { background: #28c840; }
+.light:hover { filter: brightness(0.86); }
+:root[dir="rtl"] .lights { flex-direction: row-reverse; }
+/* Resize strips; z-index stays under modals so a dialog never traps the pointer. */
+.rs { position: fixed; z-index: 30; }
+.rs.n { top: 0; inset-inline: 8px; height: 5px; cursor: ns-resize; }
+.rs.s { bottom: 0; inset-inline: 8px; height: 5px; cursor: ns-resize; }
+.rs.e { inset-block: 8px; right: 0; width: 5px; cursor: ew-resize; }
+.rs.w { inset-block: 8px; left: 0; width: 5px; cursor: ew-resize; }
+.rs.ne { top: 0; right: 0; width: 10px; height: 10px; cursor: nesw-resize; }
+.rs.nw { top: 0; left: 0; width: 10px; height: 10px; cursor: nwse-resize; }
+.rs.se { bottom: 0; right: 0; width: 10px; height: 10px; cursor: nwse-resize; }
+.rs.sw { bottom: 0; left: 0; width: 10px; height: 10px; cursor: nesw-resize; }
 .topbar {
   display: flex;
   align-items: center;

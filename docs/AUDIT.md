@@ -66,7 +66,16 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
   near-opaque sheet so it stays readable without a compositor.
 - **Studio shell**: the main window is a sidebar (Converter, Studio Tools, Floating shelf, Watch
   folders, Settings) over the same picker; the shelf lists what the orb holds and can open it as
-  one batch; watch rules have their own summary that jumps into the editor.
+  one batch; watch rules have their own summary that jumps into the editor. The window is
+  undecorated: the header carries macOS-style close/minimise/zoom buttons, `data-tauri-drag-region`
+  moves it, and eight edge strips call `startResizeDragging`, so the glass surface has no OS
+  chrome over it.
+- **Actions ring**: any file, mixed drags included — float to shelf, archive to ZIP, extract,
+  batch rename (opens the pattern form with its preview in the studio window), SHA-256, reveal,
+  copy path, move, terminal.
+- **Android power tools**: the same centred crops (1:1, 16:9, 4:3, 9:16) and size presets
+  (1920 px, 1080 px, 50 %) exist on both the home screen and the studio tools screen, and both
+  paths reach `ImageConverter`'s `inSampleSize` decoding.
 
 ## 6. Known gaps
 
@@ -76,5 +85,14 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
   still embeds it.
 - Name collisions use `name (2).ext` on the desktop and `name 2.ext` on Android. Both never
   overwrite; only the separator differs.
+- The desktop UI is framework-free (plain ES modules + CSS) rather than the React 19 /
+  Tailwind v4 stack in the brief. That keeps the installer small, removes the Node toolchain
+  from the CI build, and lets all 72 UI assertions run under plain `node`. The window, wheel and
+  shelf contracts are the same, so a React port is a presentation-layer change, not an
+  architectural one. Tracked as a deviation, not claimed as done.
 - Android cannot encode MP3/WAV/FLAC/OGG or transcode video; those actions return a message that
   names the desktop app instead of pretending to work.
+- Android has no OCR model: a scanned PDF (no text layer) returns "OCR is available in the
+  desktop app" instead of an empty .docx. Bundling an OCR engine would add several MB and a
+  model download, which conflicts with the offline-first APK; the desktop app runs Tesseract.
+  Text-layer PDF→DOCX does reconstruct simple tables from aligned columns.

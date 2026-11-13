@@ -19,6 +19,7 @@
         "minHeight": 480,
         "center": true,
         "transparent": true,
+        "decorations": false,
         "windowEffects": {
           "effects": ["mica"],
           "state": "active"

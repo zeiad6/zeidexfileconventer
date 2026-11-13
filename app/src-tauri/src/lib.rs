@@ -108,8 +108,12 @@ struct Described {
     actions: Vec<Choice>,
 }
 
-const ACTIONS: [(&str, &str, &str); 5] = [
-    ("float", "Float", "تعليق في الدائرة"),
+const ACTIONS: [(&str, &str, &str); 9] = [
+    ("float", "Float to shelf", "علّق في الرف العائم"),
+    ("archive", "Archive to ZIP", "أرشفة إلى ZIP"),
+    ("extract", "Extract here", "فك الأرشيف هنا"),
+    ("rename", "Batch rename…", "إعادة تسمية دفعية…"),
+    ("checksum", "SHA-256", "بصمة SHA-256"),
     ("reveal", "Show in folder", "إظهار في المجلد"),
     ("copy-path", "Copy path", "نسخ المسار"),
     ("move", "Move to…", "نقل إلى…"),
@@ -321,6 +325,28 @@ fn action(app: &AppHandle, id: &str, paths: Vec<PathBuf>) -> Result<(), String> 
                     let _ = app.emit("job", JobEvent::Text { job: 0, title: "Move".into(), text: e.to_string() });
                 }
             });
+            Ok(())
+        }
+        // The action ring is reachable for mixed selections too, so the tools that work on any
+        // file live here as well — the same ops the Tools ring offers, with their defaults.
+        "archive" => {
+            let op = ops::parse_step("archive format=zip").map_err(|e| e.to_string())?;
+            spawn_job(app.clone(), op, paths, "ZIP".into(), None);
+            Ok(())
+        }
+        "extract" => {
+            spawn_job(app.clone(), Op::Extract { password: None }, paths, "extract".into(), None);
+            Ok(())
+        }
+        "checksum" => {
+            spawn_job(app.clone(), Op::Checksum, paths, "SHA-256".into(), None);
+            Ok(())
+        }
+        // The pattern field with live preview lives in the home window: send the files there
+        // rather than renaming on a default pattern the user never saw.
+        "rename" => {
+            open_in_home(app.clone(), paths.iter().map(|p| p.to_string_lossy().into_owned()).collect());
+            let _ = app.emit("open-tool", "rename");
             Ok(())
         }
         other => Err(format!("unknown action {other}")),

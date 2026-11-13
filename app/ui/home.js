@@ -9,6 +9,9 @@ let paths = [];
 let desc = null;
 let mode = 'convert';
 let view = 'convert';
+// Tool the wheel asked the home window to open (the rename action lands here, where the
+// pattern has a live preview instead of a pattern the user never saw).
+let wantedTool = null;
 const VIEW_TITLES = { convert: 'navConvert', tools: 'tools', shelf: 'navShelf', watch: 'watchFolders', settings: 'settings' };
 
 async function load(p) {
@@ -21,6 +24,7 @@ async function load(p) {
   $('files').textContent = `${paths.length} ${window.ZT('selected')}: ${names.slice(0, 6).join(', ')}${names.length > 6 ? '…' : ''}`;
   $('sel').hidden = false;
   render();
+  if (wantedTool) pickTool(wantedTool);
 }
 
 function render() {
@@ -34,7 +38,7 @@ function render() {
   })));
   const list = desc[mode];
   $('grid').replaceChildren(...(list.length
-    ? list.map((it) => make('button', { textContent: window.ZL(it), onclick: () => choose(it) }))
+    ? list.map((it) => Object.assign(make('button', { textContent: window.ZL(it), onclick: () => choose(it) }), { dataset: { id: it.id } }))
     : [make('p', { className: 'hint', textContent: window.ZT('nothing') })]));
 }
 
@@ -66,6 +70,18 @@ window.__TAURI__.webview.getCurrentWebview().onDragDropEvent((e) => {
   if (t === 'drop') load(e.payload.paths);
 });
 
+// ---------- window controls (undecorated shell) ----------
+const appWin = window.__TAURI__.window.getCurrentWindow();
+$('winClose').onclick = () => appWin.close();
+$('winMin').onclick = () => appWin.minimize();
+$('winMax').onclick = () => appWin.toggleMaximize();
+for (const strip of document.querySelectorAll('[data-resize]')) {
+  strip.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    appWin.startResizeDragging(strip.dataset.resize);
+  });
+}
+
 // ---------- studio navigation ----------
 const VIEW_IDS = { convert: 'navConvert', tools: 'navTools', shelf: 'navShelf', watch: 'navWatch', settings: 'navSettings' };
 
@@ -91,6 +107,18 @@ function showView(name) {
 for (const [name, id] of Object.entries(VIEW_IDS)) {
   $(id).onclick = () => showView(name);
 }
+
+function pickTool(id) {
+  wantedTool = id;
+  showView('tools');
+  const btn = [...$('grid').children].find((b) => b.dataset && b.dataset.id === id);
+  if (btn) {
+    wantedTool = null;
+    btn.click();
+  }
+}
+
+listen('open-tool', (e) => pickTool(e.payload));
 
 async function renderShelf() {
   const files = await invoke('float_list');

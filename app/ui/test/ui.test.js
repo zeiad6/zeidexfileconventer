@@ -51,6 +51,8 @@ class El {
     (this.listeners[t] || []).forEach((f) => f(e));
     if (this[`on${t}`]) return this[`on${t}`]({ preventDefault() {}, target: this, ...e });
   }
+  // Real buttons answer .click(); the fake DOM only had fire() until the open-tool path used it.
+  click() { this.fire('click'); }
   all() { return this.children.flatMap((c) => [c, ...c.all()]); }
   matches(sel) {
     if (sel.startsWith('.')) return this.className.split(' ').includes(sel.slice(1));
@@ -101,6 +103,7 @@ function page(html, query = '') {
         choice('tool', 'crop', 'Crop', [], true),
         choice('tool', 'trim', 'Trim'),
         choice('tool', 'speed', 'Speed'),
+        choice('tool', 'rename', 'Batch rename', [{ key: 'pattern', label: 'Pattern', label_ar: '', default: '{name}-{n:2}' }]),
         { ...choice('tool', 'recipe', '★ Web image'), preset: { steps: 'resize max=1600 | compress percent=60' } },
       ],
       actions: ['reveal', 'copy-path', 'move', 'terminal'].map((a) => choice('action', a, a)),
@@ -143,13 +146,19 @@ function page(html, query = '') {
     set src(v) { this._src = v; setTimeout(() => { this.naturalWidth = 800; this.naturalHeight = 600; this.onload && this.onload(); }, 0); }
     get src() { return this._src; }
   }
+  // Elements that only exist for their attribute (the undecorated window's resize strips).
+  const strips = [...src.matchAll(/<(\w+)[^>]*\bdata-resize="([^"]+)"/g)].map((m) => {
+    const el = new El(m[1]);
+    el.dataset.resize = m[2];
+    return el;
+  });
   const document = {
     documentElement: {},
     getElementById: (id) => byId[id] || null,
     createElement: (t) => new El(t),
     createElementNS: (_, t) => new El(t),
     addEventListener: (t, f) => { (listeners[`doc:${t}`] ||= []).push(f); },
-    querySelectorAll: () => [],
+    querySelectorAll: (sel) => (sel === '[data-resize]' ? strips : []),
   };
   const sandbox = {
     console, setTimeout, clearTimeout, Promise, Math, Object, String, Number, JSON, Map, Symbol, Array,
@@ -169,6 +178,14 @@ function page(html, query = '') {
         },
       },
       event: { listen: async (name, cb) => { (listeners[name] ||= []).push(cb); } },
+      window: {
+        getCurrentWindow: () => ({
+          close: () => calls.push(['winClose']),
+          minimize: () => calls.push(['winMinimize']),
+          toggleMaximize: () => calls.push(['winMaximize']),
+          startResizeDragging: (dir) => calls.push(['winResize', dir]),
+        }),
+      },
       webview: { getCurrentWebview: () => ({ onDragDropEvent: async (h) => { dropHandler = h; } }) },
       drag: { startDrag: async (opts, cb) => { calls.push(['startDrag', opts]); cb({ result: 'Dropped' }); } },
     },
@@ -182,6 +199,7 @@ function page(html, query = '') {
   }
   return {
     byId,
+    strips,
     calls,
     win: sandbox,
     drag: (payload) => dropHandler({ payload }),
@@ -218,7 +236,7 @@ const at = (i, n, r) => {
     p.emit('wheel-hidden');
     await p.drag({ type: 'enter', paths: ['/v/clip.mp4'], position: at(0, 10, 150) });
     p.emit('wheel-mode', 'tools');
-    ok(segs(p).length === 8, 'wheel: Ctrl switches to the tools ring (3 modes + 5 tools)');
+    ok(segs(p).length === 9, 'wheel: Ctrl switches to the tools ring (3 modes + 6 tools)');
     await p.drag({ type: 'drop', paths: ['/v/clip.mp4'], position: at(0, 5, 150) });
     await tick();
     ok(!p.byId.params.hidden, 'wheel: dropping on a tool with options opens the form');
@@ -261,7 +279,7 @@ const at = (i, n, r) => {
     const run = p.calls.find(([c]) => c === 'run_job');
     ok(run && run[1].kind === 'convert' && run[1].id === 'mov' && run[1].opts.quality === '90', `keyboard: arrows, Enter and the nested ring convert (${run && run[1].id}/${run && run[1].opts.quality})`);
     p.key('Tab');
-    ok(segs(p).length === 8, 'keyboard: Tab switches to the tools ring');
+    ok(segs(p).length === 9, 'keyboard: Tab switches to the tools ring');
     // mouse: hover then click a segment, no drag involved
     const clickAt = at(0, 5, 150);
     p.doc('mousemove', { clientX: clickAt.x, clientY: clickAt.y });
@@ -541,6 +559,21 @@ const at = (i, n, r) => {
     p.byId.navSettings.fire('click');
     await tick(10);
     ok(p.byId['view-settings'].hidden === false, 'studio: settings rail shows settings');
+
+    // the wheel's rename action lands here, on the tools tab with the pattern form open
+    p.emit('open-tool', 'rename');
+    await tick(10);
+    ok(p.byId.tabs.children[1].className.includes('on') && !p.byId.form.hidden,
+      'studio: open-tool selects the tool and opens its pattern form');
+
+    // undecorated shell: the traffic lights and the edge strips drive the real window
+    p.byId.winMin.fire('click');
+    p.byId.winMax.fire('click');
+    p.strips.find((s) => s.dataset.resize === 'East').fire('pointerdown', { preventDefault() {} });
+    p.byId.winClose.fire('click');
+    ok(p.calls.some(([c]) => c === 'winMinimize') && p.calls.some(([c]) => c === 'winMaximize')
+      && p.calls.some(([c, d]) => c === 'winResize' && d === 'East') && p.calls.some(([c]) => c === 'winClose'),
+    'studio: window buttons minimize, maximize, resize and close');
   }
 
   // ---------- jobs ----------
