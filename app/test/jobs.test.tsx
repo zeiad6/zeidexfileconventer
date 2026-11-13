@@ -46,6 +46,31 @@ describe('jobs', () => {
     expect(row.querySelector('pre')!.textContent).toContain('line one');
   });
 
+  it('shows the LocalDrop code until the phone connects, then the result', async () => {
+    const h = installTauri();
+    mount(<Jobs />);
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>';
+    await h.emit('job', { type: 'pair', job: 7, title: 'LocalDrop', file: '2 · 3.1 MB', svg, address: '192.168.1.5:50000' });
+
+    let row = rows()[0];
+    const img = row.querySelector('img')!;
+    expect(img.getAttribute('src')).toMatch(/^data:image\/svg\+xml/);
+    expect(row.querySelector('script')).toBeNull();
+    expect(row.textContent).toContain('192.168.1.5:50000');
+    await h.click(row.querySelector('button'));
+    expect(h.calls.some((c) => c.cmd === 'localdrop_cancel')).toBe(true);
+
+    await h.emit('job', { type: 'progress', job: 7, index: 0, fraction: 0.5 });
+    row = rows()[0];
+    expect(row.querySelector('img')).toBeNull();
+
+    await h.emit('job', { type: 'sent', job: 7, device: 'Pixel-8', files: 2, declined: false });
+    row = rows()[0];
+    expect(row.className).toContain('done');
+    expect(row.textContent).toContain('Sent 2 file(s) to Pixel-8');
+    expect(row.querySelector('button')).toBeNull();
+  });
+
   it('can be cleared', async () => {
     const h = installTauri();
     mount(<Jobs />);

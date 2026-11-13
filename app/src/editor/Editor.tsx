@@ -510,14 +510,13 @@ export function Editor() {
 
   // ---------- detection ----------
 
-  const detectBoxes = async (kind: 'text' | 'faces') => {
+  const detectBoxes = async (kind: 'text' | 'pii' | 'faces') => {
     setErr('');
     try {
+      const lang = langInput.current?.value || (ar ? 'ara+eng' : 'eng');
       const found =
-        kind === 'text'
-          ? await detectText(langInput.current?.value || (ar ? 'ara+eng' : 'eng'))
-          : await detectFaces();
-      if (!found.length) throw t(kind === 'text' ? 'noText' : 'noFaces');
+        kind === 'faces' ? await detectFaces() : await detectText(kind === 'pii' ? `pii:${lang}` : lang);
+      if (!found.length) throw t(kind === 'text' ? 'noText' : kind === 'pii' ? 'noPii' : 'noFaces');
       setBoxes((list) => [...list, ...found]);
     } catch (e) {
       setErr(String(e));
@@ -719,6 +718,9 @@ export function Editor() {
           <input id="lang" ref={langInput} defaultValue={ar ? 'ara+eng' : 'eng'} size={7} title="Tesseract" />
           <button type="button" onClick={() => void detectBoxes('text')}>
             {t('detectText')}
+          </button>
+          <button type="button" onClick={() => void detectBoxes('pii')}>
+            {t('detectPii')}
           </button>
         </>
       );

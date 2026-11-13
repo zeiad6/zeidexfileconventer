@@ -101,14 +101,38 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
   `#orb`, `#badge`, `#params`, `#wheel`) are preserved as the automation contract, and one spec
   asserts the whole list against the rendered DOM so the contract cannot rot silently.
 
-## 6. Known gaps
+## 6. Upgrade round 2
+
+| # | Finding | Fix |
+|---|---|---|
+| R1 | **Desktop commits could replace a file.** The output name was checked with `exists()` and then claimed with `rename`, which replaces whatever another program created in between (Windows and POSIX both). Batch rename had the same gap between its preview and the apply. | `runner::commit_new` claims the name with a hard link, which the OS refuses when the name exists, and falls back to a checked rename only where hard links are missing (FAT, exFAT, some shares). Checksums, saved annotations, CLI `qr-make` and moves use it; batch rename rolls the whole set back to the original names instead of replacing a newcomer. Android's `AtomicWriter.commit` does the same with `Files.createLink` and is `@Synchronized`, so parallel workers cannot pick one name twice. |
+| R2 | **Collision names differed** (`name (2).ext` on the desktop, `name 2.ext` on Android). | Both use `name 2.ext`, `name 3.ext`… |
+| R3 | **A killed run left `.zeidex-*` staging folders** (possibly gigabytes of video) beside the originals forever; only cancel and failure cleaned up. | Each run sweeps staging older than two days from the folders it writes to. |
+| R4 | **Auto-redact hid every line of text**, so redacting one phone number blacked out the whole document. | `redact boxes=pii` (and «Detect e-mails & numbers» in the editor) hides only e-mail addresses and digit runs of 7+ (phone, card, IBAN), which OCR often splits across words. |
+| R5 | No way to destroy a file. | `shred` (CLI `--yes`, Actions ring with a confirmation dialog): three passes (zeros, ones, random), each flushed, then rename, truncate, delete. The dialog and the help say plainly that SSDs, phones and copy-on-write disks can keep older copies. |
+| R6 | No way to hand files to the phone app. | **LocalDrop** (`crates/localdrop`, Android `LocalDropReceiver`): Actions ring → *Send to phone* shows a QR code holding the LAN address and a fresh 256-bit key; the phone photographs it, sees the file list and accepts. AES-256-GCM frames with implicit nonces, SHA-256 per file, LAN addresses only, one session per code, ten-minute expiry. A shared test vector (checked against Python's `cryptography`) pins Rust and Kotlin to identical bytes. It uses std sockets only and is never reached from a conversion; the offline test now covers its manifest too. |
+| R7 | Linux packages stopped at deb/rpm/AppImage/Flatpak. | `packaging/linux/`: Arch `PKGBUILD`/`.SRCINFO` (repackages the release deb), `snapcraft.yaml`, and `install.sh`, which picks apt/dnf/zypper/pacman/Flatpak/AppImage, verifies every download against the release `SHA256SUMS`, and installs the static musl CLI on Alpine and other musl systems (new `x86_64-unknown-linux-musl` CLI build). |
+
+Not done, on purpose:
+- **AI background removal / upscaling (ONNX, WGPU) and Whisper bundling**: they need models of
+  tens to hundreds of MB and native runtimes that cannot be built or tested on the development
+  host; adding them unverified would contradict the zero-defect goal. Transcription already
+  works when a Whisper model is installed.
+- **macOS NSPanel and Wayland layer-shell hooks**: no macOS or Wayland session to test on.
+  Windows uses the `GetAsyncKeyState` poll and X11 (and macOS, with the Accessibility
+  permission) use `rdev`; Wayland blocks global input by design, so there the orb and the
+  studio window remain the way in.
+- **mDNS discovery for LocalDrop**: the QR code already carries the address, so discovery would
+  add a dependency and a broadcast without removing a step.
+
+## 7. Known gaps
 
 - Windows code is cross-checked on the Linux host with `cargo check --target
   x86_64-pc-windows-msvc`. The Windows resource step (icon, manifest) needs the Windows SDK, so
   `build.rs` skips only that step for a cross-target check; the native `windows-latest` CI job
-  still embeds it.
-- Name collisions use `name (2).ext` on the desktop and `name 2.ext` on Android. Both never
-  overwrite; only the separator differs.
+  still embeds it. Since LocalDrop, `ring` compiles C for the target, which needs MSVC, so the
+  cross-check stops at its build script on a Linux host; the host-target `cargo clippy` of the
+  app and the `windows-latest` job cover the Rust code instead.
 - The React build adds a Node step to CI (`npm ci && npm test && npm run build` in `app`) and
   puts `app/ui-dist` in the bundle: about 394 kB of JS and 30 kB of CSS — 134 kB gzipped — most
   of it React and ReactDOM, against a hand-written UI that needed no toolchain. The trade was

@@ -11,12 +11,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WindowEvent};
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use zeidex_core::ops::{self, Op};
 use zeidex_core::runner::{self, Event};
 use zeidex_core::{actions, b64, format, integrate, tools};
@@ -108,7 +109,7 @@ struct Described {
     actions: Vec<Choice>,
 }
 
-const ACTIONS: [(&str, &str, &str); 9] = [
+const ACTIONS: [(&str, &str, &str); 11] = [
     ("float", "Float to shelf", "علّق في الرف العائم"),
     ("archive", "Archive to ZIP", "أرشفة إلى ZIP"),
     ("extract", "Extract here", "فك الأرشيف هنا"),
@@ -118,6 +119,8 @@ const ACTIONS: [(&str, &str, &str); 9] = [
     ("copy-path", "Copy path", "نسخ المسار"),
     ("move", "Move to…", "نقل إلى…"),
     ("terminal", "Terminal", "الطرفية"),
+    ("send-phone", "Send to phone", "إرسال إلى الهاتف"),
+    ("shred", "Shred…", "إتلاف نهائي…"),
 ];
 
 #[derive(Clone, Serialize)]
@@ -128,6 +131,10 @@ enum JobEvent {
     Done { job: u64, index: usize, output: String },
     Failed { job: u64, index: usize, error: String },
     Text { job: u64, title: String, text: String },
+    // LocalDrop is waiting: `svg` is the pairing code the phone scans.
+    Pair { job: u64, title: String, file: String, svg: String, address: String },
+    // LocalDrop finished: the phone took the files, or its user declined them.
+    Sent { job: u64, device: String, files: usize, declined: bool },
 }
 
 #[derive(Serialize)]
@@ -342,6 +349,16 @@ fn action(app: &AppHandle, id: &str, paths: Vec<PathBuf>) -> Result<(), String> 
             spawn_job(app.clone(), Op::Checksum, paths, "SHA-256".into(), None);
             Ok(())
         }
+        "send-phone" => {
+            send_to_phone(app, paths);
+            Ok(())
+        }
+        "shred" => {
+            let app = app.clone();
+            // The confirmation dialog blocks; keep it off the IPC thread.
+            std::thread::spawn(move || shred_confirmed(&app, &paths));
+            Ok(())
+        }
         // The pattern field with live preview lives in the home window: send the files there
         // rather than renaming on a default pattern the user never saw.
         "rename" => {
@@ -350,6 +367,108 @@ fn action(app: &AppHandle, id: &str, paths: Vec<PathBuf>) -> Result<(), String> 
             Ok(())
         }
         other => Err(format!("unknown action {other}")),
+    }
+}
+
+/// Shredding cannot be undone, so it always asks first and says what it cannot promise.
+fn shred_confirmed(app: &AppHandle, paths: &[PathBuf]) {
+    let names: Vec<String> = paths.iter().take(5).map(|p| file_name(p)).collect();
+    let more = if paths.len() > names.len() { format!("\n… +{}", paths.len() - names.len()) } else { String::new() };
+    let message = format!(
+        "{}{more}\n\n\
+         Overwrite {n} file(s) three times and delete them? This cannot be undone.\n\
+         SSDs, phones and copy-on-write disks may keep older copies elsewhere; only full-disk encryption covers those.\n\n\
+         الكتابة فوق {n} ملف ثلاث مرات ثم حذفها؟ لا يمكن التراجع.\n\
+         أقراص SSD والهواتف قد تحتفظ بنسخ قديمة في مكان آخر؛ التشفير الكامل للقرص وحده يحميها.",
+        names.join("\n"),
+        n = paths.len()
+    );
+    let confirmed = app
+        .dialog()
+        .message(message)
+        .title("Shred — إتلاف نهائي")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom("Shred / إتلاف".into(), "Cancel / إلغاء".into()))
+        .blocking_show();
+    if !confirmed {
+        return;
+    }
+    let job = NEXT_JOB.fetch_add(1, Ordering::Relaxed);
+    let text = match actions::shred(paths) {
+        Ok(n) => format!("{n} file(s) overwritten and deleted"),
+        Err(e) => e.to_string(),
+    };
+    show(app, "jobs");
+    let _ = app.emit("job", JobEvent::Text { job, title: "Shred".into(), text });
+}
+
+// ---------- LocalDrop: hand files to the phone app over the local network ----------
+
+/// How long a pairing code stays valid.
+const PAIR_WAIT: Duration = Duration::from_secs(10 * 60);
+/// The running LocalDrop session; a new one, or `localdrop_cancel`, stops it.
+static DROP_CANCEL: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+
+fn send_to_phone(app: &AppHandle, paths: Vec<PathBuf>) {
+    let cancel = Arc::new(AtomicBool::new(false));
+    if let Some(old) = DROP_CANCEL.lock().unwrap_or_else(|p| p.into_inner()).replace(cancel.clone()) {
+        old.store(true, Ordering::Relaxed);
+    }
+    let job = NEXT_JOB.fetch_add(1, Ordering::Relaxed);
+    show(app, "jobs");
+    let app = app.clone();
+    // Hashing large files takes a while: never on the IPC thread.
+    std::thread::spawn(move || {
+        let fail = |error: String| {
+            let _ = app.emit("job", JobEvent::Failed { job, index: 0, error });
+        };
+        let offer = match zeidex_localdrop::offer(&paths) {
+            Ok(o) => o,
+            Err(e) => return fail(e.to_string()),
+        };
+        let svg = match offer.qr_svg() {
+            Ok(svg) => svg,
+            Err(e) => return fail(e.to_string()),
+        };
+        let bytes: u64 = offer.files().iter().map(|f| f.size).sum();
+        let _ = app.emit(
+            "job",
+            JobEvent::Pair {
+                job,
+                title: "LocalDrop".into(),
+                file: format!("{} · {:.1} MB", offer.files().len(), bytes as f64 / 1e6),
+                svg,
+                address: offer.link().addr.to_string(),
+            },
+        );
+        let result = offer.serve(PAIR_WAIT, &cancel, |status| {
+            let fraction = match status {
+                zeidex_localdrop::Status::Waiting => return,
+                zeidex_localdrop::Status::Connected { .. } => 0.0,
+                zeidex_localdrop::Status::Sending { sent, total } => sent as f32 / total.max(1) as f32,
+            };
+            let _ = app.emit("job", JobEvent::Progress { job, index: 0, fraction });
+        });
+        match result {
+            Ok(zeidex_localdrop::Delivery::Delivered { device, files, .. }) => {
+                let _ = app.emit("job", JobEvent::Sent { job, device, files, declined: false });
+            }
+            Ok(zeidex_localdrop::Delivery::Declined { device }) => {
+                let _ = app.emit("job", JobEvent::Sent { job, device, files: 0, declined: true });
+            }
+            Err(e) => fail(e.to_string()),
+        }
+        let mut slot = DROP_CANCEL.lock().unwrap_or_else(|p| p.into_inner());
+        if slot.as_ref().is_some_and(|c| Arc::ptr_eq(c, &cancel)) {
+            *slot = None;
+        }
+    });
+}
+
+#[tauri::command]
+fn localdrop_cancel() {
+    if let Some(c) = DROP_CANCEL.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        c.store(true, Ordering::Relaxed);
     }
 }
 
@@ -978,7 +1097,8 @@ pub fn run() {
             frame_at,
             detect_faces,
             open_url,
-            download_dragged_url
+            download_dragged_url,
+            localdrop_cancel
         ])
         .on_window_event(|window, event| {
             // Closing a window keeps the app alive in the tray, like a menu-bar app.

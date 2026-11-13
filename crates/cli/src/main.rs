@@ -8,7 +8,7 @@ use zeidex_core::format::{common_category, common_targets};
 use zeidex_core::ops::{parse_quality, parse_step, tools_for_paths, Op, TOOLS};
 use zeidex_core::runner::{self, Event};
 use zeidex_core::tools::{locate, Tool};
-use zeidex_core::{integrate, Error};
+use zeidex_core::{actions, integrate, Error};
 
 const USAGE: &str = r#"
 zeidex-convert — local file converter (images, video, audio, PDF, office, ebooks, archives)
@@ -24,6 +24,8 @@ USAGE:
   zeidex-convert tools                              list tool ids and their options
   zeidex-convert doctor                             show which engines were found
   zeidex-convert integrate                          add "Open with Zeidex" to the file manager
+  zeidex-convert shred --yes <files...>             overwrite 3 times, then delete (cannot be undone;
+                                                    SSDs and phones may keep old copies elsewhere)
   zeidex-convert update                             check official packages and verify signatures (zeidexsoft.com)
 
 EXAMPLES:
@@ -123,18 +125,24 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
             let (text, rest) = rest.split_first().ok_or_else(|| Error::BadOption("text required".into()))?;
             let (opts, _) = split_args(rest)?;
             let out = PathBuf::from(opts.get("out").map_or("qr.png", String::as_str));
-            let out = runner::unique_path(&std::path::absolute(&out)?);
+            let out = std::path::absolute(&out)?;
+            let staged = runner::staging_path(out.parent().unwrap_or(std::path::Path::new(".")), "png");
             let ok = std::process::Command::new(zeidex_core::tools::require(Tool::Qrencode)?)
                 .args(["-s", "10", "-m", "2", "-l", "M", "-o"])
-                .arg(&out)
+                .arg(&staged)
                 .arg("--")
                 .arg(text)
                 .status()?
                 .success();
-            if ok {
-                println!("{}", out.display());
+            let out = if ok { runner::commit_new(&staged, &out).map(Some) } else { Ok(None) };
+            let _ = std::fs::remove_file(&staged);
+            match out? {
+                Some(out) => {
+                    println!("{}", out.display());
+                    Ok(true)
+                }
+                None => Ok(false),
             }
-            Ok(ok)
         }
         "tools" => {
             for t in TOOLS {
@@ -180,6 +188,23 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
                 println!("  URL:       {}", p.url);
                 println!("{:-<76}", "");
             }
+            Ok(true)
+        }
+        "shred" => {
+            let (flags, files): (Vec<&String>, Vec<&String>) = rest.iter().partition(|a| a.starts_with("--"));
+            if let Some(f) = flags.iter().find(|f| f.as_str() != "--yes") {
+                return Err(Error::BadOption(format!("unknown option {f}")));
+            }
+            if files.is_empty() {
+                return Err(Error::BadOption("files required".into()));
+            }
+            if flags.is_empty() {
+                return Err(Error::BadOption("shred destroys the files for good: add --yes to confirm".into()));
+            }
+            let files: Vec<PathBuf> = files.into_iter().map(PathBuf::from).collect();
+            let n = actions::shred(&files)?;
+            println!("shredded {n} file(s)");
+            eprintln!("note: SSDs, phones and copy-on-write filesystems may keep older copies of the data");
             Ok(true)
         }
         "integrate" => {

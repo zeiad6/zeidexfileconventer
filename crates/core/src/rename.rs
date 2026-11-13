@@ -87,7 +87,8 @@ pub fn plan(paths: &[PathBuf], pattern: &str, start: usize) -> Result<Vec<(PathB
 }
 
 /// Applies `plan` safely even when names swap (a→b, b→a): move everything to temporary
-/// names first, then to the final names.
+/// names first, then to the final names. A file that appeared under a new name after the
+/// preview is never replaced: the whole batch is rolled back to the original names instead.
 pub fn apply(plan: &[(PathBuf, PathBuf)]) -> Result<()> {
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let temps: Vec<PathBuf> = plan
@@ -95,11 +96,26 @@ pub fn apply(plan: &[(PathBuf, PathBuf)]) -> Result<()> {
         .enumerate()
         .map(|(i, (old, _))| old.with_file_name(format!(".zeidex-rename-{stamp}-{i}")))
         .collect();
-    for ((old, _), tmp) in plan.iter().zip(&temps) {
-        fs::rename(old, tmp)?;
+    for (i, ((old, _), tmp)) in plan.iter().zip(&temps).enumerate() {
+        if let Err(e) = fs::rename(old, tmp) {
+            for ((old, _), tmp) in plan.iter().zip(&temps).take(i) {
+                let _ = fs::rename(tmp, old);
+            }
+            return Err(e.into());
+        }
     }
-    for ((_, new), tmp) in plan.iter().zip(&temps) {
-        fs::rename(tmp, new)?;
+    for (i, ((_, new), tmp)) in plan.iter().zip(&temps).enumerate() {
+        if let Err(e) = crate::runner::move_no_replace(tmp, new) {
+            // Undo: renamed files go back from their new name, the rest from their temp name.
+            for (j, ((old, new), tmp)) in plan.iter().zip(&temps).enumerate() {
+                let _ = fs::rename(if j < i { new } else { tmp }, old);
+            }
+            return Err(if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Error::BadOption(format!("{} already exists; nothing was renamed", new.display()))
+            } else {
+                e.into()
+            });
+        }
     }
     Ok(())
 }
@@ -134,6 +150,27 @@ mod tests {
         assert_eq!(fs::read_to_string(&a).unwrap(), "B");
         fs::write(d.join("taken.jpg"), "").unwrap();
         assert!(plan(std::slice::from_ref(&a), "taken", 1).is_err(), "never overwrites other files");
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn a_file_created_after_the_preview_is_not_replaced() {
+        let d = std::env::temp_dir().join(format!("zeidex-rename-late-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let (a, b) = (d.join("a.txt"), d.join("b.txt"));
+        fs::write(&a, "A").unwrap();
+        fs::write(&b, "B").unwrap();
+        let p = plan(&[a.clone(), b.clone()], "x-{n}", 1).unwrap();
+        // Something else claims the second new name between preview and apply.
+        fs::write(d.join("x-2.txt"), "intruder").unwrap();
+        assert!(apply(&p).is_err());
+        assert_eq!(fs::read_to_string(&a).unwrap(), "A", "rolled back");
+        assert_eq!(fs::read_to_string(&b).unwrap(), "B", "rolled back");
+        assert_eq!(fs::read_to_string(d.join("x-2.txt")).unwrap(), "intruder");
+        assert!(!d.join("x-1.txt").exists());
+        let names = fs::read_dir(&d).unwrap().count();
+        assert_eq!(names, 3, "no temporary name is left behind");
         fs::remove_dir_all(&d).unwrap();
     }
 }

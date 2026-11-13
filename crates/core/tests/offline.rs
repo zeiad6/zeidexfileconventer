@@ -1,6 +1,10 @@
 //! The product promise is "everything is processed on this machine". Two guards keep it true:
 //! no networking crate may be added to a manifest, and a real conversion must not open a
 //! socket. Both run offline, in the normal `cargo test` pass.
+//!
+//! The one deliberate exception is LocalDrop (`crates/localdrop`): opt-in, LAN-only, std
+//! sockets, end-to-end encrypted, and never reachable from a conversion. Its manifest is held to
+//! the same banned list, so it cannot pull in an HTTP or TLS stack either.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -65,6 +69,7 @@ fn no_manifest_pulls_a_networking_crate() {
         root.join("crates/core/Cargo.toml"),
         root.join("crates/cli/Cargo.toml"),
         root.join("app/src-tauri/Cargo.toml"),
+        root.join("crates/localdrop/Cargo.toml"),
     ];
     let mut checked = 0;
     for path in manifests.iter().filter(|p| p.exists()) {

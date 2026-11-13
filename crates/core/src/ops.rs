@@ -64,6 +64,10 @@ impl Adjust {
 /// `Op::Redact::auto` value asking for face detection instead of OCR.
 pub const FACES: &str = "faces";
 
+/// Prefix of an `Op::Redact::auto` language that hides only personal data (e-mail addresses,
+/// phone, card and account numbers) instead of every line of text.
+pub const PII_PREFIX: &str = "pii:";
+
 /// `exif` option key -> ExifTool tag.
 pub const EXIF_FIELDS: [(&str, &str); 7] = [
     ("artist", "Artist"),
@@ -424,12 +428,12 @@ impl Op {
                 let spec = get("boxes").ok_or_else(|| bad("boxes", "required (x,y,w,h;... or auto)"))?;
                 let auto = if spec == "faces" {
                     Some(FACES.to_string())
-                } else if spec == "auto" || spec == "text" {
+                } else if spec == "auto" || spec == "text" || spec == "pii" {
                     let lang = get("lang").unwrap_or("eng");
                     if !lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '_') {
                         return Err(bad("lang", lang));
                     }
-                    Some(lang.to_string())
+                    Some(if spec == "pii" { format!("{PII_PREFIX}{lang}") } else { lang.to_string() })
                 } else {
                     None
                 };
@@ -1034,7 +1038,7 @@ pub const TOOLS: &[ToolDef] = &[
         cats: &[Image, Video],
         multi: false,
         params: &[
-            p("boxes", "Boxes x,y,w,h;…, text or faces", "المربعات x,y,w,h;… أو text أو faces", ""),
+            p("boxes", "Boxes x,y,w,h;…, text, pii or faces", "المربعات x,y,w,h;… أو text أو pii أو faces", ""),
             p("style", "blur or color", "blur أو لون", "blur"),
             p("start", "From (video)", "من (فيديو)", ""),
             p("end", "To (video)", "إلى (فيديو)", ""),

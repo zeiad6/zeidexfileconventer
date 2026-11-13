@@ -70,7 +70,9 @@ export type JobEvent =
   | { type: 'progress'; job: number; index: number; fraction: number }
   | { type: 'done'; job: number; index: number; output: string }
   | { type: 'failed'; job: number; index: number; error: string }
-  | { type: 'text'; job: number; title: string; text: string };
+  | { type: 'text'; job: number; title: string; text: string }
+  | { type: 'pair'; job: number; title: string; file: string; svg: string; address: string }
+  | { type: 'sent'; job: number; device: string; files: number; declined: boolean };
 
 /** One page of a PDF, or one clip of a join, as the editor needs it. */
 export interface PageRef {

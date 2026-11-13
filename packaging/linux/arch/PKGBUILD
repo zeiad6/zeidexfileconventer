@@ -1,0 +1,32 @@
+# Maintainer: Zeidex Soft
+# Repackages the official .deb release so the AUR package and the GitHub release ship
+# identical bytes. Bump pkgver and sha256sums together, then regenerate .SRCINFO with
+# `makepkg --printsrcinfo > .SRCINFO`.
+pkgname=zeidex-convert-bin
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Offline file converter with a drag-and-drop radial wheel, floating shelf and CLI"
+arch=('x86_64')
+url="https://github.com/zeiad6/zeidexfileconventer"
+license=('custom')
+depends=('webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator' 'xdg-utils')
+optdepends=(
+  'ffmpeg: audio and video conversion'
+  'libvips: fast image conversion'
+  'libreoffice-fresh: office documents'
+  'pandoc: markup documents'
+  'ghostscript: PDF compression'
+  'qpdf: PDF repair and merge'
+  'tesseract: OCR for scanned PDFs'
+  '7zip: 7z archives'
+)
+provides=('zeidex-convert')
+conflicts=('zeidex-convert')
+source_x86_64=("Zeidex.Convert_${pkgver}_amd64.deb::${url}/releases/download/v${pkgver}/Zeidex.Convert_${pkgver}_amd64.deb")
+sha256sums_x86_64=('728b72497c9ca4559b977457eece26506668d790e1c7eb8dabb47bdaa6bb27fc')
+
+package() {
+  bsdtar -xf data.tar.* -C "${pkgdir}"
+  # Debian's /usr/share/doc layout is not used on Arch.
+  rm -rf "${pkgdir}/usr/share/doc"
+}
