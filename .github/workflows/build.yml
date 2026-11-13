@@ -149,6 +149,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
             libxdo-dev libssl-dev libxtst-dev libx11-dev patchelf file rpm libfuse2
+      # A stock runner has ~14 GB free and the payload is written several times (target dir,
+      # AppDir, squashfs). The image ships toolchains this build never touches; removing them
+      # keeps the bundler from failing at the last step with ENOSPC.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost \
+            /usr/share/swift /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h /
       - name: Fetch engines (Linux)
         run: bash packaging/fetch-engines.sh
       - name: Clippy (app crate)
@@ -222,6 +231,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
             libxdo-dev libssl-dev libxtst-dev libx11-dev patchelf flatpak flatpak-builder elfutils
+      # The Flatpak export writes the app three times (rofiles, repo, bundle). Without this the
+      # runner reaches "min-free-space-percent '3%' would be exceeded" after a full build.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost \
+            /usr/share/swift /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h /
       - name: Fetch engines (Linux)
         run: bash packaging/fetch-engines.sh
       - name: Build Linux Binary
