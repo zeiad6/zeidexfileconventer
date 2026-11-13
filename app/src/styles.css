@@ -168,6 +168,11 @@
     background: color-mix(in srgb, var(--card) 55%, transparent);
     backdrop-filter: blur(18px) saturate(140%);
   }
+  .rail-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
   .rail-btn {
     text-align: start;
     border: 1px solid transparent;
@@ -918,6 +923,11 @@
     grid-column: 1 / -1;
     justify-self: start;
     margin-top: 8px;
+  }
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   .btn-subtle {
     display: inline-flex;

@@ -357,7 +357,7 @@ export function Home() {
                   <p className="hint">{desc ? t('nothing') : ''}</p>
                 )}
               </div>
-              {form && (
+              {form ? (
                 <ParamsForm
                   id="form"
                   variant="inline"
@@ -368,6 +368,10 @@ export function Home() {
                     setForm(null);
                   }}
                 />
+              ) : (
+                /* The previous build shipped `#form` in the HTML and toggled `hidden`; scripts
+                   in the wild still look it up, so it stays mounted even with nothing open. */
+                <form id="form" className="inline-form" hidden />
               )}
             </section>
           </section>

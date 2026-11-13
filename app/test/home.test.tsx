@@ -32,6 +32,21 @@ describe('home', () => {
     expect(need('view-convert').hidden).toBe(false);
   });
 
+  it('keeps every automation id the previous build exposed', async () => {
+    await open();
+    const ids = [
+      'grid', 'tabs', 'form', 'sel', 'choose', 'files', 'drop',
+      'view-convert', 'view-shelf', 'view-watch', 'view-settings',
+      'navConvert', 'navTools', 'navShelf', 'navWatch', 'navSettings', 'railNav',
+      'winClose', 'winMin', 'winMax', 'viewTitle', 'hook',
+      'engines', 'enginePanel', 'integrate', 'integrated',
+      'settings', 'settingsMsg', 'shelfList', 'shelfAdd', 'shelfOpen', 'shelfClear',
+      'watchList', 'watchEdit', 'langToggle', 'donateBtn', 'aboutBtn',
+    ];
+    const missing = ids.filter((id) => byId(id) === null);
+    expect(missing).toEqual([]);
+  });
+
   it('round-trips settings, recipes and watch rules', async () => {
     const h = await open();
     await waitFor(() => expect(document.querySelector('select[name="tools"]')).not.toBeNull());
