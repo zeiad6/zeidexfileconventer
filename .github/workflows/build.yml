@@ -162,7 +162,10 @@ jobs:
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak install -y --user --noninteractive flathub org.gnome.Platform//46 org.gnome.Sdk//46
           bash packaging/build-flatpak.sh
+      # Releases are the delivery path on main; artifacts are for inspecting pull requests.
+      # Keeping main runs out of artifact storage also stops the account quota from filling.
       - name: Upload Artifact
+        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
@@ -215,6 +218,7 @@ jobs:
         working-directory: app/src-tauri
         run: cargo tauri build --bundles msi
       - name: Upload Artifact
+        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
