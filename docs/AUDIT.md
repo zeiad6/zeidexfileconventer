@@ -66,8 +66,11 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
   (`crates/core/tests/extract_safety.rs`; skipped when no 7-Zip binary is installed).
 - **Backdrop** (`win_studio.rs`): the studio window asks for Mica at creation and the build
   script then applies the ladder explicitly — Mica above build 22621, Acrylic above 17763, plain
-  blur below — plus a theme-matched dark frame and rounded corners. The page paints a
-  near-opaque sheet so it stays readable without a compositor.
+  blur below — plus a theme-matched dark frame and rounded corners. The pre-Mica acrylic path
+  calls `SetWindowCompositionAttribute`, which user32.dll exports but user32.lib does not, so the
+  symbol is resolved with `GetProcAddress` at runtime; a plain import compiles under
+  `cargo check --target x86_64-pc-windows-msvc` and only fails when the Windows runner links.
+  The page paints a near-opaque sheet so it stays readable without a compositor.
 - **Studio shell**: the main window is a sidebar (Converter, Studio Tools, Floating shelf, Watch
   folders, Settings) over the same picker; the shelf lists what the orb holds and can open it as
   one batch; watch rules have their own summary that jumps into the editor. The window is

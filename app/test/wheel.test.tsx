@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cleanup } from '@testing-library/react';
+import { cleanup, waitFor } from '@testing-library/react';
 import { Wheel } from '../src/wheel/Wheel';
 import { C } from '../src/lib/geometry';
 import { firstCall, installTauri, mount, type Harness } from './harness';
@@ -155,7 +155,9 @@ describe('wheel', () => {
     expect(cancel.textContent).toBe('Cancel');
     await h.click(cancel);
 
-    expect(params()).toBeNull();
+    // The form leaves through a 140 ms AnimatePresence exit, so it is still in the DOM for a
+    // moment after the click; waiting is the contract, not a race the test should win.
+    await waitFor(() => expect(params()).toBeNull());
     expect(h.calls.some((c) => c.cmd === 'hide_wheel')).toBe(true);
   });
 });
