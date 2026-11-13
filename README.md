@@ -143,10 +143,11 @@ cd app/src-tauri && cargo tauri build
 ```
 
 `.github/workflows/build.yml` ينفّذ clippy واختبارات Rust واختبارات الواجهة (Vitest على jsdom) وبناء Vite و smoke test على Linux بكل المحرّكات، ثم يبني:
-- Windows: NSIS و MSI
-- Linux: deb و rpm و AppImage
+- Windows: MSI
+- Linux: Flatpak
+- Android: APK من مستودع `android/` الفرعي
 
-ويرفعها كـ artifacts. دفع وسم مثل `v0.1.0` ينشئ GitHub Release بهذه الملفات.
+`bundle.targets` مضبوط على `msi` لأن CI يبني MSI على Windows و Flatpak على Linux عبر سكربت مستقل؛ بقية صيغ Tauri (deb/rpm/AppImage) تحتاج إضافة الهدف إلى هذا الحقل. الملفات تُرفع كـ artifacts، ودفع وسم مثل `v0.1.0` ينشئ GitHub Release بها. مهمة أندرويد تحتاج سرًّا اسمه `ANDROID_SUBMODULE_TOKEN` (fine-grained PAT بصلاحية Contents: read على مستودع أندرويد) لأن المستودع خاص؛ بدونه تُتخطى المهمة بتحذير بدل أن تفشل.
 
 ## تطبيق أندرويد (Android) 📱
 
