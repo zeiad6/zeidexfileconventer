@@ -174,7 +174,9 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
                 println!("• Package:   {} [{}]", p.name, p.platform);
                 println!("  Version:   v{} (Code: {})", p.version, p.version_code);
                 println!("  SHA-256:   {}", p.sha256);
-                println!("  Signature: {} ({})", p.signature, p.signing_key_id);
+                if !p.signature.is_empty() {
+                    println!("  Signature: {} ({})", p.signature, p.signing_key_id);
+                }
                 println!("  URL:       {}", p.url);
                 println!("{:-<76}", "");
             }

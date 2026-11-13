@@ -144,4 +144,22 @@ mod tests {
         assert_eq!(pkgs[0].version_code, 2);
         assert!(pkgs[0].is_newer_than(1));
     }
+
+    #[test]
+    fn shipped_registry_has_real_digests_and_https_urls() {
+        let json = include_str!("../../../packaging/updates/manifest.json");
+        let pkgs = parse_manifest(json);
+
+        assert!(pkgs.len() >= 3, "the registry must list every shipped package");
+        for pkg in &pkgs {
+            assert!(!pkg.id.is_empty());
+            assert!(pkg.version_code > 0, "{} has no version code", pkg.id);
+            assert!(pkg.url.starts_with("https://"), "{} downloads over plain HTTP", pkg.id);
+            assert_eq!(pkg.sha256.len(), 64, "{} has a truncated digest", pkg.id);
+            assert!(pkg.sha256.chars().all(|c| c.is_ascii_hexdigit()), "{} has a non-hex digest", pkg.id);
+            // The registry used to carry typed-out example digests. A real SHA-256 can contain
+            // this run by chance, but a hand-written placeholder almost always does.
+            assert!(!pkg.sha256.contains("0123456789abcdef"), "{} still carries a placeholder digest", pkg.id);
+        }
+    }
 }

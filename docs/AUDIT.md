@@ -123,3 +123,21 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
   desktop app" instead of an empty .docx. Bundling an OCR engine would add several MB and a
   model download, which conflicts with the offline-first APK; the desktop app runs Tesseract.
   Text-layer PDF→DOCX does reconstruct simple tables from aligned columns.
+- **Update channel.** Four defects were fixed in the client and the registry: (a) the Android
+  parser only understood `packages.android`, while the unified registry is a `packages` array,
+  so even a correct document produced no update; (b) the first HTTP 200 body was parsed as JSON
+  without inspection, so the site's HTML shell (84,529 bytes of `text/html` for
+  `/updates/manifest.json`) aborted the check before the fallback ran; (c) the registry carried
+  typed-out placeholder digests for Windows and Flatpak, and listed a macOS DMG and a CLI binary
+  that have never been published, with versions (1.1.0) that do not exist — those rows now carry
+  the real `v0.1.0` assets and digests, and the phantom rows are gone; (d) an APK signed with
+  the official key but not with the device's key was reported as "authentic", after which the
+  installer refused it. The client now requires HTTPS and a 64-hex digest, and accepts a package
+  only when its signer matches the installed app. Tests enforce manifest↔`BuildConfig` version
+  parity and reject placeholder digests.
+- **Update channel, still open (needs hosting, not code):** `https://zeidexsoft.com/updates/manifest.json`
+  and `/downloads/<apk>` answer with the site's SPA HTML, and the fallback lives in a private
+  repository, so an anonymous device cannot read any manifest. Separately, the `v1.2.0` asset on
+  the Android repository is signed by `fb4994b5…`, while the client, both manifests and the
+  keystore use `d24bf9df…`; a device carrying the former cannot install the latter in place.
+  `android/RELEASING.md` records the upload and key-recovery steps.
