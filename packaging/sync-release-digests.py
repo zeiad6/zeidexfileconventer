@@ -32,8 +32,10 @@ CHANGELOG_EN = (
 
 
 def release(tag: str) -> dict:
+    # `gh release view --json` returns neither browser_download_url nor digest, so the REST
+    # payload is used instead: it carries both for every asset.
     out = subprocess.check_output(
-        ["gh", "release", "view", tag, "--json", "assets,publishedAt", "--repo", repo()],
+        ["gh", "api", f"repos/{repo()}/releases/tags/{tag}"],
         text=True,
     )
     return json.loads(out)
@@ -97,9 +99,9 @@ def main() -> int:
                 "arch": arch,
                 "version": version,
                 "version_code": version_code(version),
-                "release_date": release_data["publishedAt"][:10],
-                "url": asset["downloadUrl"],
-                "mirror_url": asset["downloadUrl"],
+                "release_date": release_data["published_at"][:10],
+                "url": asset["browser_download_url"],
+                "mirror_url": asset["browser_download_url"],
                 "sha256": digest,
                 "changelog_ar": CHANGELOG_AR.format(version=version),
                 "changelog_en": CHANGELOG_EN.format(version=version),

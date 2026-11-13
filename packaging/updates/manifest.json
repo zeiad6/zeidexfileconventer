@@ -5,7 +5,7 @@
   "official_website": "https://zeidexsoft.com",
   "developer_portal": "https://zeidexlink.zeidexsoft.com/zeidex",
   "manifest_version": 1,
-  "updated_at": "2026-11-13T18:20:00Z",
+  "updated_at": "2026-11-13T00:00:00Z",
   "packages": [
     {
       "id": "com.zeidex.convert",
@@ -26,33 +26,33 @@
       "mandatory": false
     },
     {
-      "id": "zeidex-convert-windows-x64",
-      "name": "Zeidex Convert (Windows x64 Installer)",
+      "id": "zeidex-convert-windows-x64-msi",
+      "name": "Zeidex Convert (Zeidex.Convert_0.1.0_x64_en-US.msi)",
       "platform": "windows",
       "arch": "x64",
       "version": "0.1.0",
-      "version_code": 1,
-      "release_date": "2026-11-13",
-      "url": "https://zeidexsoft.com/downloads/Zeidex.Convert_0.1.0_x64_en-US.msi",
+      "version_code": 100,
+      "release_date": "2026-10-21",
+      "url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.1.0/Zeidex.Convert_0.1.0_x64_en-US.msi",
       "mirror_url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.1.0/Zeidex.Convert_0.1.0_x64_en-US.msi",
-      "sha256": "0c5c5843576337616c40398e379b8eb4d041a03bc5cfc0ebf6f2d085c03084f6",
-      "changelog_ar": "إصدار سطح المكتب 0.1.0: واجهة React جديدة، عجلة ثلاثية الحلقات، سلة عائمة، مراقبة مجلدات، وأداة سطر أوامر — يعمل دون اتصال بالكامل.",
-      "changelog_en": "Desktop 0.1.0: new React UI, three-ring wheel, floating shelf, watch folders and the CLI — fully offline.",
+      "sha256": "d93680b2125a227ca188980090b68d0f5bd4c2b921f9913d768e09f018595271",
+      "changelog_ar": "إصدار 0.1.0: حزم تثبيت لكل الأنظمة — Windows (MSI وsetup)، Linux (AppImage وdeb وrpm وFlatpak)، macOS (Apple Silicon وIntel)، وسطر أوامر لكل نظام.",
+      "changelog_en": "Release 0.1.0: installers for every system — Windows (MSI and setup), Linux (AppImage, deb, rpm and Flatpak), macOS (Apple Silicon and Intel), and the CLI for each platform.",
       "mandatory": false
     },
     {
       "id": "com.zeidexsoft.convert.flatpak",
-      "name": "Zeidex Convert (Linux Flatpak)",
+      "name": "Zeidex Convert (ZeidexConvert.flatpak)",
       "platform": "linux",
       "arch": "x86_64",
       "version": "0.1.0",
-      "version_code": 1,
-      "release_date": "2026-11-13",
-      "url": "https://zeidexsoft.com/downloads/ZeidexConvert.flatpak",
+      "version_code": 100,
+      "release_date": "2026-10-21",
+      "url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.1.0/ZeidexConvert.flatpak",
       "mirror_url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.1.0/ZeidexConvert.flatpak",
-      "sha256": "906f0313fd0f75b2743160be1232e3072c29e2f7a4428fc85b817ab051abaa3b",
-      "changelog_ar": "حزمة فلاتباك 0.1.0: محركات مدمجة بالكامل، واجهة React، وعمل كامل دون اتصال.",
-      "changelog_en": "Flatpak 0.1.0: fully embedded engines, the React UI, and complete offline operation.",
+      "sha256": "dd416fbbe4f052a18ac1f24d7763bcae4cd384a928c41be679d7baf03adcd929",
+      "changelog_ar": "إصدار 0.1.0: حزم تثبيت لكل الأنظمة — Windows (MSI وsetup)، Linux (AppImage وdeb وrpm وFlatpak)، macOS (Apple Silicon وIntel)، وسطر أوامر لكل نظام.",
+      "changelog_en": "Release 0.1.0: installers for every system — Windows (MSI and setup), Linux (AppImage, deb, rpm and Flatpak), macOS (Apple Silicon and Intel), and the CLI for each platform.",
       "mandatory": false
     }
   ]
