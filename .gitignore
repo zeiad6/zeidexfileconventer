@@ -6,3 +6,5 @@
 .zeidex-*/
 /dist/
 brag-output/
+/app/node_modules/
+/app/ui-dist/

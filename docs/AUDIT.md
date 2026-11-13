@@ -80,6 +80,22 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
 - **Android power tools**: the same centred crops (1:1, 16:9, 4:3, 9:16) and size presets
   (1920 px, 1080 px, 50 %) exist on both the home screen and the studio tools screen, and both
   paths reach `ImageConverter`'s `inSampleSize` decoding.
+- **Desktop UI is React 19 + TypeScript + Tailwind CSS v4 + Framer Motion** (`app/src`, Vite,
+  five HTML entries because Tauri opens five windows). Tailwind v4's `@import "tailwindcss"` and
+  `@theme inline` tokens carry layout and utility styling; the wheel's SVG rings, the orb
+  gradient, the glass sheet, the eight resize strips and the modal internals live in
+  `@layer components` in `app/src/styles.css`, because they are generated geometry
+  (`arcPath`) rather than utility-class material — a deliberate split, not an unfinished port.
+  Framer Motion animates the ring swap and the sub-ring, which is what makes the wheel read as
+  one wheel morphing instead of a redraw.
+- **The UI contract is tested, not eyeballed**: `app/test` runs 47 Vitest specs (158 assertions)
+  in jsdom against a fake `window.__TAURI__`, covering the same ground as the previous 73
+  plain-`node` assertions — ring segment counts per mode, dwell-opened sub-rings, mode keys,
+  keyboard/click paths, hub cancel, preview-pixel → source-pixel editor maths, crop aspect,
+  organizer/join ordering, pending-frame cancellation, settings validation, recipes, watch
+  rules, rail routing, traffic lights and resize strips, shelf drag-out, and job rows. The ids
+  the old build exposed (`#grid`, `#tabs`, `#form`, `#sel`, `#view-*`, `#nav*`, `#win*`,
+  `#orb`, `#badge`, `#params`, `#wheel`) are preserved as the automation contract.
 
 ## 6. Known gaps
 
@@ -89,11 +105,13 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
   still embeds it.
 - Name collisions use `name (2).ext` on the desktop and `name 2.ext` on Android. Both never
   overwrite; only the separator differs.
-- The desktop UI is framework-free (plain ES modules + CSS) rather than the React 19 /
-  Tailwind v4 stack in the brief. That keeps the installer small, removes the Node toolchain
-  from the CI build, and lets all 73 UI assertions run under plain `node`. The window, wheel and
-  shelf contracts are the same, so a React port is a presentation-layer change, not an
-  architectural one. Tracked as a deviation, not claimed as done.
+- The React build adds a Node step to CI (`npm ci && npm test && npm run build` in `app`) and
+  puts `app/ui-dist` in the bundle: ~236 kB of JS and 31 kB of CSS, 41 kB gzipped, against a
+  hand-written UI that needed no toolchain. The trade was made for typed IPC calls, one design
+  system and component-level tests; the installer still ships fully offline.
+- One deliberate behaviour change in the port: a finished job row shows a 100 % bar instead of
+  freezing at the last progress event (the old row stayed at, say, 60 % while marked done).
+  `app/test/jobs.test.tsx` asserts the new value.
 - Android cannot encode MP3/WAV/FLAC/OGG or transcode video; those actions return a message that
   names the desktop app instead of pretending to work.
 - Android has no OCR model: a scanned PDF (no text layer) returns "OCR is available in the

@@ -135,14 +135,14 @@ zeidex-convert tools                                      # كل الأدوات 
 cargo test --workspace                    # النواة والـ CLI، بلا شبكة ولا محرّكات
 cargo build -p zeidex-cli --release
 bash packaging/smoke.sh target/release/zeidex-convert   # تحويلات حقيقية؛ يتخطى المحرّكات المفقودة
-node app/ui/test/ui.test.js               # سكربتات الواجهة على DOM وهمي، بلا تبعيات
+cd app && npm ci && npm test && npm run build   # واجهة React 19 على jsdom، ثم بناء ui-dist
 
 # التطبيق (يتطلب تبعيات Tauri على Linux: webkit2gtk-4.1, libxtst, ...)
 bash packaging/fetch-engines.sh           # أو packaging/fetch-engines.ps1 على Windows
 cd app/src-tauri && cargo tauri build
 ```
 
-`.github/workflows/build.yml` ينفّذ clippy والاختبارات واختبار الواجهة و smoke test على Linux بكل المحرّكات، ثم يبني:
+`.github/workflows/build.yml` ينفّذ clippy واختبارات Rust واختبارات الواجهة (Vitest على jsdom) وبناء Vite و smoke test على Linux بكل المحرّكات، ثم يبني:
 - Windows: NSIS و MSI
 - Linux: deb و rpm و AppImage
 
@@ -192,7 +192,8 @@ cd app/src-tauri && cargo tauri build
 crates/core   منطق نقي: الصيغ، الأدوات، التخطيط (argv)، التنفيذ، PDF writer، SRT/VTT
 crates/cli    zeidex-convert
 app/src-tauri النوافذ، الـ tray، كشف السحب (Win32 poll على Windows وrdev على X11)، خلفية Mica/Acrylic، أوامر IPC
-app/ui        HTML/JS بلا bundler: العجلة، الدائرة العائمة، الرئيسية، المهام
+app/src       واجهة React 19 + TypeScript + Tailwind v4 + Framer Motion: العجلة، الدائرة، الرئيسية، المهام، المحرر
+app/ui-dist   ناتج Vite الذي يحزمه Tauri (خمس صفحات: home, wheel, shelf, jobs, editor)
 specs/        مواصفات clean-room بصيغة EARS
 packaging/    جلب المحرّكات و smoke test
 ```

@@ -23,6 +23,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -32,8 +37,14 @@ jobs:
         run: rustfmt --check --edition 2021 --config-path rustfmt.toml app/src-tauri/src/*.rs
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-      - name: UI scripts (fake DOM, no deps)
-        run: node app/ui/test/ui.test.js
+      - name: UI tests (React + jsdom)
+        working-directory: app
+        run: |
+          npm ci
+          npm test
+      - name: UI build (TypeScript + Vite)
+        working-directory: app
+        run: npm run build
       - name: engine smoke test (real conversions)
         if: runner.os == 'Linux'
         run: |
@@ -90,10 +101,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
           workspaces: app/src-tauri
+      - name: Build UI
+        working-directory: app
+        run: |
+          npm ci
+          npm run build
       - name: Linux build deps
         run: |
           sudo apt-get update
@@ -147,10 +168,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
           workspaces: app/src-tauri
+      - name: Build UI (Windows)
+        working-directory: app
+        run: |
+          npm ci
+          npm run build
       - name: Fetch engines (Windows)
         shell: pwsh
         run: ./packaging/fetch-engines.ps1
