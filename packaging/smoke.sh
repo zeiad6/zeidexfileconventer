@@ -2,7 +2,7 @@
 # Real-engine smoke test: builds fixtures with FFmpeg/Ghostscript, runs every major route
 # through the CLI, and checks each output exists and is non-empty. Routes whose engine is
 # missing are skipped, so it also runs on a partial install.
-# Usage: packaging/smoke.sh path/to/zeidex
+# Usage: packaging/smoke.sh path/to/zeidex-convert
 set -uo pipefail
 
 Z="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"

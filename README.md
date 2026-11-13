@@ -31,7 +31,7 @@
 | ZBar / qrencode | قراءة QR والباركود / توليد QR (اختياري) | يدوي / scoop | apt |
 | whisper.cpp | **تفريغ صوتي إلى SRT** محلياً (اختياري؛ يحتاج نموذج `ggml-*.bin` عبر `ZEIDEX_WHISPER_MODEL` أو `engines/models/`) | يدوي | يدوي |
 
-لوحة **Engines** في التطبيق، والأمر `zeidex doctor`، يعرضان ما هو مفقود مع أمر التثبيت المناسب.
+لوحة **Engines** في التطبيق، والأمر `zeidex-convert doctor`، يعرضان ما هو مفقود مع أمر التثبيت المناسب.
 للبحث عن كل محرّك ترتيب ثابت: المتغيّر `ZEIDEX_<TOOL>`، ثم مجلد `engines/` المضمَّن، ثم `PATH`، ثم مسارات التثبيت المعروفة.
 
 ## الاستخدام
@@ -41,8 +41,11 @@
 - `Alt` للأدوات
 - `Ctrl` للإجراءات
 
+العجلة ثلاث حلقات متداخلة: **الخارجية** للأوضاع الثلاثة، **الوسطى** لخيارات الوضع، **الداخلية** للحلقة الفرعية (إعدادات الجودة أو القيم الافتراضية لأدوات ذات خيارات). أبقِ المؤشر على قطاع لثانية تقريباً لتفتح حلقته الفرعية، أو أفلت فوق القطاع مباشرة لتطبيقه. تدوير عجلة الفأرة (في وضع لوحة المفاتيح) يبدّل الأوضاع بانتقال سلس. **الإفلات في المركز يلغي العملية.**
 مرّر المؤشر فوق قطاع ثم أفلت. الناتج يُحفظ بجانب الأصل، ولا يُمس الأصل أبداً.
-داخل العجلة، إبقاء المؤشر فوق أيقونات المنتصف يبدّل الوضع دون لوحة مفاتيح.
+في Windows تُكتشف السحبة باستطلاع `GetAsyncKeyState(VK_LBUTTON)` بتردد 60Hz (دون hook منخفض المستوى يزعج مضادات الفيروسات)، وتُقرأ `CF_HDROP` من الحافظة كفحص أولي؛ والقائمة النهائية تأتي من هدف الإفلات الأصلي (OLE). نوافذ العجلة والدائرة تحمل `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST` فلا تسرق التركيز ولا تظهر في Alt+Tab.
+
+إذا خلطت التحديد (مثلاً 10 صور ومقطع فيديو) فلا تظهر عجلة فارغة: يعرض وضع التحويل كل صيغة يدعمها ملف واحد على الأقل مع عدد الملفات الداعمة لها (`JPG 10/11`)، ويُطبَّق الاختيار على ما يدعمه ويُبلَّغ عن الباقي.
 
 **Wayland:** يمنع Wayland الاختصارات العامة، فاسحب الملفات إلى **الدائرة البرتقالية العائمة** لتظهر العجلة حولها.
 
@@ -54,34 +57,38 @@
 
 **الإعدادات:** تغيير مفتاح كل عجلة (Shift / Alt / Control / Meta)، وتشغيل أو إيقاف إظهار النتائج في مدير الملفات وتشغيل أو إيقاف Ctrl+Shift+Space، وتحرير الوصفات والمجلدات المراقَبة.
 
+**نافذة الاستوديو:** شريط جانبي بأربعة أقسام — *التحويل* (إفلات واختيار وصيغ)، *أدوات الاستوديو* (نفس شبكة الأدوات لملفات محددة)، *الرف العائم* (ملفات محجوزة من مجلدات مختلفة، تُفتح دفعة واحدة أو تُسحب من الدائرة البرتقالية)، *مجلدات مراقَبة* (ملخص القواعد مع انتقال مباشر إلى الإعدادات)، ثم *الإعدادات*. على Windows 11 22H2+ تُطبَّق خلفية **Mica**، وعلى Windows 10 1809+ **Acrylic**، وقبلها تمويه عادي، مع إطار داكن/فاتح يتبع سمة النظام وزوايا مستديرة — والقشرة نفسها شبه معتمة لتبقى مقروءة إن غاب مركّب النوافذ.
+
 **النافذة الرئيسية:** إفلات الملفات أو اختيارها ثم النقر. زر «إضافة إلى مدير الملفات» يضيف:
 - Windows: اختصار في قائمة *Send To*
 - Linux: سكربت Nautilus، وإجراء Nemo، وقائمة خدمة Dolphin
 
 **CLI:**
 ```bash
-zeidex convert --to jpg *.heic
-zeidex tool compress --target 8MB clip.mov        # ترميز على مرحلتين للوصول إلى الحجم المطلوب
-zeidex tool ocr --lang ara+eng --to pdf scan.pdf
-zeidex tool pages --spec 3,1-2,z doc.pdf          # إعادة ترتيب الصفحات أو حذفها
-zeidex tool redact --boxes "40,40,300,80" --style blur --start 5 --end 9 clip.mp4
-zeidex tool split --at 1:30,4:10 talk.mp4
-zeidex tool redact --boxes auto --lang ara+eng scan.png   # يغطي كل النصوص المكتشفة
-zeidex tool redact --boxes faces --style "#000000" team.jpg   # يغطي كل الوجوه المكتشفة
-zeidex tool dehaze --strength 0.8 foggy.jpg
-zeidex tool adjust --saturation 1.3 --sharpen 0.8 photo.heic
-zeidex tool tags --title "حلقة 1" --artist ZeidexSoft episode.mp3
-zeidex recipe "resize max=1600 | compress percent=60 | strip" --jobs 4 *.heic
-zeidex watch ~/Downloads --ext heic --do "convert to=jpg"
-zeidex tool rename --pattern "رحلة-{n:3}" *.jpg
-ZEIDEX_WHISPER_MODEL=~/models/ggml-base.bin zeidex tool transcribe --lang ar lecture.mp4
-zeidex tool burn-subs video.mp4 video.srt
-zeidex tool social --ratio 9:16 clip.mp4
-zeidex tool archive --format 7z --password "…" --split 25MB project/
-zeidex tool duplicates ~/Pictures --move 1
-zeidex tool exif --artist "Zeiad" --gps 24.7136,46.6753 photo.jpg
-zeidex qr-make "https://example.com" --out code.png && zeidex tool qr-read code.png
-zeidex tools                                      # كل الأدوات وخياراتها
+zeidex-convert convert --to webp *.png --quality 85   # جودة 1-100 لكل مرمّز ضياعي
+zeidex-convert tool strip-exif *.jpg                  # إزالة EXIF/GPS (بلا إعادة ترميز)
+zeidex-convert convert --to jpg *.heic
+zeidex-convert tool compress --target 8MB clip.mov        # ترميز على مرحلتين للوصول إلى الحجم المطلوب
+zeidex-convert tool ocr --lang ara+eng --to pdf scan.pdf
+zeidex-convert tool pages --spec 3,1-2,z doc.pdf          # إعادة ترتيب الصفحات أو حذفها
+zeidex-convert tool redact --boxes "40,40,300,80" --style blur --start 5 --end 9 clip.mp4
+zeidex-convert tool split --at 1:30,4:10 talk.mp4
+zeidex-convert tool redact --boxes auto --lang ara+eng scan.png   # يغطي كل النصوص المكتشفة
+zeidex-convert tool redact --boxes faces --style "#000000" team.jpg   # يغطي كل الوجوه المكتشفة
+zeidex-convert tool dehaze --strength 0.8 foggy.jpg
+zeidex-convert tool adjust --saturation 1.3 --sharpen 0.8 photo.heic
+zeidex-convert tool tags --title "حلقة 1" --artist ZeidexSoft episode.mp3
+zeidex-convert recipe "resize max=1600 | compress percent=60 | strip" --jobs 4 *.heic
+zeidex-convert watch ~/Downloads --ext heic --do "convert to=jpg"
+zeidex-convert tool rename --pattern "رحلة-{n:3}" *.jpg
+ZEIDEX_WHISPER_MODEL=~/models/ggml-base.bin zeidex-convert tool transcribe --lang ar lecture.mp4
+zeidex-convert tool burn-subs video.mp4 video.srt
+zeidex-convert tool social --ratio 9:16 clip.mp4
+zeidex-convert tool archive --format 7z --password "…" --split 25MB project/
+zeidex-convert tool duplicates ~/Pictures --move 1
+zeidex-convert tool exif --artist "Zeiad" --gps 24.7136,46.6753 photo.jpg
+zeidex-convert qr-make "https://example.com" --out code.png && zeidex-convert tool qr-read code.png
+zeidex-convert tools                                      # كل الأدوات وخياراتها
 ```
 
 ## الصيغ والأدوات
@@ -94,13 +101,13 @@ zeidex tools                                      # كل الأدوات وخيا
   - PDF: دمج مع ترتيب صفحات كل الملفات قبل الدمج، فصل الصفحات، منظّم صفحات مرئي (إعادة ترتيب وتدوير وتكرار وحذف)، تدوير
 - **ما يتفوّق به على Tangerine:**
   - معالجة دفعات متوازية (`--jobs`، افتراضياً نصف الأنوية حتى 4).
-  - **استخراج فيديو الصور الحية (Motion/Live Photos)**: استخراج الفيديو المدمج في صور Motion Photo (Pixel وSamsung) أو Apple Live Photo (`.livp` أو ملفات HEIC/JPG المقترنة) عبر `zeidex tool motion`.
+  - **استخراج فيديو الصور الحية (Motion/Live Photos)**: استخراج الفيديو المدمج في صور Motion Photo (Pixel وSamsung) أو Apple Live Photo (`.livp` أو ملفات HEIC/JPG المقترنة) عبر `zeidex-convert tool motion`.
   - **سحب وإفلات مباشر من المتصفحات**: إمكانية سحب الصور والروابط مباشرة من متصفحات الويب (Chrome وEdge وFirefox) إلى التطبيق لتحويلها.
   - **دعم صيغ موسّع**: صور إضافية (JPEG XL `jxl`، JPEG 2000 `jp2`، RAW الكاميرات `dng/cr2/nef/arw`، `psd`، `tga`)، وفيديو/صوت (`m2ts`، `ac3`، `opus`)، وترجمات (`ass`، `ssa`، `smi`، `lrc`)، ومستندات مارك آب (`rst`، `tex`، `org`، `adoc`، `typ` عبر Pandoc)، وأرشيفات (`cab`، `iso`، `deb`، `rpm`، والامتدادات المركبة `.tar.bz2` و`.tar.xz`).
   - **تكامل موسّع لمديري الملفات**: دعم Thunar (XFCE) عبر SendTo وقوائم الإجراءات المخصصة، وتشغيل تلقائي XDG Autostart، بجانب Nautilus وNemo وDolphin.
   - **بيان محركات موحّد وموثّق**: ملف `packaging/engines.json` معتمد من مشروع Filee يحتوي على روابط وبصمات SHA-256 محددة لكل المحركات المستقلة.
   - **وصفات**: سلسلة أدوات بخطوة واحدة (`resize max=1600 | compress percent=60 | strip`)، تُحفظ في الإعدادات وتظهر في عجلة الأدوات بنجمة ★.
-  - **مجلدات مراقَبة**: كل ملف يصل إلى مجلد يُعالَج تلقائياً بعد اكتمال نسخه (`zeidex watch` أو من الإعدادات).
+  - **مجلدات مراقَبة**: كل ملف يصل إلى مجلد يُعالَج تلقائياً بعد اكتمال نسخه (`zeidex-convert watch` أو من الإعدادات).
   - **إعادة تسمية دفعية** بأنماط `{name}` `{n:3}` `{date}` `{ext}` `{parent}`، آمنة مع تبديل الأسماء ولا تكتب فوق ملفات أخرى.
   - **بصمة SHA-256** بصيغة `sha256sum` (يتحقق منها `sha256sum -c`).
   - **علامة مائية** (شعار بشفافية وموضع وحجم) على الصور والفيديو.
@@ -113,7 +120,7 @@ zeidex tools                                      # كل الأدوات وخيا
   - **أرشيف محمي**: zip بتشفير AES-256 و 7z مع إخفاء أسماء الملفات، تقسيم إلى أجزاء (مثل 25MB)، فك أرشيف محمي.
   - **كاشف المكررات**: يقارن الحجم ثم SHA-256 داخل المجلدات، ويمكنه نقل النسخ إلى مجلد Duplicates.
   - **صور ويب متجاوبة**: AVIF و WebP بعروض 480 و960 و1600 (دون تكبير) مع وسم `<picture>` جاهز.
-  - **قراءة QR والباركود** (ZBar) و**توليد QR** (`zeidex qr-make`).
+  - **قراءة QR والباركود** (ZBar) و**توليد QR** (`zeidex-convert qr-make`).
   - **تحرير EXIF والموقع** (المصوّر، الحقوق، التاريخ، الكاميرا، GPS) عبر ExifTool، وإزالة البيانات الوصفية من الصور بلا إعادة ترميز عند وجوده.
   - **Ctrl+Shift+Space**: يفتح العجلة لملفات محددة دون سحب (تحديد Explorer على Windows، أو الملفات المنسوخة بـ Ctrl+C على Linux)، مع التنقل بالأسهم و Enter و Tab والنقر.
   - واجهة عربية كاملة، وسطر أوامر لكل الأدوات.
@@ -125,7 +132,7 @@ zeidex tools                                      # كل الأدوات وخيا
 ```bash
 cargo test --workspace                    # النواة والـ CLI، بلا شبكة ولا محرّكات
 cargo build -p zeidex-cli --release
-bash packaging/smoke.sh target/release/zeidex   # تحويلات حقيقية؛ يتخطى المحرّكات المفقودة
+bash packaging/smoke.sh target/release/zeidex-convert   # تحويلات حقيقية؛ يتخطى المحرّكات المفقودة
 node app/ui/test/ui.test.js               # سكربتات الواجهة على DOM وهمي، بلا تبعيات
 
 # التطبيق (يتطلب تبعيات Tauri على Linux: webkit2gtk-4.1, libxtst, ...)
@@ -152,13 +159,13 @@ cd app/src-tauri && cargo tauri build
     - **مستودع المشروع المخصص للأندرويد**: [zeiad6/zeidex-convert-android](https://github.com/zeiad6/zeidex-convert-android)
     - **إصلاح استخراج فيديو الصور الحية**: دعم كامل لكافة أجهزة Google Pixel و Samsung Galaxy و Xiaomi و Apple Live Photo (.livp وحزم ZIP وملفات MOV المدمجة) بـ 6 استراتيجيات ثنائية دقيقة.
     - **إشعار النظام بمسار حفظ الملف المكتمل**: إشعار نظام فوري يحتوي على المسار الكامل للملف مع خيارات التشغيل والمشاركة الفورية.
-    - **إضافة صيغة MP4**: دعم استخراج وتحويل الصور الحية مباشرة إلى MP4 وكذلك تحسين الفيديوهات إلى MP4 FHD.
-    - **أداة تحسين الجودة الشاملة**:
-      - تحسين الفيديو: تكبير فائق 1080p FHD Upscale، رفع معدل البت ومعالجة التشويش، ومضاعفة نقاء الصوت إلى 256 kbps.
-      - تحسين الصور: توضيح وحِدة التفاصيل بمصفوفة Laplacian، موازنة التباين والألوان، تكبير 2X Super-Resolution، وتصدير BMP و WEBP و PNG و JPG و PDF.
+    - **إضافة صيغة MP4**: دعم استخراج وتحويل الصور الحية مباشرة إلى MP4، وإعادة تغليف الفيديو (remux) إلى MP4 دون إعادة ترميز.
+    - **أداة تحسين الجودة (بما تدعمه فعلياً)**:
+      - الفيديو: إعادة تغليف MP4 ومضاعفة نقاء المسار الصوتي AAC. التطبيق **لا** يكبّر الدقة ولا يرفع معدل البت، ويُظهر رسالة صريحة بذلك ويوجّه إلى تطبيق سطح المكتب (FFmpeg) عند طلب تكبير حقيقي.
+      - الصور: توضيح وحِدة التفاصيل بمصفوفة Laplacian، وموازنة التباين والألوان، وتصدير BMP و WEBP و PNG و JPG و PDF (دون تكبير مصطنع).
     - **الحفظ التلقائي في ذاكرة الهاتف**: توجيه النتائج تلقائياً إلى مجلد مخصص `Download/ZeidexConvert/` مع مجلدات فرعية منظمة (`Images`, `Videos`, `Audio`, `PDF`, `Documents`, `Archives`, `LivePhotos`, `QR`) مع الفهرسة الفورية في معرض الصور ومستكشف ملفات النظام.
-    - **إصلاح استخراج الأرشيفات**: فك ضغط كامل لملفات ZIP و TAR و GZ مع حماية مسار الملفات ضد ZipSlip.
-    - **استخراج الصوت من الفيديو**: محرك أصلي `MediaAudioExtractor` لاستخراج مسارات الصوت بجودة عالية دون فقدان.
+    - **إصلاح استخراج الأرشيفات**: فك ضغط كامل لملفات ZIP و TAR و GZ مع تحقّق صارم من أن كل مسار داخل مجلد الهدف (حماية Zip-Slip)، وكتابة ذرّية لكل ناتج (ملف مرحلي مخفي ثم إعادة تسمية، وبلا كتابة فوق الموجود: `photo 2.jpg`).
+    - **استخراج الصوت من الفيديو**: محرك أصلي `MediaAudioExtractor` ينسخ المسار الصوتي كما هو إلى MP4/M4A (دون إعادة ترميز). تصدير MP3/WAV/FLAC/OGG غير مدعوم على أندرويد، ويُظهر التطبيق رسالة صريحة بذلك بدل إنشاء ملف بامتداد مضلّل.
     - **إعدادات الضغط المتقدمة**: التحكم بنسبة جودة الضغط (10% - 100%) وتحديد الدقة القصوى (1080p, 720p, 480p).
     - **التحديثات التلقائية والتحقق من التوقيع الرقمي**: كشف التحديثات تلقائياً من موقع `zeidexsoft.com` ومستودع GitHub مع التحقق الصارم من التوقيع الرقمي وبصمة شهادة المطور SHA-256 لحماية المستخدم من أي حزم معدلة.
     - **التنفيذ بالخلفية وإشعارات التقدم**: خدمة أمامية `ConversionForegroundService` مع إشعار دائم يُظهر نسبة التقدم وإمكانية الإيقاف والاستئناف.
@@ -173,15 +180,15 @@ cd app/src-tauri && cargo tauri build
 - التحقق التلقائي من بصمات التجزئة SHA-256 والتوقيعات الرقمية المعتمدة لكل حزمة قبل التثبيت.
 - يمكن فحص الحزم وسجل تواقيعها عبر أداة سطر الأوامر:
   ```bash
-  zeidex update
+  zeidex-convert update
   ```
 
 ## البنية
 
 ```
 crates/core   منطق نقي: الصيغ، الأدوات، التخطيط (argv)، التنفيذ، PDF writer، SRT/VTT
-crates/cli    zeidex
-app/src-tauri النوافذ، الـ tray، hook المفاتيح العامة (rdev)، أوامر IPC
+crates/cli    zeidex-convert
+app/src-tauri النوافذ، الـ tray، كشف السحب (Win32 poll على Windows وrdev على X11)، خلفية Mica/Acrylic، أوامر IPC
 app/ui        HTML/JS بلا bundler: العجلة، الدائرة العائمة، الرئيسية، المهام
 specs/        مواصفات clean-room بصيغة EARS
 packaging/    جلب المحرّكات و smoke test

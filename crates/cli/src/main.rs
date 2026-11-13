@@ -1,42 +1,45 @@
-//! `zeidex` — scriptable front end over zeidex-core.
+//! `zeidex-convert` — scriptable front end over zeidex-core.
 
 use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use zeidex_core::format::{common_category, common_targets};
-use zeidex_core::ops::{parse_step, tools_for_paths, Op, TOOLS};
+use zeidex_core::ops::{parse_quality, parse_step, tools_for_paths, Op, TOOLS};
 use zeidex_core::runner::{self, Event};
 use zeidex_core::tools::{locate, Tool};
 use zeidex_core::{integrate, Error};
 
 const USAGE: &str = r#"
-zeidex — local file converter (images, video, audio, PDF, office, ebooks, archives)
+zeidex-convert — local file converter (images, video, audio, PDF, office, ebooks, archives)
 
 USAGE:
-  zeidex targets <files...>                 formats and tools available for the files
-  zeidex convert --to <ext> <files...>      convert, output saved beside each original
-  zeidex tool <id> [--key value]... <files...>
-  zeidex recipe "<step> | <step> ..." <files...>   chain tools, e.g. "resize max=1600 | compress percent=60 | strip"
-  zeidex watch <dir> --do "<step or recipe>" [--ext heic,png]   process files as they arrive (Ctrl+C stops)
-  zeidex info <file>                        print metadata
-  zeidex qr-make "<text>" [--out qr.png]    make a QR code image (needs qrencode)
-  zeidex tools                              list tool ids and their options
-  zeidex doctor                             show which engines were found
-  zeidex integrate                          add "Open with Zeidex" to the file manager
-  zeidex update                             check official packages and verify signatures (zeidexsoft.com)
+  zeidex-convert targets <files...>                 formats and tools available for the files
+  zeidex-convert convert --to <ext> [--quality 1-100] <files...>
+  zeidex-convert tool <id> [--key value]... <files...>
+  zeidex-convert recipe "<step> | <step> ..." <files...>   chain tools, e.g. "resize max=1600 | compress percent=60 | strip"
+  zeidex-convert watch <dir> --do "<step or recipe>" [--ext heic,png]   process files as they arrive (Ctrl+C stops)
+  zeidex-convert info <file>                        print metadata
+  zeidex-convert qr-make "<text>" [--out qr.png]    make a QR code image (needs qrencode)
+  zeidex-convert tools                              list tool ids and their options
+  zeidex-convert doctor                             show which engines were found
+  zeidex-convert integrate                          add "Open with Zeidex" to the file manager
+  zeidex-convert update                             check official packages and verify signatures (zeidexsoft.com)
 
 EXAMPLES:
-  zeidex convert --to jpg *.heic
-  zeidex tool compress --target 8MB clip.mov
-  zeidex tool ocr --lang ara+eng --to pdf scan.pdf
-  zeidex tool merge-pdf a.pdf b.pdf
-  zeidex tool motion photo.jpg
-  zeidex tool rename --pattern "trip-{n:3}" *.jpg
-  zeidex watch ~/Downloads --ext heic --do "convert to=jpg"
+  zeidex-convert convert --to webp *.png --quality 85
+  zeidex-convert convert --to jpg *.heic
+  zeidex-convert tool strip-exif *.jpg
+  zeidex-convert tool compress --target 8MB clip.mov
+  zeidex-convert tool ocr --lang ara+eng --to pdf scan.pdf
+  zeidex-convert tool merge-pdf a.pdf b.pdf
+  zeidex-convert tool motion photo.jpg
+  zeidex-convert tool rename --pattern "trip-{n:3}" *.jpg
+  zeidex-convert watch ~/Downloads --ext heic --do "convert to=jpg"
 
 OPTIONS:
-  --jobs N    files processed at the same time (default: half the CPU cores, max 4)
+  --jobs N        files processed at the same time (default: half the CPU cores, max 4)
+  --quality 1-100 encoder quality for lossy images and for video/audio re-encodes
 "#;
 
 fn main() -> ExitCode {
@@ -86,7 +89,8 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
         "convert" => {
             let (opts, files) = split_args(rest)?;
             let to = opts.get("to").ok_or_else(|| Error::BadOption("--to <ext> is required".into()))?;
-            run(&Op::Convert { to: to.to_ascii_lowercase() }, &files, &opts)
+            let quality = parse_quality(opts.get("quality"))?;
+            run(&Op::Convert { to: to.to_ascii_lowercase(), quality }, &files, &opts)
         }
         "recipe" => {
             let (spec, rest) = rest.split_first().ok_or_else(|| Error::BadOption("recipe steps required".into()))?;
@@ -185,6 +189,10 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
         }
         "-h" | "--help" | "help" => {
             print!("{}", USAGE.trim_start());
+            Ok(true)
+        }
+        "-V" | "--version" => {
+            println!("zeidex-convert {}", env!("CARGO_PKG_VERSION"));
             Ok(true)
         }
         other => Err(Error::BadOption(format!("unknown command `{other}` (try --help)"))),

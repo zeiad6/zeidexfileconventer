@@ -296,9 +296,7 @@ fn exec(step: &Step, report: &mut dyn FnMut(f32)) -> Result<()> {
             let mut out = fs::File::create(dst)?;
             Ok(pdf::jpegs_to_pdf(&data, &mut out)?)
         }
-        Step::ExtractMotion { src, dst } => {
-            crate::motion::extract_motion_video(src, dst)
-        }
+        Step::ExtractMotion { src, dst } => crate::motion::extract_motion_video(src, dst),
         Step::SmallestUnder { target, candidates, dst } => {
             let mut best: Option<(u64, &PathBuf)> = None;
             let mut last_err = None;
@@ -864,7 +862,9 @@ mod tests {
         fs::write(&src, "1\n00:00:01,000 --> 00:00:02,000\nHi\n").unwrap();
         fs::write(d.join("talk.vtt"), "taken").unwrap();
         let mut events = Vec::new();
-        let r = run(&Op::Convert { to: "vtt".into() }, std::slice::from_ref(&src), |e| events.push(format!("{e:?}")));
+        let r = run(&Op::Convert { to: "vtt".into(), quality: None }, std::slice::from_ref(&src), |e| {
+            events.push(format!("{e:?}"))
+        });
         assert!(events.iter().all(|e| e.contains("index: 0")));
         let out = r[0].as_ref().unwrap();
         assert_eq!(out, &d.join("talk (2).vtt"));
@@ -888,7 +888,7 @@ mod tests {
             fs::write(f, "1\n00:00:01,000 --> 00:00:02,000\nHi\n").unwrap();
         }
         let seen = Mutex::new(Vec::new());
-        let r = run_with(&Op::Convert { to: "vtt".into() }, &files, 3, |e| {
+        let r = run_with(&Op::Convert { to: "vtt".into(), quality: None }, &files, 3, |e| {
             if let Event::Done { index, .. } = e {
                 seen.lock().unwrap().push(index);
             }
@@ -964,7 +964,7 @@ mod tests {
 
     #[test]
     fn missing_input_fails_cleanly() {
-        let r = run(&Op::Convert { to: "vtt".into() }, &[PathBuf::from("/nope/x.srt")], |_| {});
+        let r = run(&Op::Convert { to: "vtt".into(), quality: None }, &[PathBuf::from("/nope/x.srt")], |_| {});
         assert!(r[0].is_err());
     }
 }

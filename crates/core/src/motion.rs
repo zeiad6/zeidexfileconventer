@@ -191,9 +191,8 @@ fn extract_xmp_video_length(xmp: &str) -> Option<u64> {
 
 /// Extracts the motion video from `src` and writes it to `dst`.
 pub fn extract_motion_video(src: &Path, dst: &Path) -> Result<()> {
-    let info = probe_motion(src).ok_or_else(|| {
-        Error::Unsupported(format!("{} is not a recognized motion or live photo", src.display()))
-    })?;
+    let info = probe_motion(src)
+        .ok_or_else(|| Error::Unsupported(format!("{} is not a recognized motion or live photo", src.display())))?;
 
     match info.kind {
         MotionKind::EmbeddedJpeg { offset, length } => {

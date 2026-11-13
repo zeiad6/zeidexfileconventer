@@ -2,13 +2,14 @@
 //! Supports automatic detection and verification of updates from zeidexsoft.com
 //! for all packages in the project (Android, Linux Flatpak/tar, Windows MSI, macOS DMG, CLI).
 
+use crate::sha256;
 use std::fs::File;
 use std::io;
 use std::path::Path;
-use crate::sha256;
 
 pub const OFFICIAL_MANIFEST_URL: &str = "https://zeidexsoft.com/updates/manifest.json";
-pub const FALLBACK_MANIFEST_URL: &str = "https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/packaging/updates/manifest.json";
+pub const FALLBACK_MANIFEST_URL: &str =
+    "https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/packaging/updates/manifest.json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageUpdate {

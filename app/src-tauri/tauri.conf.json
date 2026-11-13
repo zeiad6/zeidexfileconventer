@@ -17,14 +17,19 @@
         "height": 640,
         "minWidth": 420,
         "minHeight": 480,
-        "center": true
+        "center": true,
+        "transparent": true,
+        "windowEffects": {
+          "effects": ["mica"],
+          "state": "active"
+        }
       },
       {
         "label": "wheel",
         "title": "Zeidex wheel",
         "url": "wheel.html",
-        "width": 420,
-        "height": 420,
+        "width": 480,
+        "height": 480,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,

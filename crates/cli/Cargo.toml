@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "zeidex"
+name = "zeidex-convert"
 path = "src/main.rs"
 
 [dependencies]

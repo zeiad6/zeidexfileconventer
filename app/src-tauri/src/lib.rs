@@ -1,6 +1,10 @@
 //! Tauri shell: windows, tray, IPC commands. All file work lives in zeidex-core.
 
 mod hook;
+#[cfg(windows)]
+mod win_drag_hook;
+#[cfg(windows)]
+mod win_studio;
 
 use hook::Trigger;
 use serde::{Deserialize, Serialize};
@@ -36,11 +40,69 @@ struct Choice {
     params: Vec<ParamOut>,
     /// Fixed options sent with the choice (saved recipes).
     preset: HashMap<String, String>,
+    /// Outer-ring refinements: quality presets, or a tool's default options plus "Custom…".
+    children: Vec<Sub>,
+}
+
+#[derive(Serialize)]
+struct Sub {
+    key: String,
+    value: String,
+    label: String,
+    label_ar: String,
+    /// Opens the options form instead of running with this value.
+    custom: bool,
+}
+
+/// Outer-ring refinements for one choice. Lossy encoders get quality presets; tools with
+/// options get one segment per documented default plus "Custom…".
+fn children_for(kind: &str, id: &str, params: &[ParamOut]) -> Vec<Sub> {
+    if kind == "convert" {
+        const LOSSY: [&str; 12] =
+            ["jpg", "webp", "avif", "heic", "jxl", "mp4", "mov", "mkv", "webm", "mp3", "ogg", "opus"];
+        if !LOSSY.contains(&id) {
+            return vec![];
+        }
+        let mut out = Vec::new();
+        for (q, en, ar) in [(90, "Best", "أفضل"), (80, "High", "عالي"), (60, "Small", "صغير")] {
+            out.push(Sub {
+                key: "quality".into(),
+                value: q.to_string(),
+                label: format!("{en} {q}"),
+                label_ar: format!("{ar} {q}"),
+                custom: false,
+            });
+        }
+        return out;
+    }
+    if kind == "tool" && !params.is_empty() {
+        let mut out: Vec<Sub> = params
+            .iter()
+            .map(|p| Sub {
+                key: p.key.into(),
+                value: p.default.into(),
+                label: format!("{} {}", p.label, p.default),
+                label_ar: format!("{} {}", p.label_ar, p.default),
+                custom: false,
+            })
+            .collect();
+        out.push(Sub {
+            key: "custom".into(),
+            value: String::new(),
+            label: "Custom…".into(),
+            label_ar: "مخصّص…".into(),
+            custom: true,
+        });
+        return out;
+    }
+    vec![]
 }
 
 #[derive(Serialize)]
 struct Described {
     category: Option<&'static str>,
+    /// The files do not share a category: conversions apply to the files that support them.
+    mixed: bool,
     convert: Vec<Choice>,
     tools: Vec<Choice>,
     actions: Vec<Choice>,
@@ -80,18 +142,43 @@ static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 fn describe(app: AppHandle, paths: Vec<String>) -> Described {
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     let cat = format::common_category(&paths);
-    let convert = format::common_targets(&paths)
-        .into_iter()
-        .map(|t| Choice {
-            kind: "convert",
-            editor: false,
-            id: t.into(),
-            label: t.to_uppercase(),
-            label_ar: t.to_uppercase(),
-            params: vec![],
-            preset: HashMap::new(),
-        })
-        .collect();
+    let common = format::common_targets(&paths);
+    let mixed = common.is_empty() && paths.len() > 1;
+    let total = paths.len();
+    // A heterogeneous drag has no shared target; offer every output at least one file can
+    // become, labelled with how many files carry it, instead of an empty ring.
+    let convert: Vec<Choice> = if common.is_empty() && mixed {
+        format::mixed_targets(&paths)
+            .into_iter()
+            .map(|(t, n)| {
+                let children = children_for("convert", t, &[]);
+                Choice {
+                    kind: "convert",
+                    editor: false,
+                    id: t.into(),
+                    label: format!("{} {n}/{total}", t.to_uppercase()),
+                    label_ar: format!("{} {n}/{total}", t.to_uppercase()),
+                    params: vec![],
+                    preset: HashMap::new(),
+                    children,
+                }
+            })
+            .collect()
+    } else {
+        common
+            .into_iter()
+            .map(|t| Choice {
+                kind: "convert",
+                editor: false,
+                id: t.into(),
+                label: t.to_uppercase(),
+                label_ar: t.to_uppercase(),
+                params: vec![],
+                preset: HashMap::new(),
+                children: children_for("convert", t, &[]),
+            })
+            .collect()
+    };
     let recipes = get_settings(app).recipes;
     let saved = recipes.into_iter().map(|r| Choice {
         kind: "tool",
@@ -101,22 +188,28 @@ fn describe(app: AppHandle, paths: Vec<String>) -> Described {
         label_ar: format!("★ {}", r.name),
         params: vec![],
         preset: HashMap::from([("steps".to_string(), r.steps)]),
+        children: vec![],
     });
     let tools = ops::tools_for_paths(&paths)
         .into_iter()
         .filter(|t| t.id != "recipe")
-        .map(|t| Choice {
-            kind: "tool",
-            editor: ops::EDITOR_TOOLS.contains(&t.id),
-            id: t.id.into(),
-            label: t.label.into(),
-            label_ar: t.label_ar.into(),
-            params: t
+        .map(|t| {
+            let params: Vec<ParamOut> = t
                 .params
                 .iter()
                 .map(|p| ParamOut { key: p.key, label: p.label, label_ar: p.label_ar, default: p.default })
-                .collect(),
-            preset: HashMap::new(),
+                .collect();
+            let children = children_for("tool", t.id, &params);
+            Choice {
+                kind: "tool",
+                editor: ops::EDITOR_TOOLS.contains(&t.id),
+                id: t.id.into(),
+                label: t.label.into(),
+                label_ar: t.label_ar.into(),
+                params,
+                preset: HashMap::new(),
+                children,
+            }
         })
         .chain(saved)
         .collect();
@@ -130,9 +223,10 @@ fn describe(app: AppHandle, paths: Vec<String>) -> Described {
             label_ar: (*ar).into(),
             params: vec![],
             preset: HashMap::new(),
+            children: vec![],
         })
         .collect();
-    Described { category: cat.map(|c| c.name()), convert, tools, actions }
+    Described { category: cat.map(|c| c.name()), mixed, convert, tools, actions }
 }
 
 fn file_name(p: &Path) -> String {
@@ -157,7 +251,8 @@ fn run_job(
     }
     // Validate first: on bad options the wheel stays open so the form can show the error.
     let op = if kind == "convert" {
-        Op::Convert { to: id.clone() }
+        let quality = ops::parse_quality(opts.get("quality")).map_err(|e| e.to_string())?;
+        Op::Convert { to: id.clone(), quality }
     } else {
         Op::parse(&id, &opts).map_err(|e| e.to_string())?
     };
@@ -733,10 +828,7 @@ fn download_dragged_url(url: String) -> Result<String, String> {
     let _ = std::fs::create_dir_all(&tmp_dir);
     let target = tmp_dir.join(format!(
         "dragged_{}.{ext}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0)
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
     ));
     let status = std::process::Command::new("curl")
         .args(["-fsSL", &url, "-o"])
@@ -910,6 +1002,25 @@ pub fn run() {
                     let _ = shelf
                         .set_position(PhysicalPosition::new(p.x + s.width as i32 - 160, p.y + s.height as i32 - 220));
                 }
+            }
+
+            // Windows: overlays must never take focus or show up in Alt+Tab (`WS_EX_NOACTIVATE`
+            // and `WS_EX_TOOLWINDOW`), and must stay above every normal window.
+            #[cfg(windows)]
+            for label in ["wheel", "shelf"] {
+                if let Some(w) = app.get_webview_window(label) {
+                    if let Ok(hwnd) = w.hwnd() {
+                        win_drag_hook::apply_overlay_styles(hwnd.0 as isize);
+                    }
+                }
+            }
+
+            // Windows: the studio window gets the best backdrop this build supports (Mica,
+            // then Acrylic, then blur). The config asks for Mica at creation; this is the
+            // ladder for the builds where that silently fails.
+            #[cfg(windows)]
+            if let Some(home) = app.get_webview_window("home") {
+                win_studio::apply_backdrop(&home);
             }
 
             hook::start(handle.clone(), open_selection);

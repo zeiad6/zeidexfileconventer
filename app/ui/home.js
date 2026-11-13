@@ -8,12 +8,15 @@ const make = (tag, props) => Object.assign(document.createElement(tag), props);
 let paths = [];
 let desc = null;
 let mode = 'convert';
+let view = 'convert';
+const VIEW_TITLES = { convert: 'navConvert', tools: 'tools', shelf: 'navShelf', watch: 'watchFolders', settings: 'settings' };
 
 async function load(p) {
   if (!p.length) return;
   paths = p;
   desc = await invoke('describe', { paths });
   if (!desc[mode].length) mode = ['convert', 'tools', 'actions'].find((m) => desc[m].length) || 'convert';
+  if (view !== 'convert' && view !== 'tools') showView('convert');
   const names = paths.map((x) => x.split(/[\\/]/).pop());
   $('files').textContent = `${paths.length} ${window.ZT('selected')}: ${names.slice(0, 6).join(', ')}${names.length > 6 ? '…' : ''}`;
   $('sel').hidden = false;
@@ -62,6 +65,84 @@ window.__TAURI__.webview.getCurrentWebview().onDragDropEvent((e) => {
   $('drop').classList.toggle('over', t === 'enter' || t === 'over');
   if (t === 'drop') load(e.payload.paths);
 });
+
+// ---------- studio navigation ----------
+const VIEW_IDS = { convert: 'navConvert', tools: 'navTools', shelf: 'navShelf', watch: 'navWatch', settings: 'navSettings' };
+
+function showView(name) {
+  view = name;
+  // The tools ring has no separate page: it is the same picker with the Tools tab active.
+  const target = name === 'tools' ? 'convert' : name;
+  for (const viewName of ['convert', 'shelf', 'watch', 'settings']) {
+    $(`view-${viewName}`).hidden = viewName !== target;
+  }
+  for (const [viewName, id] of Object.entries(VIEW_IDS)) {
+    $(id).classList.toggle('on', viewName === name);
+  }
+  $('viewTitle').textContent = window.ZT(VIEW_TITLES[name] || 'navConvert');
+  if (name === 'tools' && desc) {
+    mode = desc.tools.length ? 'tools' : mode;
+    render();
+  }
+  if (name === 'shelf') renderShelf();
+  if (name === 'watch') renderWatch();
+}
+
+for (const [name, id] of Object.entries(VIEW_IDS)) {
+  $(id).onclick = () => showView(name);
+}
+
+async function renderShelf() {
+  const files = await invoke('float_list');
+  $('shelfList').replaceChildren(...(files.length
+    ? files.map((p) => {
+      const li = make('li');
+      li.append(
+        make('span', { className: 'name', textContent: p.split(/[\\/]/).pop(), title: p }),
+        make('button', { type: 'button', textContent: window.ZT('open'), onclick: () => invoke('open_in_home', { paths: [p] }) }),
+      );
+      return li;
+    })
+    : [make('li', { className: 'hint', textContent: window.ZT('shelfEmpty') })]));
+}
+
+async function renderWatch() {
+  const s = await invoke('get_settings');
+  const rules = s.watch || [];
+  $('watchList').replaceChildren(...(rules.length
+    ? rules.map((w) => {
+      const row = make('div', { className: 'watch-item' });
+      row.append(
+        make('span', { className: 'dir', textContent: w.dir || '—', title: w.dir }),
+        make('code', { textContent: `${w.exts || '*'} → ${w.steps || '—'}` }),
+        make('span', { className: w.enabled ? 'ok' : 'bad', textContent: window.ZT(w.enabled ? 'on' : 'off') }),
+      );
+      return row;
+    })
+    : [make('p', { className: 'hint', textContent: window.ZT('watchEmpty') })]));
+}
+
+$('shelfAdd').onclick = async () => {
+  const picked = await invoke('pick_files');
+  if (picked.length) await invoke('float_add', { paths: picked });
+  renderShelf();
+};
+$('shelfClear').onclick = async () => { await invoke('float_clear'); renderShelf(); };
+$('shelfOpen').onclick = async () => {
+  const files = await invoke('float_list');
+  if (files.length) invoke('open_in_home', { paths: files });
+};
+$('watchEdit').onclick = async () => {
+  showView('settings');
+  await settings();
+  const heading = [...document.querySelectorAll('#settings h3')]
+    .find((h) => h.textContent === window.ZT('watchFolders'));
+  if (heading) {
+    heading.scrollIntoView({ block: 'center' });
+    heading.classList.add('flash');
+    setTimeout(() => heading.classList.remove('flash'), 900);
+  }
+};
 
 // Browser drag-and-drop support: images and links dragged directly from a browser (Chrome, Edge, Firefox)
 const dropArea = $('drop');
@@ -219,6 +300,9 @@ function setupModals() {
 
   window.addEventListener('zeidex-lang-change', () => {
     if (paths.length && desc) render();
+    $('viewTitle').textContent = window.ZT(VIEW_TITLES[view] || 'navConvert');
+    if (view === 'shelf') renderShelf();
+    if (view === 'watch') renderWatch();
     settings();
     invoke('hook_ok').then((ok) => {
       $('hook').textContent = window.ZT(ok ? 'hookOn' : 'hookOff');

@@ -91,7 +91,8 @@ pub fn explorer_selection() -> Vec<PathBuf> {
 
 /// What may follow a Shapefile's name or companion files for primary formats.
 const SHAPEFILE_PARTS: &[&str] = &[
-    "shx", "dbf", "prj", "cpg", "sbn", "sbx", "fbn", "fbx", "ain", "aih", "atx", "ixs", "mxs", "qix", "qmd", "qpj", "shp.xml",
+    "shx", "dbf", "prj", "cpg", "sbn", "sbx", "fbn", "fbx", "ain", "aih", "atx", "ixs", "mxs", "qix", "qmd", "qpj",
+    "shp.xml",
 ];
 
 /// Filters out companion files (e.g. .dbf, .shx dropped alongside .shp) so they are not processed as separate items.
@@ -117,10 +118,12 @@ pub fn filter_companions(paths: &[PathBuf]) -> Vec<PathBuf> {
             let Some(file_name) = p.file_name().and_then(|n| n.to_str()) else { return true };
             for stem_path in &shapefile_stems {
                 if let Some(stem) = stem_path.file_name().and_then(|s| s.to_str()) {
-                    if dir == stem_path.parent().unwrap_or_else(|| std::path::Path::new("")) && file_name.starts_with(stem) {
+                    if dir == stem_path.parent().unwrap_or_else(|| std::path::Path::new(""))
+                        && file_name.starts_with(stem)
+                    {
                         let remainder = &file_name[stem.len()..];
-                        if remainder.starts_with('.') {
-                            let sub_ext = remainder[1..].to_ascii_lowercase();
+                        if let Some(rest) = remainder.strip_prefix('.') {
+                            let sub_ext = rest.to_ascii_lowercase();
                             if SHAPEFILE_PARTS.contains(&sub_ext.as_str()) {
                                 return false; // companion file, skip!
                             }

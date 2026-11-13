@@ -145,8 +145,8 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
     let av = is(Category::Video) || is(Category::Audio);
 
     let (output, name) = match op {
-        Op::Convert { to } => {
-            let out = convert(src, &from, to, tmp, ctx, &mut s)?;
+        Op::Convert { to, quality } => {
+            let out = convert(src, &from, to, *quality, tmp, ctx, &mut s)?;
             let name = if out.extension().is_none() { format!("{stem} pages") } else { named(&stem, "", to) };
             (out, name)
         }
@@ -1366,8 +1366,22 @@ fn ffmpeg(args: Vec<OsString>, ctx: &Ctx) -> Step {
 fn is_audio_ext(ext: &str) -> bool {
     matches!(
         ext,
-        "mp3" | "m4a" | "wav" | "flac" | "ogg" | "opus" | "aiff" | "wma"
-            | "ac3" | "amr" | "caf" | "weba" | "mka" | "ape" | "wv" | "w64"
+        "mp3"
+            | "m4a"
+            | "wav"
+            | "flac"
+            | "ogg"
+            | "opus"
+            | "aiff"
+            | "wma"
+            | "ac3"
+            | "amr"
+            | "caf"
+            | "weba"
+            | "mka"
+            | "ape"
+            | "wv"
+            | "w64"
     )
 }
 
@@ -1419,6 +1433,36 @@ fn encode_args(to: &str) -> Vec<OsString> {
         a.extend(strs(video_codec(to)));
     }
     a.extend(strs(audio_codec(to)));
+    a.extend(strs(container_flags(to)));
+    a
+}
+
+/// Encoder arguments with an explicit quality (1-100, higher is better). The default values
+/// from `video_codec`/`audio_codec` stay as the baseline and are overridden where the encoder
+/// has a quality knob: CRF for x264/x265/VP9, `-q:a` for the VBR audio encoders. Lossless
+/// codecs (FLAC, PCM, ALAC) ignore it by design, and GIF has no quality setting at all.
+fn encode_args_at(to: &str, quality: Option<u8>) -> Vec<OsString> {
+    let Some(q) = quality else { return encode_args(to) };
+    if to == "gif" {
+        return encode_args(to);
+    }
+    let mut a = Vec::new();
+    if is_audio_ext(to) {
+        a.push("-vn".into());
+        a.extend(strs(audio_codec(to)));
+        if matches!(to, "mp3" | "ogg" | "opus") {
+            let level = ((q as f32 / 100.0) * 9.0).round() as u8;
+            a.extend(args!["-q:a", &level.to_string()]);
+        }
+    } else {
+        a.extend(strs(video_codec(to)));
+        if matches!(to, "mp4" | "mov" | "mkv" | "webm") {
+            // CRF 51 is the worst quality, 0 is lossless; quality 85 maps to about CRF 8.
+            let crf = (51.0 - (q as f32 * 51.0 / 100.0)).round().clamp(0.0, 51.0) as u8;
+            a.extend(args!["-crf", &crf.to_string()]);
+        }
+        a.extend(strs(audio_codec(to)));
+    }
     a.extend(strs(container_flags(to)));
     a
 }
@@ -1700,9 +1744,7 @@ fn soffice(src: &Path, filter: &str, infilter: Option<&str>, tmp: &Path, s: &mut
     outdir.join(name)
 }
 
-const PANDOC_IN: &[&str] = &[
-    "md", "txt", "html", "docx", "odt", "epub", "rtf", "rst", "tex", "org", "adoc", "typ",
-];
+const PANDOC_IN: &[&str] = &["md", "txt", "html", "docx", "odt", "epub", "rtf", "rst", "tex", "org", "adoc", "typ"];
 
 fn pandoc(src: &Path, from: &str, to: &str, tmp: &Path, s: &mut Vec<Step>) -> PathBuf {
     let reader = match from {
@@ -1748,14 +1790,22 @@ fn pdf_to_images(src: &Path, to: &str, tmp: &Path, s: &mut Vec<Step>) -> PathBuf
     dir
 }
 
-fn convert(src: &Path, from: &str, to: &str, tmp: &Path, ctx: &Ctx, s: &mut Vec<Step>) -> Result<PathBuf> {
+fn convert(
+    src: &Path,
+    from: &str,
+    to: &str,
+    quality: Option<u8>,
+    tmp: &Path,
+    ctx: &Ctx,
+    s: &mut Vec<Step>,
+) -> Result<PathBuf> {
     let cat = category_of_ext(from).ok_or_else(|| unsupported("Converting", from))?;
     if !crate::format::targets(src).contains(&to) {
         return Err(Error::Unsupported(format!("cannot convert .{from} to .{to}")));
     }
     // Two-hop conversions: produce `mid` first, then convert that.
     let via = |mid: &str, s: &mut Vec<Step>| -> Result<PathBuf> {
-        let first = convert(src, from, mid, tmp, ctx, s)?;
+        let first = convert(src, from, mid, quality, tmp, ctx, s)?;
         let next_tmp = tmp.join(format!("via-{mid}"));
         s.push(Step::MkDir(next_tmp.clone()));
         convert_from(&first, mid, to, &next_tmp, ctx, s)
@@ -1805,14 +1855,19 @@ fn convert(src: &Path, from: &str, to: &str, tmp: &Path, ctx: &Ctx, s: &mut Vec<
         Category::Image => {
             let input = image_src(src, from, tmp, s);
             let out = tmp.join(format!("image.{to}"));
-            let opts = if to == "jpg" { "[Q=90,background=255]" } else { "" };
-            s.push(run(Tool::Vips, args!["copy", &input, suffixed(&out, opts)]));
+            // libvips uses Q=1-100 for every lossy writer it ships (JPEG, WebP, HEIF, JXL, AVIF).
+            let opts = match (to, quality) {
+                ("jpg" | "webp" | "heic" | "avif" | "jxl" | "jp2", Some(q)) => format!("[Q={q}]"),
+                ("jpg", None) => "[Q=90,background=255]".to_string(),
+                _ => String::new(),
+            };
+            s.push(run(Tool::Vips, args!["copy", &input, suffixed(&out, &opts)]));
             out
         }
         Category::Video | Category::Audio => {
             let out = tmp.join(format!("media.{to}"));
             let mut a = ffmpeg_in(src);
-            a.extend(encode_args(to));
+            a.extend(encode_args_at(to, quality));
             a.push(out.clone().into());
             s.push(ffmpeg(a, ctx));
             out
@@ -1844,7 +1899,9 @@ fn convert(src: &Path, from: &str, to: &str, tmp: &Path, ctx: &Ctx, s: &mut Vec<
             "pdf" if from == "md" || matches!(from, "rst" | "tex" | "org" | "adoc" | "typ") => via("docx", s)?,
             "md" | "epub" if PANDOC_IN.contains(&from) => pandoc(src, from, to, tmp, s),
             "md" | "epub" => via("docx", s)?,
-            _ if from == "md" || matches!(from, "rst" | "tex" | "org" | "adoc" | "typ") => pandoc(src, from, to, tmp, s),
+            _ if from == "md" || matches!(from, "rst" | "tex" | "org" | "adoc" | "typ") => {
+                pandoc(src, from, to, tmp, s)
+            }
             "txt" => soffice(src, "txt:Text (encoded):UTF8", None, tmp, s),
             _ => soffice(src, to, None, tmp, s),
         },
@@ -1884,7 +1941,7 @@ fn convert_from(src: &Path, from: &str, to: &str, tmp: &Path, ctx: &Ctx, s: &mut
         (Category::Pdf, "jpg" | "png") => pdf_to_images(src, to, tmp, s),
         (Category::Document, "pdf") => soffice(src, "pdf", None, tmp, s),
         (Category::Document | Category::Ebook, _) => pandoc(src, from, to, tmp, s),
-        _ => convert(src, from, to, tmp, ctx, s)?,
+        _ => convert(src, from, to, None, tmp, ctx, s)?,
     })
 }
 
@@ -1962,7 +2019,7 @@ mod tests {
 
     fn plan_of(id: &str, kv: &[(&str, &str)], files: &[&str], ctx: Ctx) -> Result<Plan> {
         let op = if let Some(to) = id.strip_prefix("to:") {
-            Op::Convert { to: to.into() }
+            Op::Convert { to: to.into(), quality: None }
         } else {
             let o: HashMap<String, String> = kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
             Op::parse(id, &o).unwrap()

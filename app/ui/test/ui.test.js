@@ -30,7 +30,8 @@ class El {
     const self = this;
     this.classList = {
       add: (c) => { self.className = `${self.className} ${c}`.trim(); },
-      toggle: () => {},
+      remove: (c) => { self.className = self.className.split(' ').filter((x) => x !== c).join(' '); },
+      toggle: (c, on) => { if (on === false) self.classList.remove(c); else if (on === true) self.classList.add(c); },
       contains: (c) => self.className.split(' ').includes(c),
     };
   }
@@ -82,13 +83,21 @@ function page(html, query = '') {
     byId[m[2]] = new El(m[1]);
     if (/\bhidden\b/.test(m[0])) byId[m[2]].hidden = true;
   }
-  const choice = (kind, id, label, params = [], editor = false) => ({ kind, id, label, label_ar: label, params, editor });
+  const choice = (kind, id, label, params = [], editor = false, children = []) =>
+    ({ kind, id, label, label_ar: label, params, editor, children });
+  const quality = ['90', '80', '60'].map((q) => ({ key: 'quality', value: q, label: `Quality ${q}`, label_ar: '', custom: false }));
   const resp = {
     describe: {
       category: 'video',
-      convert: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'wmv', 'gif', 'mp3', 'm4a', 'wav'].map((t) => choice('convert', t, t.toUpperCase())),
+      mixed: false,
+      convert: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'wmv', 'gif', 'mp3', 'm4a', 'wav'].map((t) =>
+        choice('convert', t, t.toUpperCase(), [], false, ['webm', 'mp4', 'mov'].includes(t) ? quality : [])
+      ),
       tools: [
-        choice('tool', 'compress', 'Compress', [{ key: 'percent', label: 'Reduce by %', label_ar: '', default: '50' }]),
+        choice('tool', 'compress', 'Compress', [{ key: 'percent', label: 'Reduce by %', label_ar: '', default: '50' }], false, [
+          { key: 'percent', value: '50', label: 'Reduce by % 50', label_ar: '', custom: false },
+          { key: 'custom', value: '', label: 'Custom…', label_ar: '', custom: true },
+        ]),
         choice('tool', 'crop', 'Crop', [], true),
         choice('tool', 'trim', 'Trim'),
         choice('tool', 'speed', 'Speed'),
@@ -182,44 +191,59 @@ function page(html, query = '') {
   };
 }
 
-const segs = (p) => p.byId.wheel.children.filter((c) => c.tagName === 'PATH');
+const segs = (p) => p.byId.wheel.all().filter((c) => c.tagName === 'PATH');
+// Point in the middle of segment `i` of `n` on the ring at radius `r` (the wheel is 480 px
+// wide, centred at 240,240 and starts at 12 o'clock).
+const at = (i, n, r) => {
+  const a = -Math.PI / 2 + ((i + 0.5) * 2 * Math.PI) / n;
+  return { x: 240 + r * Math.cos(a), y: 240 + r * Math.sin(a) };
+};
 
 (async () => {
-  // ---------- wheel ----------
+  // ---------- wheel: three rings, nested sub-ring, centre cancel ----------
   {
     const p = page('wheel.html');
-    await p.drag({ type: 'enter', paths: ['/v/clip.mp4'], position: { x: 210, y: 30 } });
-    ok(segs(p).length === 10, 'wheel: 10 convert segments for a video');
+    await p.drag({ type: 'enter', paths: ['/v/clip.mp4'], position: at(0, 10, 150) });
+    ok(segs(p).length === 13, 'wheel: three rings drawn (3 modes + 10 formats)');
     ok(segs(p).filter((s) => s.attrs.class.includes('hot')).length === 1, 'wheel: segment under the pointer is highlighted');
+    // dwell on a format with quality presets: the nested ring opens
+    await tick(400);
+    ok(segs(p).length === 16, 'wheel: dwelling opens the nested quality ring');
+    await p.drag({ type: 'drop', paths: ['/v/clip.mp4'], position: at(0, 3, 86) });
+    await tick();
+    const q = p.calls.find(([c]) => c === 'run_job');
+    ok(q && q[1].id === 'mp4' && q[1].opts.quality === '90', 'wheel: dropping on a nested segment applies its value');
+
+    // modes ring: dwelling on "Tools" morphs the middle ring
+    p.emit('wheel-hidden');
+    await p.drag({ type: 'enter', paths: ['/v/clip.mp4'], position: at(0, 10, 150) });
     p.emit('wheel-mode', 'tools');
-    ok(segs(p).length === 5, 'wheel: Alt switches to the tools ring');
-    // first tools segment spans the top-right quarter: compress (has options)
-    await p.drag({ type: 'drop', paths: ['/v/clip.mp4'], position: { x: 260, y: 40 } });
+    ok(segs(p).length === 8, 'wheel: Alt switches to the tools ring (3 modes + 5 tools)');
+    await p.drag({ type: 'drop', paths: ['/v/clip.mp4'], position: at(0, 5, 150) });
     await tick();
     ok(!p.byId.params.hidden, 'wheel: dropping on a tool with options opens the form');
     ok(p.calls.some(([c]) => c === 'keep_wheel'), 'wheel: the form keeps the wheel open');
     p.byId.params.querySelector('input').value = '70';
     await p.byId.params.fire('submit');
-    const run = p.calls.find(([c]) => c === 'run_job');
+    const run = p.calls.filter(([c]) => c === 'run_job').pop();
     ok(run && run[1].id === 'compress' && run[1].opts.percent === '70', 'wheel: form submits run_job with the typed option');
-    // second segment (crop) opens the editor instead
+
+    // second tool (crop) opens the editor instead of a form
     p.emit('wheel-hidden');
-    await p.drag({ type: 'enter', paths: ['/v/clip.mp4'], position: { x: 210, y: 210 } });
+    await p.drag({ type: 'enter', paths: ['/v/clip.mp4'], position: at(0, 10, 150) });
     p.emit('wheel-mode', 'tools');
-    await p.drag({ type: 'drop', paths: ['/v/clip.mp4'], position: { x: 360, y: 260 } });
+    await p.drag({ type: 'drop', paths: ['/v/clip.mp4'], position: at(1, 5, 150) });
     await tick();
     const ed = p.calls.find(([c]) => c === 'open_editor');
     ok(ed && ed[1].tool === 'crop', 'wheel: editor tools open the editor');
-    // centre drop cancels; dwell on a mode chip switches mode
-    await p.drag({ type: 'enter', paths: ['/v/clip.mp4'], position: { x: 210, y: 210 } });
-    await p.drag({ type: 'over', position: { x: 246, y: 180 } });
+
+    // the outer modes ring: dwell on Actions, then drop in the hub to cancel
+    await p.drag({ type: 'enter', paths: ['/v/clip.mp4'], position: at(0, 10, 150) });
+    await p.drag({ type: 'over', position: at(2, 3, 207) });
     await tick(500);
-    ok(segs(p).length === 4 && p.byId.wheel.all().some((e) => e.textContent === 'Actions'), 'wheel: dwelling on a chip switches to actions');
-    await p.drag({ type: 'over', position: { x: 210, y: 245 } });
-    ok(p.byId.wheel.all().some((e) => e.textContent === 'Float'), 'wheel: hub shows Float');
-    await p.drag({ type: 'drop', paths: ['/v/clip.mp4'], position: { x: 210, y: 245 } });
-    const fl = p.calls.find(([c]) => c === 'float_add');
-    ok(fl && fl[1].paths[0] === '/v/clip.mp4', 'wheel: dropping on the hub floats the files on the orb');
+    ok(segs(p).length === 7 && p.byId.wheel.all().some((e) => e.textContent.includes('Actions')), 'wheel: dwelling on the modes ring morphs to actions');
+    await p.drag({ type: 'drop', paths: ['/v/clip.mp4'], position: { x: 240, y: 240 } });
+    ok(p.calls.some(([c]) => c === 'hide_wheel'), 'wheel: dropping in the hub cancels');
   }
 
   // ---------- wheel: keyboard mode (Ctrl+Shift+Space) ----------
@@ -227,17 +251,21 @@ const segs = (p) => p.byId.wheel.children.filter((c) => c.tagName === 'PATH');
     const p = page('wheel.html');
     await p.emit('wheel-open', ['/v/clip.mp4']);
     await tick();
-    ok(segs(p).length === 10 && segs(p)[0].attrs.class.includes('hot'), 'keyboard: wheel opens on the selection, first item active');
+    ok(segs(p).length === 13 && segs(p).some((s) => s.attrs.class.includes('hot')), 'keyboard: wheel opens on the selection, first item active');
     p.key('ArrowRight');
     p.key('Enter');
     await tick();
-    let run = p.calls.find(([c]) => c === 'run_job');
-    ok(run && run[1].kind === 'convert' && run[1].id === 'mov', `keyboard: arrows + Enter convert (${run && run[1].id})`);
+    ok(segs(p).length === 16, 'keyboard: Enter opens the nested ring of the focused item');
+    p.key('Enter');
+    await tick();
+    const run = p.calls.find(([c]) => c === 'run_job');
+    ok(run && run[1].kind === 'convert' && run[1].id === 'mov' && run[1].opts.quality === '90', `keyboard: arrows, Enter and the nested ring convert (${run && run[1].id}/${run && run[1].opts.quality})`);
     p.key('Tab');
-    ok(segs(p).length === 5, 'keyboard: Tab switches to the tools ring');
+    ok(segs(p).length === 8, 'keyboard: Tab switches to the tools ring');
     // mouse: hover then click a segment, no drag involved
-    p.doc('mousemove', { clientX: 260, clientY: 40 });
-    p.doc('click', { clientX: 260, clientY: 40, target: {} });
+    const clickAt = at(0, 5, 150);
+    p.doc('mousemove', { clientX: clickAt.x, clientY: clickAt.y });
+    p.doc('click', { clientX: clickAt.x, clientY: clickAt.y, target: {} });
     await tick();
     ok(!p.byId.params.hidden, 'keyboard: clicking a tool with options opens its form');
   }
@@ -498,6 +526,21 @@ const segs = (p) => p.byId.wheel.children.filter((c) => c.tagName === 'PATH');
     ok(p.win.ZLANG !== initLang, 'home: language toggled');
     p.byId.langToggle.fire('click');
     ok(p.win.ZLANG === initLang, 'home: language toggled back');
+
+    // sidebar: shelf, watch summary, and the tools rail pointing at the shared picker
+    p.byId.navShelf.fire('click');
+    await tick(10);
+    ok(p.byId['view-shelf'].hidden === false && p.byId['view-convert'].hidden === true, 'studio: shelf rail shows its view');
+    ok(p.byId.shelfList.children.length === 2, 'studio: shelf lists the held files');
+    p.byId.navWatch.fire('click');
+    await tick(10);
+    ok(p.byId.watchList.children.length === 1, 'studio: watch view lists the saved rule');
+    p.byId.navTools.fire('click');
+    await tick(10);
+    ok(p.byId['view-convert'].hidden === false && p.byId.tabs.children[1].className.includes('on'), 'studio: tools rail selects the tools tab');
+    p.byId.navSettings.fire('click');
+    await tick(10);
+    ok(p.byId['view-settings'].hidden === false, 'studio: settings rail shows settings');
   }
 
   // ---------- jobs ----------

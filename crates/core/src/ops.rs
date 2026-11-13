@@ -86,8 +86,10 @@ pub enum CropSpec {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
+    /// `quality` (1-100) applies to lossy image encoders and to video/audio re-encodes.
     Convert {
         to: String,
+        quality: Option<u8>,
     },
     Compress {
         how: Compression,
@@ -313,7 +315,7 @@ impl Op {
                 let max = get("max").map(|v| v.parse().map_err(|_| bad("max", v))).transpose()?;
                 Op::Compress { how, max }
             }
-            "strip" => Op::StripMetadata,
+            "strip" | "strip-exif" | "strip-metadata" => Op::StripMetadata,
             "info" => Op::Info,
             "archive" => {
                 let kind = get("format").unwrap_or("zip").to_string();
@@ -692,11 +694,22 @@ pub fn parse_step(part: &str) -> Result<Op> {
         opts.insert(k.to_string(), v.to_string());
     }
     match id {
-        "convert" => {
-            Ok(Op::Convert { to: opts.get("to").ok_or_else(|| bad("step", "convert needs to=EXT"))?.to_lowercase() })
-        }
+        "convert" => Ok(Op::Convert {
+            to: opts.get("to").ok_or_else(|| bad("step", "convert needs to=EXT"))?.to_lowercase(),
+            quality: parse_quality(opts.get("quality"))?,
+        }),
         other => Op::parse(other, &opts),
     }
+}
+
+/// `--quality 85` / `quality=85`: an encoder quality in 1-100, the scale every GUI uses.
+pub fn parse_quality(value: Option<&String>) -> Result<Option<u8>> {
+    let Some(raw) = value.map(|v| v.trim()).filter(|v| !v.is_empty()) else { return Ok(None) };
+    let q: u8 = raw.parse().map_err(|_| bad("quality", raw))?;
+    if !(1..=100).contains(&q) {
+        return Err(bad("quality", "must be 1-100"));
+    }
+    Ok(Some(q))
 }
 
 fn bad(key: &str, val: &str) -> Error {
@@ -1420,7 +1433,18 @@ mod tests {
         let r = parse_recipe("resize max=1600 | compress percent=60 | strip").unwrap();
         assert_eq!(r.len(), 3);
         assert_eq!(r[0], Op::Resize(Size::Max(1600)));
-        assert_eq!(parse_recipe("convert to=WEBP | strip").unwrap()[0], Op::Convert { to: "webp".into() });
+        assert_eq!(
+            parse_recipe("convert to=WEBP | strip").unwrap()[0],
+            Op::Convert { to: "webp".into(), quality: None }
+        );
+        assert_eq!(
+            parse_step("convert to=webp quality=85").unwrap(),
+            Op::Convert { to: "webp".into(), quality: Some(85) }
+        );
+        assert!(parse_step("convert to=webp quality=0").is_err());
+        assert!(parse_step("convert to=webp quality=101").is_err());
+        assert_eq!(Op::parse("strip-exif", &HashMap::new()).unwrap(), Op::StripMetadata);
+        assert_eq!(Op::parse("strip-metadata", &HashMap::new()).unwrap(), Op::StripMetadata);
         assert!(parse_recipe("strip").is_err(), "one step is not a recipe");
         assert!(parse_recipe("merge-pdf | strip").is_err(), "multi-file tools are not steps");
         assert!(parse_recipe("resize max | strip").is_err());

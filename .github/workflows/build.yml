@@ -40,7 +40,43 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg libvips-tools ghostscript gsfonts qpdf 7zip pandoc tesseract-ocr tesseract-ocr-eng libheif-plugin-aomenc libimage-exiftool-perl zbar-tools qrencode
           cargo build -p zeidex-cli
-          bash packaging/smoke.sh target/debug/zeidex
+          bash packaging/smoke.sh target/debug/zeidex-convert
+
+  # --- Android: APK (the app lives in the android/ submodule) ---
+  android-apk:
+    name: package (Android APK)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+      - name: Unit tests
+        working-directory: android
+        run: gradle :app:testDebugUnitTest --no-daemon --console=plain
+      - name: Build APK
+        working-directory: android
+        run: |
+          if [ -f keystore/release.keystore ]; then
+            gradle :app:assembleRelease --no-daemon --console=plain
+          else
+            gradle :app:assembleDebug --no-daemon --console=plain
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zeidex-convert-APK
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
 
   # --- Linux: Flatpak Package Only ---
   linux-flatpak:
@@ -65,6 +101,9 @@ jobs:
             libxdo-dev libssl-dev libxtst-dev libx11-dev patchelf flatpak flatpak-builder elfutils
       - name: Fetch engines (Linux)
         run: bash packaging/fetch-engines.sh
+      - name: Clippy (app crate)
+        working-directory: app/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
       - name: Build Linux Binary
         working-directory: app/src-tauri
         run: cargo build --release
