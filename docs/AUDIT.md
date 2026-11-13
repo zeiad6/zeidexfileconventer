@@ -106,9 +106,10 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
 - Name collisions use `name (2).ext` on the desktop and `name 2.ext` on Android. Both never
   overwrite; only the separator differs.
 - The React build adds a Node step to CI (`npm ci && npm test && npm run build` in `app`) and
-  puts `app/ui-dist` in the bundle: ~236 kB of JS and 31 kB of CSS, 41 kB gzipped, against a
-  hand-written UI that needed no toolchain. The trade was made for typed IPC calls, one design
-  system and component-level tests; the installer still ships fully offline.
+  puts `app/ui-dist` in the bundle: about 394 kB of JS and 30 kB of CSS — 134 kB gzipped — most
+  of it React and ReactDOM, against a hand-written UI that needed no toolchain. The trade was
+  made for typed IPC calls, one design system and component-level tests; the installer still
+  ships fully offline.
 - One deliberate behaviour change in the port: a finished job row shows a 100 % bar instead of
   freezing at the last progress event (the old row stayed at, say, 60 % while marked done).
   `app/test/jobs.test.tsx` asserts the new value.
