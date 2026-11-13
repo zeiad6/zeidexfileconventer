@@ -62,18 +62,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
-      - uses: actions/setup-java@v4
+          submodules: false
+      # The Android app is a separate private repository. GitHub's default token only reaches
+      # this repository, so the clone needs a PAT secret with Contents: read on the Android repo.
+      # Without it the job reports a warning and skips instead of failing the whole workflow.
+      - name: Check out the Android submodule
+        id: sub
+        env:
+          SUBMODULE_TOKEN: ${{ secrets.ANDROID_SUBMODULE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          git -c url."https://x-access-token:${SUBMODULE_TOKEN}@github.com/".insteadOf="https://github.com/" \
+            submodule update --init --recursive android
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::warning title=Android APK skipped::android/ is a private submodule. Add an ANDROID_SUBMODULE_TOKEN secret (fine-grained PAT, Contents: read on zeiad6/zeidex-convert-android) to build the APK in CI."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.sub.outputs.ok == 'true'
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - if: steps.sub.outputs.ok == 'true'
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.10.2"
       - name: Unit tests
+        if: steps.sub.outputs.ok == 'true'
         working-directory: android
         run: gradle :app:testDebugUnitTest --no-daemon --console=plain
       - name: Build APK
+        if: steps.sub.outputs.ok == 'true'
         working-directory: android
         run: |
           if [ -f keystore/release.keystore ]; then
@@ -81,7 +104,8 @@ jobs:
           else
             gradle :app:assembleDebug --no-daemon --console=plain
           fi
-      - uses: actions/upload-artifact@v4
+      - if: steps.sub.outputs.ok == 'true'
+        uses: actions/upload-artifact@v4
         with:
           name: zeidex-convert-APK
           path: |
