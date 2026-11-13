@@ -218,7 +218,7 @@ const at = (i, n, r) => {
     p.emit('wheel-hidden');
     await p.drag({ type: 'enter', paths: ['/v/clip.mp4'], position: at(0, 10, 150) });
     p.emit('wheel-mode', 'tools');
-    ok(segs(p).length === 8, 'wheel: Alt switches to the tools ring (3 modes + 5 tools)');
+    ok(segs(p).length === 8, 'wheel: Ctrl switches to the tools ring (3 modes + 5 tools)');
     await p.drag({ type: 'drop', paths: ['/v/clip.mp4'], position: at(0, 5, 150) });
     await tick();
     ok(!p.byId.params.hidden, 'wheel: dropping on a tool with options opens the form');

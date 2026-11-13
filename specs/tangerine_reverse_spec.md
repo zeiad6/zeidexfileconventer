@@ -60,7 +60,7 @@ Actions [S2]: AirDrop, Float shelf, Copy, Move, Copy Path, open in Terminal. Act
 
 | Tangerine | Zeidex |
 |---|---|
-| Shift / Cmd / Ctrl while dragging | Global hook (`rdev`): Shift = convert, Alt = tools, Ctrl = actions. Works on Windows and X11. On Wayland, where global hooks are blocked, use the floating orb (shelf) or the main window |
+| Shift / Cmd / Ctrl while dragging | Global hook (`rdev`): Shift = convert, Ctrl = tools, Alt = actions. Works on Windows and X11. On Wayland, where global hooks are blocked, use the floating orb (shelf) or the main window |
 | Wheel | Transparent always-on-top Tauri window that is a native drop target. Hover over a segment selects it. Dwelling on a mode chip switches the mode, so it also works without a keyboard |
 | ImageIO / AVFoundation / PDFKit | libvips, FFmpeg, qpdf, Ghostscript |
 | Office / Pages / EPUB | LibreOffice headless, Pandoc, Calibre (`ebook-convert`) |

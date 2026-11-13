@@ -633,8 +633,8 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             convert: Trigger::Shift,
-            tools: Trigger::Alt,
-            actions: Trigger::Control,
+            tools: Trigger::Control,
+            actions: Trigger::Alt,
             reveal: true,
             hotkey: true,
             recipes: vec![Recipe {

@@ -39,7 +39,7 @@ impl Trigger {
 pub(crate) const MODES: [&str; 3] = ["convert", "tools", "actions"];
 
 /// Keys for convert, tools, actions (Settings can remap them).
-pub(crate) static KEYS: Mutex<[Trigger; 3]> = Mutex::new([Trigger::Shift, Trigger::Alt, Trigger::Control]);
+pub(crate) static KEYS: Mutex<[Trigger; 3]> = Mutex::new([Trigger::Shift, Trigger::Control, Trigger::Alt]);
 
 pub fn set_keys(keys: [Trigger; 3]) {
     *KEYS.lock().unwrap_or_else(|e| e.into_inner()) = keys;
