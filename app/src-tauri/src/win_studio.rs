@@ -4,8 +4,10 @@
 //! `tauri.conf.json` asks for Mica at creation time, where a failure is silent. This module is
 //! the explicit ladder: it reads the real build number from `RtlGetVersion` (which ignores the
 //! compatibility shims `GetVersionExW` is subject to) and applies the best backdrop the build
-//! actually supports. The macOS and Linux builds keep the window as configured; the CSS in
-//! `style.css` is a readable dark surface on its own if no backdrop is available.
+//! actually supports. The pre-Mica acrylic path calls an undocumented user32 export that is
+//! absent from user32.lib, so it is resolved with `GetProcAddress` rather than linked. The
+//! macOS and Linux builds keep the window as configured; the CSS in `style.css` is a readable
+//! dark surface on its own if no backdrop is available.
 
 use std::ffi::c_void;
 
@@ -62,9 +64,32 @@ extern "system" {
     fn RtlGetVersion(info: *mut OsVersionInfoW) -> i32;
 }
 
-#[link(name = "user32")]
+// `SetWindowCompositionAttribute` is undocumented: user32.dll exports it, but user32.lib does
+// not, so declaring it as an import fails at link time (LNK2019). It is resolved at runtime
+// instead, which also keeps the build working if a future SDK ever drops the import library.
+#[link(name = "kernel32")]
 extern "system" {
-    fn SetWindowCompositionAttribute(hwnd: HWND, data: *mut WindowCompositionAttributeData) -> BOOL;
+    fn GetModuleHandleW(name: *const u16) -> *mut c_void;
+    fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+}
+
+type SetWindowCompositionAttributeFn = unsafe extern "system" fn(HWND, *mut WindowCompositionAttributeData) -> BOOL;
+
+/// The accent-policy entry point, or `None` when this Windows build does not export it.
+fn composition_attribute() -> Option<SetWindowCompositionAttributeFn> {
+    let mut module: Vec<u16> = "user32.dll".encode_utf16().collect();
+    module.push(0);
+    unsafe {
+        let user32 = GetModuleHandleW(module.as_ptr());
+        if user32.is_null() {
+            return None;
+        }
+        let proc = GetProcAddress(user32, c"SetWindowCompositionAttribute".as_ptr().cast::<u8>());
+        if proc.is_null() {
+            return None;
+        }
+        Some(std::mem::transmute::<*mut c_void, SetWindowCompositionAttributeFn>(proc))
+    }
 }
 
 /// The real OS build, or 0 when the query fails (treated as "no backdrop").
@@ -127,7 +152,9 @@ pub fn apply_backdrop(window: &WebviewWindow) {
         data: &mut policy as *mut AccentPolicy as *mut c_void,
         size: std::mem::size_of::<AccentPolicy>(),
     };
-    unsafe {
-        SetWindowCompositionAttribute(hwnd, &mut data);
+    if let Some(set_composition) = composition_attribute() {
+        unsafe {
+            set_composition(hwnd, &mut data);
+        }
     }
 }
