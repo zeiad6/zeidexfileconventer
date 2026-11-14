@@ -28,7 +28,7 @@ pub struct ImageInfo {
 }
 
 /// Facts about the first input that some plans need (probed by the runner).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Ctx {
     pub media: Option<MediaInfo>,
     /// Every input's media info, for ops that combine files (join). Empty otherwise.
@@ -44,8 +44,31 @@ pub struct Ctx {
     pub rembg_model: Option<PathBuf>,
     /// ExifTool is installed (lossless metadata removal for images).
     pub exiftool: bool,
+    /// libvips is installed. When it is not, image work falls back to the bundled FFmpeg so a
+    /// plain install converts images without asking the user to install another package.
+    pub vips: bool,
     pub image: Option<ImageInfo>,
     pub size: u64,
+}
+
+impl Default for Ctx {
+    fn default() -> Self {
+        // Plans assume libvips unless the runner says otherwise: that keeps the routing tests
+        // (which describe the preferred tool chain) independent of what this machine has.
+        Ctx {
+            media: None,
+            inputs: Vec::new(),
+            detected: Vec::new(),
+            dims: None,
+            whisper_model: None,
+            esrgan_models: None,
+            rembg_model: None,
+            exiftool: false,
+            vips: true,
+            image: None,
+            size: 0,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -331,14 +354,27 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
         }
         Op::QrRead | Op::Duplicates { .. } => return Err(Error::Unsupported("handled by the runner".into())),
         Op::Resize(size) if is(Category::Image) => {
-            let (input, out, to) = image_io(src, &from, tmp, "resized", &mut s);
-            s.push(match size {
-                Size::Percent(p) => run(Tool::Vips, args!["resize", &input, &out, format!("{}", *p as f64 / 100.0)]),
-                Size::Max(m) => run(
-                    Tool::Vips,
-                    args!["thumbnail", &input, &out, m.to_string(), "--height", m.to_string(), "--size", "down"],
-                ),
-            });
+            let (out, to) = if ctx.vips {
+                let (input, out, to) = image_io(src, &from, tmp, "resized", &mut s);
+                s.push(match size {
+                    Size::Percent(p) => run(Tool::Vips, args!["resize", &input, &out, format!("{}", *p as f64 / 100.0)]),
+                    Size::Max(m) => run(
+                        Tool::Vips,
+                        args!["thumbnail", &input, &out, m.to_string(), "--height", m.to_string(), "--size", "down"],
+                    ),
+                });
+                (out, to)
+            } else {
+                let (input, out, to) = image_io_ffmpeg(src, &from, tmp, "resized");
+                let vf = match size {
+                    Size::Percent(p) => format!("scale=iw*{}:ih*{}", *p as f64 / 100.0, *p as f64 / 100.0),
+                    Size::Max(m) => {
+                        format!("scale='min(iw,{m})':'min(ih,{m})':force_original_aspect_ratio=decrease")
+                    }
+                };
+                ffmpeg_still(&input, &out, to, None, Some(&vf), &mut s);
+                (out, to)
+            };
             (out, named(&stem, "resized", to))
         }
         Op::Crop(spec) if is(Category::Image) => {
@@ -350,11 +386,19 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
                     Rect { x: (info.width - w) / 2, y: (info.height - h) / 2, w, h }
                 }
             };
-            let (input, out, to) = image_io(src, &from, tmp, "cropped", &mut s);
-            s.push(run(
-                Tool::Vips,
-                args!["extract_area", &input, &out, left.to_string(), top.to_string(), w.to_string(), h.to_string()],
-            ));
+            let (out, to) = if ctx.vips {
+                let (input, out, to) = image_io(src, &from, tmp, "cropped", &mut s);
+                s.push(run(
+                    Tool::Vips,
+                    args!["extract_area", &input, &out, left.to_string(), top.to_string(), w.to_string(), h.to_string()],
+                ));
+                (out, to)
+            } else {
+                let (input, out, to) = image_io_ffmpeg(src, &from, tmp, "cropped");
+                let vf = format!("crop={w}:{h}:{left}:{top}");
+                ffmpeg_still(&input, &out, to, None, Some(&vf), &mut s);
+                (out, to)
+            };
             (out, named(&stem, "cropped", to))
         }
         Op::Crop(spec) if is(Category::Video) => {
@@ -376,8 +420,20 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
         }
         Op::Rotate { degrees } => match cat {
             Some(Category::Image) => {
-                let (input, out, to) = image_io(src, &from, tmp, "rotated", &mut s);
-                s.push(run(Tool::Vips, args!["rot", &input, &out, format!("d{degrees}")]));
+                let (out, to) = if ctx.vips {
+                    let (input, out, to) = image_io(src, &from, tmp, "rotated", &mut s);
+                    s.push(run(Tool::Vips, args!["rot", &input, &out, format!("d{degrees}")]));
+                    (out, to)
+                } else {
+                    let (input, out, to) = image_io_ffmpeg(src, &from, tmp, "rotated");
+                    let vf = match degrees {
+                        90 => "transpose=1".to_string(),
+                        270 => "transpose=2".to_string(),
+                        _ => "hflip,vflip".to_string(),
+                    };
+                    ffmpeg_still(&input, &out, to, None, Some(&vf), &mut s);
+                    (out, to)
+                };
                 (out, named(&stem, "rotated", to))
             }
             Some(Category::Video) => {
@@ -432,12 +488,19 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             (out, named(&stem, "framed", to))
         }
         Op::Grayscale if is(Category::Image) => {
-            let (input, out, to) = image_io(src, &from, tmp, "bw", &mut s);
-            s.push(run(Tool::Vips, args!["colourspace", &input, &out, "b-w"]));
+            let (out, to) = if ctx.vips {
+                let (input, out, to) = image_io(src, &from, tmp, "bw", &mut s);
+                s.push(run(Tool::Vips, args!["colourspace", &input, &out, "b-w"]));
+                (out, to)
+            } else {
+                let (input, out, to) = image_io_ffmpeg(src, &from, tmp, "bw");
+                ffmpeg_still(&input, &out, to, None, Some("hue=s=0"), &mut s);
+                (out, to)
+            };
             (out, named(&stem, "bw", to))
         }
         Op::ImagesToPdf => {
-            let jpegs = images_to_jpegs(inputs, tmp, &mut s);
+            let jpegs = images_to_jpegs(inputs, tmp, &mut s, ctx.vips);
             let out = tmp.join("images.pdf");
             s.push(Step::JpegsToPdf { jpegs, dst: out.clone() });
             (out, "images.pdf".into())
@@ -1478,15 +1541,74 @@ fn image_io(src: &Path, from: &str, tmp: &Path, tag: &str, s: &mut Vec<Step>) ->
     (input, tmp.join(format!("{tag}.{to}")), to)
 }
 
-fn images_to_jpegs(inputs: &[PathBuf], tmp: &Path, s: &mut Vec<Step>) -> Vec<PathBuf> {
+/// Still formats FFmpeg can write. HEIC, JXL and JP2 stay libvips-only; asking for one of them
+/// without libvips produces a clear message instead of a failed encoder.
+const FFMPEG_STILL: &[&str] = &["jpg", "png", "webp", "avif", "bmp", "gif", "tiff"];
+
+/// libvips quality is 1-100; FFmpeg's JPEG scale is 1-31 where lower means better.
+fn jpeg_quality(q: u8) -> u32 {
+    (2 + (100 - q.clamp(1, 100) as u32) * 29 / 100).clamp(2, 31)
+}
+
+/// Encode one still image with FFmpeg. The fallback path for every image operation when libvips
+/// is not installed, so the formats people actually convert keep working out of the box.
+fn ffmpeg_still(src: &Path, dst: &Path, to: &str, quality: Option<u8>, vf: Option<&str>, s: &mut Vec<Step>) {
+    let mut a = args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i", src, "-frames:v", "1"];
+    let mut filter = vf.map(str::to_string);
+    match to {
+        "jpg" => {
+            let q = jpeg_quality(quality.unwrap_or(90));
+            a.extend(args!["-q:v", q.to_string(), "-pix_fmt", "yuvj420p"]);
+        }
+        "webp" => {
+            let q = quality.unwrap_or(80).clamp(1, 100);
+            a.extend(args!["-c:v", "libwebp", "-quality", q.to_string(), "-compression_level", "4"]);
+        }
+        "png" => a.extend(args!["-compression_level", "9"]),
+        "avif" => {
+            let crf = 63u32.saturating_sub(quality.unwrap_or(60) as u32 / 2).clamp(8, 63);
+            a.extend(args!["-c:v", "libaom-av1", "-crf", crf.to_string(), "-still-picture", "1", "-cpu-used", "6"]);
+        }
+        "gif" => {
+            let base = filter.take().map(|f| format!("{f},")).unwrap_or_default();
+            filter = Some(format!("{base}split[a][b];[a]palettegen=max_colors=256[p];[b][p]paletteuse=dither=bayer"));
+        }
+        _ => {}
+    }
+    if let Some(f) = filter {
+        a.extend(args!["-vf", f]);
+    }
+    a.extend(args!["-map_metadata", "-1"]);
+    a.push(dst.to_path_buf().into());
+    s.push(run(Tool::Ffmpeg, a));
+}
+
+/// Input, output and extension for a same-format image edit without libvips.
+fn image_io_ffmpeg(src: &Path, from: &str, tmp: &Path, tag: &str) -> (PathBuf, PathBuf, &'static str) {
+    let to = match from {
+        "jpg" | "jpeg" => "jpg",
+        "webp" => "webp",
+        "avif" => "avif",
+        "gif" => "gif",
+        "tiff" | "tif" => "tiff",
+        _ => "png",
+    };
+    (src.to_path_buf(), tmp.join(format!("{tag}.{to}")), to)
+}
+
+fn images_to_jpegs(inputs: &[PathBuf], tmp: &Path, s: &mut Vec<Step>, vips: bool) -> Vec<PathBuf> {
     inputs
         .iter()
         .enumerate()
         .map(|(i, img)| {
             let f = ext_of(img).unwrap_or_default();
-            let input = image_src(img, &f, tmp, s);
             let jpg = tmp.join(format!("p{i}.jpg"));
-            s.push(run(Tool::Vips, args!["colourspace", &input, suffixed(&jpg, "[Q=92,background=255]"), "srgb"]));
+            if vips {
+                let input = image_src(img, &f, tmp, s);
+                s.push(run(Tool::Vips, args!["colourspace", &input, suffixed(&jpg, "[Q=92,background=255]"), "srgb"]));
+            } else {
+                ffmpeg_still(img, &jpg, "jpg", Some(92), None, s);
+            }
             jpg
         })
         .collect()
@@ -1662,9 +1784,17 @@ fn compress(
                 "jpg" | "webp" | "heic" | "avif" | "png" | "tiff" => from,
                 _ => "jpg",
             };
-            let input = image_src(src, from, tmp, s);
+            let input = if ctx.vips { image_src(src, from, tmp, s) } else { src.to_path_buf() };
+            let vips = ctx.vips;
             let candidate = |q: u32| -> (Vec<Step>, PathBuf) {
                 let out = tmp.join(format!("q{q}.{to}"));
+                if !vips {
+                    let mut steps = Vec::new();
+                    let vf =
+                        max.map(|m| format!("scale='min(iw,{m})':'min(ih,{m})':force_original_aspect_ratio=decrease"));
+                    ffmpeg_still(src, &out, to, Some(q as u8), vf.as_deref(), &mut steps);
+                    return (steps, out);
+                }
                 let opts = match to {
                     "png" => format!("[Q={q},palette,compression=9,strip]"),
                     "tiff" => format!("[Q={q},compression=jpeg,strip]"),
@@ -1964,23 +2094,34 @@ fn convert(
             out
         }
         Category::Image if to == "pdf" => {
-            let jpegs = images_to_jpegs(&[src.to_path_buf()], tmp, s);
+            let jpegs = images_to_jpegs(&[src.to_path_buf()], tmp, s, ctx.vips);
             let out = tmp.join("image.pdf");
             s.push(Step::JpegsToPdf { jpegs, dst: out.clone() });
             out
         }
         Category::Image if to == "bmp" => {
-            let input = image_src(src, from, tmp, s);
-            let png = tmp.join("to-bmp.png");
-            s.push(run(Tool::Vips, args!["copy", &input, &png]));
             let out = tmp.join("image.bmp");
-            s.push(run(Tool::Ffmpeg, args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i", &png, &out]));
+            if ctx.vips {
+                let input = image_src(src, from, tmp, s);
+                let png = tmp.join("to-bmp.png");
+                s.push(run(Tool::Vips, args!["copy", &input, &png]));
+                s.push(run(
+                    Tool::Ffmpeg,
+                    args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i", &png, &out],
+                ));
+            } else {
+                ffmpeg_still(src, &out, "bmp", None, None, s);
+            }
             out
         }
         Category::Image if to == "ico" => {
             let png = tmp.join("to-ico.png");
-            let input = image_src(src, from, tmp, s);
-            s.push(run(Tool::Vips, args!["copy", &input, &png]));
+            if ctx.vips {
+                let input = image_src(src, from, tmp, s);
+                s.push(run(Tool::Vips, args!["copy", &input, &png]));
+            } else {
+                ffmpeg_still(src, &png, "png", None, None, s);
+            }
             let out = tmp.join("image.ico");
             s.push(Step::Ico {
                 pngs: vec![(16, png.clone()), (32, png.clone()), (48, png.clone()), (256, png)],
@@ -1994,15 +2135,25 @@ fn convert(
             out
         }
         Category::Image => {
-            let input = image_src(src, from, tmp, s);
             let out = tmp.join(format!("image.{to}"));
-            // libvips uses Q=1-100 for every lossy writer it ships (JPEG, WebP, HEIF, JXL, AVIF).
-            let opts = match (to, quality) {
-                ("jpg" | "webp" | "heic" | "avif" | "jxl" | "jp2", Some(q)) => format!("[Q={q}]"),
-                ("jpg", None) => "[Q=90,background=255]".to_string(),
-                _ => String::new(),
-            };
-            s.push(run(Tool::Vips, args!["copy", &input, suffixed(&out, &opts)]));
+            if ctx.vips {
+                let input = image_src(src, from, tmp, s);
+                // libvips uses Q=1-100 for every lossy writer it ships (JPEG, WebP, HEIF, JXL, AVIF).
+                let opts = match (to, quality) {
+                    ("jpg" | "webp" | "heic" | "avif" | "jxl" | "jp2", Some(q)) => format!("[Q={q}]"),
+                    ("jpg", None) => "[Q=90,background=255]".to_string(),
+                    _ => String::new(),
+                };
+                s.push(run(Tool::Vips, args!["copy", &input, suffixed(&out, &opts)]));
+            } else {
+                if !FFMPEG_STILL.contains(&to) {
+                    return Err(Error::Unsupported(format!(
+                        "cannot write .{to} without libvips; install libvips-tools or pick {}",
+                        FFMPEG_STILL.join(", ")
+                    )));
+                }
+                ffmpeg_still(src, &out, to, quality, None, s);
+            }
             out
         }
         Category::Video | Category::Audio => {
@@ -2324,6 +2475,31 @@ mod tests {
         let p = plan_of("archive", &[("format", "tgz")], &["/in/a.txt", "/in/b.txt"], Ctx::default()).unwrap();
         assert_eq!(p.name, "archive.tar.gz");
         assert_eq!(argv(&p).len(), 2);
+    }
+
+    #[test]
+    fn images_work_without_libvips() {
+        let no_vips = Ctx { vips: false, ..Ctx::default() };
+        let p = plan_of("to:jpg", &[], &["/in/a.png"], no_vips.clone()).unwrap();
+        assert_eq!(argv(&p)[0].0, Tool::Ffmpeg, "conversion falls back to the bundled FFmpeg");
+        assert!(argv(&p)[0].1.contains("-frames:v 1"));
+
+        let p = plan_of("resize", &[("max", "800")], &["/in/a.heic"], no_vips.clone()).unwrap();
+        assert_eq!(argv(&p)[0].0, Tool::Ffmpeg);
+        assert!(argv(&p)[0].1.contains("scale='min(iw,800)'"));
+
+        let sized = Ctx { vips: false, image: Some(ImageInfo { width: 400, height: 300, bands: 3 }), ..Ctx::default() };
+        let p = plan_of("crop", &[("box", "0,0,100,100")], &["/in/a.png"], sized).unwrap();
+        assert_eq!(argv(&p)[0].0, Tool::Ffmpeg);
+        assert!(argv(&p)[0].1.contains("crop=100:100:0:0"));
+
+        // Formats only libvips can write stay a clear error instead of a broken encode.
+        let err = plan_of("to:heic", &[], &["/in/a.png"], no_vips).unwrap_err();
+        assert!(format!("{err}").contains("libvips"));
+
+        // And with libvips present the preferred chain is unchanged.
+        let p = plan_of("to:jpg", &[], &["/in/a.png"], Ctx::default()).unwrap();
+        assert_eq!(argv(&p)[0].0, Tool::Vips);
     }
 
     #[test]

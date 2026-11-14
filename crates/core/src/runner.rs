@@ -395,6 +395,7 @@ fn probe(op: &Op, inputs: &[PathBuf]) -> Ctx {
     let src = &inputs[0];
     let size = fs::metadata(src).map(|m| m.len()).unwrap_or(0);
     let mut ctx = Ctx { size, ..Ctx::default() };
+    ctx.vips = tools::locate(Tool::Vips).is_some();
     match category_of(src) {
         Some(Category::Video | Category::Audio) => {
             ctx.media = probe_media(src);
