@@ -201,8 +201,9 @@ jobs:
       - name: Package self-check (engines resolve inside the AppImage)
         run: |
           ./app/src-tauri/target/release/bundle/appimage/*.AppImage --appimage-extract >/dev/null
-          resources="$(find squashfs-root/usr/lib -mindepth 1 -maxdepth 1 -type d | head -n1)"
-          ZEIDEX_BUNDLE_DIR="$PWD/$resources" cargo test -p zeidex-core --test bundle
+          # Tauri resolves the resource dir as ${APPDIR}/usr/lib/${productName}; readdir order
+          # under usr/lib is not stable, so name the directory instead of taking the first one.
+          ZEIDEX_BUNDLE_DIR="$PWD/squashfs-root/usr/lib/Zeidex Convert" cargo test -p zeidex-core --test bundle
           rm -rf squashfs-root
       - name: Upload Artifact
         if: github.event_name == 'pull_request'
