@@ -45,8 +45,9 @@ fn shipped_package_resolves_its_engines() {
     assert!(wrong.is_empty(), "engines not shipped in {}: {}", resource_dir.display(), wrong.join("; "));
 }
 
-/// The HWP/HWPX engine is invoked by file name rather than through `Tool`, so it gets its own
-/// presence check: it is shipped, and it is listed in the third-party notices.
+/// The HWP/HWPX engine travels in every package and appears in the notices, so its presence is
+/// checked directly: it has no `Tool` variant yet, which is why the lookup test above cannot
+/// cover it.
 #[test]
 fn shipped_package_carries_the_hwp_engine() {
     let Some(resource_dir) = resource_dir() else {
