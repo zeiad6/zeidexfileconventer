@@ -82,16 +82,18 @@ $vc = Get-Pinned `
   "https://conda.anaconda.org/conda-forge/win-64/vc14_runtime-14.44.35208-h818238b_41.conda" `
   "EC706FE9368B837FBD05AF4851F5EBEF12BEF8C471A273F4805F7AF788407317" `
   "vc14_runtime-14.44.35208-h818238b_41.conda"
-$vc1 = Join-Path $tmp "vc1"; $vc2 = Join-Path $tmp "vc2"; $vc3 = Join-Path $tmp "vc3"
-& $seven x $vc "-o$vc1" -y | Out-Null
-$vzst = Get-ChildItem $vc1 -Filter "pkg-*.tar.zst" | Select-Object -First 1
-& $seven x $vzst.FullName "-o$vc2" -y | Out-Null
-$vtar = Get-ChildItem $vc2 -Filter "pkg-*.tar" | Select-Object -First 1
-& $seven x $vtar.FullName "-o$vc3" -y | Out-Null
-$vcbin = Join-Path $vc3 "Library\bin"
-Copy-Item (Join-Path $vcbin "*.dll") $dst -Force
-if (Test-Path (Join-Path $dst "gs\Library\bin")) {
-  Copy-Item (Join-Path $vcbin "*.dll") (Join-Path $dst "gs\Library\bin") -Force
+if (Test-Path $seven) {
+  $vc1 = Join-Path $tmp "vc1"; $vc2 = Join-Path $tmp "vc2"; $vc3 = Join-Path $tmp "vc3"
+  & $seven x $vc "-o$vc1" -y | Out-Null
+  $vzst = Get-ChildItem $vc1 -Filter "pkg-*.tar.zst" | Select-Object -First 1
+  & $seven x $vzst.FullName "-o$vc2" -y | Out-Null
+  $vtar = Get-ChildItem $vc2 -Filter "pkg-*.tar" | Select-Object -First 1
+  & $seven x $vtar.FullName "-o$vc3" -y | Out-Null
+  $vcbin = Join-Path $vc3 "Library\bin"
+  Copy-Item (Join-Path $vcbin "*.dll") $dst -Force
+  if (Test-Path (Join-Path $dst "gs\Library\bin")) {
+    Copy-Item (Join-Path $vcbin "*.dll") (Join-Path $dst "gs\Library\bin") -Force
+  }
 }
 
 # rhwp: the HWP/HWPX viewer-editor engine.
