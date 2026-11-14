@@ -7,15 +7,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cleanup, waitFor } from '@testing-library/react';
 import { Wheel } from '../src/wheel/Wheel';
-import { C } from '../src/lib/geometry';
+import { C, SCALE } from '../src/lib/geometry';
 import { firstCall, installTauri, mount, type Harness } from './harness';
 
 const CLIP = ['/v/clip.mp4'];
 
-/** Middle of segment `i` of `n` on the ring at radius `r` (the wheel is 480 px, centred at 240). */
+/** Middle of segment `i` of `n` on the ring at radius `r`, mapped into the 380 px window. */
 const at = (i: number, n: number, r: number) => {
   const angle = -Math.PI / 2 + ((i + 0.5) * 2 * Math.PI) / n;
-  return { x: C + r * Math.cos(angle), y: C + r * Math.sin(angle) };
+  return { x: C * SCALE + r * SCALE * Math.cos(angle), y: C * SCALE + r * SCALE * Math.sin(angle) };
 };
 
 const segs = () => [...document.querySelectorAll('#wheel path')];
@@ -97,7 +97,7 @@ describe('wheel', () => {
     expect(segs()).toHaveLength(7); // 3 modes + 4 actions
     expect(document.getElementById('wheel')!.textContent).toContain('Actions');
 
-    await h.drag({ type: 'drop', paths: CLIP, position: { x: C, y: C } });
+    await h.drag({ type: 'drop', paths: CLIP, position: { x: C * SCALE, y: C * SCALE } });
     expect(h.calls.some((c) => c.cmd === 'hide_wheel')).toBe(true);
   });
 

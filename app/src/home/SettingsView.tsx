@@ -70,6 +70,7 @@ export function SettingsView({ flashWatch = false }: { flashWatch?: boolean }) {
       actions: String(data.get('actions') ?? ''),
       reveal: data.get('reveal') === 'on',
       hotkey: data.get('hotkey') === 'on',
+      tray: data.get('tray') === 'on',
       recipes: [...el.querySelectorAll('[data-list="recipes"] .rows .row-item')]
         .map((row) => ({ name: valueOf(row, '.r-name'), steps: valueOf(row, '.r-steps') }))
         .filter((r) => r.name || r.steps),
@@ -130,6 +131,10 @@ export function SettingsView({ flashWatch = false }: { flashWatch?: boolean }) {
         <label className="check">
           <input type="checkbox" name="hotkey" defaultChecked={settings.hotkey !== false} />
           {t('hotkey')}
+        </label>
+        <label className="check">
+          <input type="checkbox" name="tray" defaultChecked={settings.tray !== false} />
+          {t('trayIcon')}
         </label>
 
         <div className="list" data-list="recipes">

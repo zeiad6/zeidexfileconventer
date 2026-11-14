@@ -1,7 +1,7 @@
 {
   "name": "zeidex-ui",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "description": "Zeidex Convert desktop UI: React 19, TypeScript, Tailwind CSS v4, Framer Motion",
   "scripts": {

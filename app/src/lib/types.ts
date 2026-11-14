@@ -60,6 +60,7 @@ export interface Settings {
   actions: string;
   reveal: boolean;
   hotkey: boolean;
+  tray: boolean;
   recipes: Recipe[];
   watch: WatchRule[];
 }

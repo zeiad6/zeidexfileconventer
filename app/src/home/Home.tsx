@@ -225,6 +225,30 @@ export function Home() {
 
   return (
     <div className="studio">
+      <header className="topbar" data-tauri-drag-region="">
+        <div className="lights">
+          <button type="button" className="light close" id="winClose" aria-label="Close" title="Close" onClick={() => control('close')} />
+          <button type="button" className="light min" id="winMin" aria-label="Minimize" title="Minimize" onClick={() => control('minimize')} />
+          <button type="button" className="light max" id="winMax" aria-label="Maximize" title="Maximize" onClick={() => control('toggleMaximize')} />
+        </div>
+        <div className="topbar-lead" data-tauri-drag-region="">
+          <span className="topbar-title" id="viewTitle">
+            {t(VIEW_TITLES[view])}
+          </span>
+          <span className="hint" id="hook">
+            {hookKey ? t(hookKey) : ''}
+          </span>
+        </div>
+        <div className="header-actions">
+          <button type="button" className="btn-subtle btn-donate" id="donateBtn" onClick={() => setDonate(true)}>
+            <span className="icon">❤️</span> <span>{t('donate')}</span>
+          </button>
+          <button type="button" className="btn-subtle" id="aboutBtn" onClick={() => setAbout(true)}>
+            <span className="icon">ℹ️</span> <span>{t('about')}</span>
+          </button>
+        </div>
+      </header>
+      <div className="studio-body">
       <aside className="rail" aria-label="Sections">
         <div className="rail-head">
           <img src="/icon.png" alt="" className="app-icon" />
@@ -255,29 +279,6 @@ export function Home() {
       </aside>
 
       <main className="stage">
-        <header className="topbar" data-tauri-drag-region="">
-          <div className="lights">
-            <button type="button" className="light close" id="winClose" aria-label="Close" title="Close" onClick={() => control('close')} />
-            <button type="button" className="light min" id="winMin" aria-label="Minimize" title="Minimize" onClick={() => control('minimize')} />
-            <button type="button" className="light max" id="winMax" aria-label="Maximize" title="Maximize" onClick={() => control('toggleMaximize')} />
-          </div>
-          <div className="topbar-lead" data-tauri-drag-region="">
-            <span className="topbar-title" id="viewTitle">
-              {t(VIEW_TITLES[view])}
-            </span>
-            <span className="hint" id="hook">
-              {hookKey ? t(hookKey) : ''}
-            </span>
-          </div>
-          <div className="header-actions">
-            <button type="button" className="btn-subtle btn-donate" id="donateBtn" onClick={() => setDonate(true)}>
-              <span className="icon">❤️</span> <span>{t('donate')}</span>
-            </button>
-            <button type="button" className="btn-subtle" id="aboutBtn" onClick={() => setAbout(true)}>
-              <span className="icon">ℹ️</span> <span>{t('about')}</span>
-            </button>
-          </div>
-        </header>
 
         <div className="views">
           <section className="view" id="view-convert" hidden={view !== 'convert' && view !== 'tools'}>
@@ -499,6 +500,7 @@ export function Home() {
           </section>
         </div>
       </main>
+      </div>
 
       <AboutModal
         open={about}

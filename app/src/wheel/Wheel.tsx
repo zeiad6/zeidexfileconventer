@@ -19,12 +19,15 @@ import {
   CHILD_R,
   DWELL_MS,
   HUB_R,
+  IDLE_MS,
   ITEMS_R,
   LEAVE_MS,
   MODES,
   MODE_ICON,
   MODES_R,
   OPEN_MS,
+  SCALE,
+  WHEEL_PX,
   arcPath,
   childLabelMax,
   hitTest,
@@ -128,6 +131,7 @@ export function Wheel() {
   const chipTimer = useRef<number | undefined>(undefined);
   const openTimer = useRef<number | undefined>(undefined);
   const hideTimer = useRef<number | undefined>(undefined);
+  const idleTimer = useRef<number | undefined>(undefined);
   const clickMode = useRef(false);
 
   const items = state.desc ? state.desc[state.mode] : [];
@@ -137,7 +141,16 @@ export function Wheel() {
     window.clearTimeout(chipTimer.current);
     window.clearTimeout(openTimer.current);
     window.clearTimeout(hideTimer.current);
+    window.clearTimeout(idleTimer.current);
   };
+
+  /** Hide the wheel when the pointer rests on it and nothing is picked for a while. */
+  const bumpIdle = useCallback(() => {
+    window.clearTimeout(idleTimer.current);
+    idleTimer.current = window.setTimeout(() => {
+      if (!latest.current.form) void hideWheel();
+    }, IDLE_MS);
+  }, []);
 
   const setMode = useCallback((mode: WheelMode) => {
     const s = latest.current;
@@ -194,6 +207,7 @@ export function Wheel() {
     const children = s.open >= 0 && list[s.open] ? list[s.open].children ?? [] : [];
     return hitTest(pos, {
       dpr: window.devicePixelRatio || 1,
+      scale: SCALE,
       itemCount: list.length,
       childCount: children.length,
     });
@@ -204,6 +218,7 @@ export function Wheel() {
       const s = latest.current;
       const h = hitOf(pos);
 
+      bumpIdle();
       const centre = h.centre === true;
       if (centre !== s.centre) dispatch({ type: 'centre', on: centre });
 
@@ -236,7 +251,7 @@ export function Wheel() {
       const sub = h.sub ?? -1;
       if (sub !== s.sub) dispatch({ type: 'sub', index: sub });
     },
-    [hitOf, setMode],
+    [bumpIdle, hitOf, setMode],
   );
 
   const drop = useCallback(
@@ -295,6 +310,7 @@ export function Wheel() {
         const { desc } = await load(paths);
         const list = desc[latest.current.mode];
         if (list.length) dispatch({ type: 'hover', index: 0, closeOpen: true });
+        bumpIdle();
       }),
     );
 
@@ -391,7 +407,7 @@ export function Wheel() {
       document.removeEventListener('keydown', onKey);
       window.removeEventListener('blur', onBlur);
     };
-  }, [choose, chooseSub, drop, load, over, setMode]);
+  }, [bumpIdle, choose, chooseSub, drop, load, over, setMode]);
 
   useEffect(() => stopTimers, []);
 
@@ -406,7 +422,7 @@ export function Wheel() {
   const closeForm = () => dispatch({ type: 'form', choice: null });
 
   return (
-    <div className="relative h-[480px] w-[480px] select-none">
+    <div className="relative select-none" style={{ width: WHEEL_PX, height: WHEEL_PX }}>
       <svg
         id="wheel"
         className="wheel-svg"

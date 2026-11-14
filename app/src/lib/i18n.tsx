@@ -71,6 +71,7 @@ export const COPY = {
   keyActions: ['Actions wheel key', 'مفتاح عجلة الإجراءات'],
   reveal: ['Show results in the file manager', 'إظهار النتائج في مدير الملفات'],
   hotkey: ['Ctrl+Shift+Space opens the wheel on selected files', 'Ctrl+Shift+Space يفتح العجلة للملفات المحددة'],
+  trayIcon: ['Show the tray icon', 'إظهار أيقونة الدرج'],
   saved: ['Saved', 'تم الحفظ'],
   recipes: ['Recipes (shown in the Tools wheel)', 'الوصفات (تظهر في عجلة الأدوات)'],
   recipeName: ['Name', 'الاسم'],

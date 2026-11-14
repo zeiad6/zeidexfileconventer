@@ -781,6 +781,10 @@ fn yes() -> bool {
     true
 }
 
+fn tray_on() -> bool {
+    true
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct Settings {
@@ -790,6 +794,10 @@ struct Settings {
     reveal: bool,
     /// Ctrl+Shift+Space opens the wheel on the current selection.
     hotkey: bool,
+    /// Keep a tray/menu-bar icon. Closing the window never quits the app either way; this only
+    /// controls whether the icon stays behind.
+    #[serde(default = "tray_on")]
+    tray: bool,
     recipes: Vec<Recipe>,
     watch: Vec<WatchRule>,
 }
@@ -802,6 +810,7 @@ impl Default for Settings {
             actions: Trigger::Alt,
             reveal: true,
             hotkey: true,
+            tray: true,
             recipes: vec![Recipe {
                 name: "Web image".into(),
                 steps: "resize max=1600 | compress percent=60 | strip".into(),
@@ -892,6 +901,9 @@ fn set_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     std::fs::write(&path, serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     apply(&settings);
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_visible(settings.tray);
+    }
     start_watchers(&app, &settings.watch);
     Ok(())
 }
@@ -1144,7 +1156,7 @@ pub fn run() {
                     &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
                 ],
             )?;
-            let mut tray = TrayIconBuilder::new().tooltip("Zeidex Convert").menu(&menu).on_menu_event(|app, event| {
+            let mut tray = TrayIconBuilder::with_id("main").tooltip("Zeidex Convert").menu(&menu).on_menu_event(|app, event| {
                 match event.id.as_ref() {
                     "home" => show(app, "home"),
                     "shelf" => {
@@ -1159,7 +1171,10 @@ pub fn run() {
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
-            tray.build(app)?;
+            let tray = tray.build(app)?;
+            // The setting can start as false: the icon exists but stays hidden, so turning it on
+            // later needs no restart.
+            let _ = tray.set_visible(settings.tray);
 
             // Park the orb near the bottom-right corner of the primary screen.
             if let Some(shelf) = app.get_webview_window("shelf") {
