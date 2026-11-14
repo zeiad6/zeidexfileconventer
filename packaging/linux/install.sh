@@ -18,7 +18,7 @@ SUMS=""
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN="$PREFIX/bin"
 APPS="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-ICONS="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
+ICONS="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/512x512/apps"
 TARGET="$BIN/zeidex-convert.AppImage"
 LINK="$BIN/zeidex-convert"
 DESKTOP="$APPS/zeidex-convert.desktop"
@@ -75,13 +75,18 @@ install -m 755 "$TMP/$ASSET" "$TARGET.new"
 mv -f "$TARGET.new" "$TARGET"
 ln -sf "zeidex-convert.AppImage" "$LINK"
 
-# The icon ships inside the bundle; extract it without running the app.
+# The icon ships inside the bundle; extract it without running the app. Filters are
+# full-path patterns, so ask for the 512px icon by path: a bare '*.png' matches only
+# top-level files, which left older installs with a desktop entry and no icon.
 if [ -x "$TARGET" ]; then
-  "$TARGET" --appimage-extract 'zeidex-convert.png' >/dev/null 2>&1 || \
-    "$TARGET" --appimage-extract '*.png' >/dev/null 2>&1 || true
-  found="$(find squashfs-root -type f -path '*icons*' -name '*.png' 2>/dev/null | head -n 1)"
+  mkdir -p "$TMP/icon" && (
+    cd "$TMP/icon" || exit 0
+    "$TARGET" --appimage-extract 'usr/share/icons/hicolor/512x512/apps/*.png' >/dev/null 2>&1 || \
+      "$TARGET" --appimage-extract '*.png' >/dev/null 2>&1 || true
+  )
+  found="$(find "$TMP/icon/squashfs-root" -type f -name '*.png' 2>/dev/null | head -n 1)"
   [ -n "$found" ] && cp "$found" "$ICON"
-  rm -rf squashfs-root
+  rm -rf "$TMP/icon"
 fi
 
 cat > "$DESKTOP" <<EOF

@@ -43,9 +43,18 @@ jobs:
           cargo fmt --manifest-path crates/localdrop/Cargo.toml --check
           cargo clippy --manifest-path crates/localdrop/Cargo.toml --all-targets -- -D warnings
           cargo test --manifest-path crates/localdrop/Cargo.toml
-      - name: Packaging scripts (syntax)
+      - name: Packaging scripts (syntax, checksum naming)
         if: runner.os == 'Linux'
-        run: sh -n packaging/linux/install.sh
+        run: |
+          sh -n packaging/linux/install.sh
+          bash -n packaging/checksums.sh
+          # GitHub turns spaces in asset names into dots; the sums must use the same name
+          # or `sha256sum -c` and install.sh both fail on a good download.
+          tmp="$(mktemp -d)"
+          printf 'x' > "$tmp/Zeidex Convert_9.9.9_x64.dmg"
+          bash packaging/checksums.sh "$tmp/Zeidex Convert_9.9.9_x64.dmg" > "$tmp/sums.txt"
+          grep -qx '[0-9a-f]\{64\}  Zeidex\.Convert_9\.9\.9_x64\.dmg' "$tmp/sums.txt" \
+            || { cat "$tmp/sums.txt"; exit 1; }
       - name: UI tests (React + jsdom)
         working-directory: app
         run: |
@@ -186,9 +195,9 @@ jobs:
         run: npx tauri build --bundles appimage
       - name: Checksums
         run: |
-          cd app/src-tauri/target/release/bundle/appimage
-          sha256sum *.AppImage > ../SHA256SUMS-linux-${{ matrix.arch }}.txt
-          cat ../SHA256SUMS-linux-${{ matrix.arch }}.txt
+          bash packaging/checksums.sh app/src-tauri/target/release/bundle/appimage/*.AppImage \
+            > app/src-tauri/target/release/bundle/SHA256SUMS-linux-${{ matrix.arch }}.txt
+          cat app/src-tauri/target/release/bundle/SHA256SUMS-linux-${{ matrix.arch }}.txt
       - name: Upload Artifact
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
@@ -246,10 +255,10 @@ jobs:
       - name: Checksums
         shell: bash
         run: |
-          cd app/src-tauri/target/release/bundle
-          find . -maxdepth 2 -type f -name '*-setup.exe' \
-            -exec sha256sum {} \; | sed 's|  \./|  |' > SHA256SUMS-windows.txt
-          cat SHA256SUMS-windows.txt
+          # shellcheck disable=SC2046
+          bash packaging/checksums.sh $(find app/src-tauri/target/release/bundle/nsis -name '*-setup.exe') \
+            > app/src-tauri/target/release/bundle/SHA256SUMS-windows.txt
+          cat app/src-tauri/target/release/bundle/SHA256SUMS-windows.txt
       - name: Upload Artifact
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
@@ -315,10 +324,9 @@ jobs:
         run: npx tauri build --bundles app,dmg
       - name: Checksums
         run: |
-          cd app/src-tauri/target/release/bundle
-          find . -maxdepth 2 -type f -name '*.dmg' -exec shasum -a 256 {} \; \
-            | sed 's|  \./|  |' > SHA256SUMS-macos-${{ matrix.arch }}.txt
-          cat SHA256SUMS-macos-${{ matrix.arch }}.txt
+          bash packaging/checksums.sh app/src-tauri/target/release/bundle/dmg/*.dmg \
+            > app/src-tauri/target/release/bundle/SHA256SUMS-macos-${{ matrix.arch }}.txt
+          cat app/src-tauri/target/release/bundle/SHA256SUMS-macos-${{ matrix.arch }}.txt
       - name: Upload Artifact
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
