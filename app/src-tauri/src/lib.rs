@@ -1156,18 +1156,19 @@ pub fn run() {
                     &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
                 ],
             )?;
-            let mut tray = TrayIconBuilder::with_id("main").tooltip("Zeidex Convert").menu(&menu).on_menu_event(|app, event| {
-                match event.id.as_ref() {
-                    "home" => show(app, "home"),
-                    "shelf" => {
-                        if let Some(w) = app.get_webview_window("shelf") {
-                            let _ = if w.is_visible().unwrap_or(false) { w.hide() } else { w.show() };
+            let mut tray =
+                TrayIconBuilder::with_id("main").tooltip("Zeidex Convert").menu(&menu).on_menu_event(|app, event| {
+                    match event.id.as_ref() {
+                        "home" => show(app, "home"),
+                        "shelf" => {
+                            if let Some(w) = app.get_webview_window("shelf") {
+                                let _ = if w.is_visible().unwrap_or(false) { w.hide() } else { w.show() };
+                            }
                         }
+                        "quit" => app.exit(0),
+                        _ => {}
                     }
-                    "quit" => app.exit(0),
-                    _ => {}
-                }
-            });
+                });
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
