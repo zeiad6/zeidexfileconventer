@@ -23,10 +23,14 @@ pub enum Tool {
     ExifTool,
     Zbar,
     Qrencode,
+    /// Real-ESRGAN ncnn/Vulkan build: AI super-resolution on the GPU (CPU fallback).
+    RealEsrgan,
+    /// rembg CLI: AI background removal with a local U²-Net ONNX model.
+    Rembg,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 15] = [
+    pub const ALL: [Tool; 17] = [
         Tool::Ffmpeg,
         Tool::Ffprobe,
         Tool::Vips,
@@ -42,6 +46,8 @@ impl Tool {
         Tool::ExifTool,
         Tool::Zbar,
         Tool::Qrencode,
+        Tool::RealEsrgan,
+        Tool::Rembg,
     ];
 
     pub fn label(self) -> &'static str {
@@ -61,6 +67,8 @@ impl Tool {
             Tool::ExifTool => "ExifTool",
             Tool::Zbar => "ZBar (QR)",
             Tool::Qrencode => "qrencode",
+            Tool::RealEsrgan => "Real-ESRGAN (AI upscale)",
+            Tool::Rembg => "rembg (AI background removal)",
         }
     }
 
@@ -81,6 +89,8 @@ impl Tool {
             Tool::ExifTool => "ZEIDEX_EXIFTOOL",
             Tool::Zbar => "ZEIDEX_ZBARIMG",
             Tool::Qrencode => "ZEIDEX_QRENCODE",
+            Tool::RealEsrgan => "ZEIDEX_REALESRGAN",
+            Tool::Rembg => "ZEIDEX_REMBG",
         }
     }
 
@@ -103,6 +113,8 @@ impl Tool {
                 Tool::ExifTool => &["exiftool.exe", "exiftool(-k).exe"],
                 Tool::Zbar => &["zbarimg.exe"],
                 Tool::Qrencode => &["qrencode.exe"],
+                Tool::RealEsrgan => &["realesrgan-ncnn-vulkan.exe"],
+                Tool::Rembg => &["rembg.exe"],
             }
         } else {
             match self {
@@ -121,6 +133,8 @@ impl Tool {
                 Tool::ExifTool => &["exiftool"],
                 Tool::Zbar => &["zbarimg"],
                 Tool::Qrencode => &["qrencode"],
+                Tool::RealEsrgan => &["realesrgan-ncnn-vulkan"],
+                Tool::Rembg => &["rembg"],
             }
         }
     }
@@ -143,6 +157,8 @@ impl Tool {
                 Tool::Whisper => {
                     "whisper.cpp release (github.com/ggml-org/whisper.cpp) + set ZEIDEX_WHISPER_MODEL to a ggml-*.bin"
                 }
+                Tool::RealEsrgan => ESRGAN_HINT,
+                Tool::Rembg => REMBG_HINT,
             }
         } else if cfg!(target_os = "macos") {
             match self {
@@ -159,6 +175,8 @@ impl Tool {
                 Tool::Zbar => "brew install zbar",
                 Tool::Qrencode => "brew install qrencode",
                 Tool::Whisper => "brew install whisper-cpp + set ZEIDEX_WHISPER_MODEL to a ggml-*.bin",
+                Tool::RealEsrgan => ESRGAN_HINT,
+                Tool::Rembg => REMBG_HINT,
             }
         } else {
             match self {
@@ -177,6 +195,8 @@ impl Tool {
                 Tool::Whisper => {
                     "build whisper.cpp (github.com/ggml-org/whisper.cpp) + set ZEIDEX_WHISPER_MODEL to a ggml-*.bin"
                 }
+                Tool::RealEsrgan => ESRGAN_HINT,
+                Tool::Rembg => REMBG_HINT,
             }
         }
     }
@@ -211,6 +231,10 @@ impl Tool {
         dirs
     }
 }
+
+const ESRGAN_HINT: &str = "realesrgan-ncnn-vulkan release (github.com/xinntao/Real-ESRGAN/releases): put it on PATH with its models folder beside it";
+const REMBG_HINT: &str =
+    "pipx install \"rembg[cli]\", then put u2net.onnx in ~/.u2net (or set ZEIDEX_REMBG_MODEL); nothing is downloaded at run time";
 
 /// `<root>/<prefix>*/bin` for installers that put the version in the folder name.
 fn versioned_bins(root: &Path, prefix: &str) -> Vec<PathBuf> {
@@ -270,13 +294,41 @@ pub fn whisper_model() -> Option<PathBuf> {
     if let Some(p) = env::var_os("ZEIDEX_WHISPER_MODEL").map(PathBuf::from).filter(|p| p.is_file()) {
         return Some(p);
     }
+    bundled_model("bin")
+}
+
+/// First `*.<ext>` in a bundled `models/` dir.
+fn bundled_model(ext: &str) -> Option<PathBuf> {
     bundle_dirs()
         .iter()
         .map(|d| d.join("models"))
         .filter_map(|d| d.read_dir().ok())
         .flat_map(|rd| rd.flatten())
         .map(|e| e.path())
-        .find(|p| p.extension().is_some_and(|e| e == "bin"))
+        .find(|p| p.extension().is_some_and(|e| e == ext))
+}
+
+/// Real-ESRGAN networks: `ZEIDEX_REALESRGAN_MODELS`, else the `models` folder beside the
+/// engine, which is how its release archive unpacks.
+pub fn esrgan_models() -> Option<PathBuf> {
+    if let Some(p) = env::var_os("ZEIDEX_REALESRGAN_MODELS").map(PathBuf::from).filter(|p| p.is_dir()) {
+        return Some(p);
+    }
+    locate(Tool::RealEsrgan)?.parent().map(|d| d.join("models")).filter(|d| d.is_dir())
+}
+
+/// rembg's ONNX model: `ZEIDEX_REMBG_MODEL`, else a bundled `models/*.onnx`, else rembg's own
+/// cache (`~/.u2net/u2net.onnx`). The path is always passed explicitly, so rembg never
+/// downloads a model while the app runs.
+pub fn rembg_model() -> Option<PathBuf> {
+    if let Some(p) = env::var_os("ZEIDEX_REMBG_MODEL").map(PathBuf::from).filter(|p| p.is_file()) {
+        return Some(p);
+    }
+    if let Some(p) = bundled_model("onnx") {
+        return Some(p);
+    }
+    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join(".u2net").join("u2net.onnx")).filter(|p| p.is_file())
 }
 
 pub fn require(tool: Tool) -> crate::Result<PathBuf> {

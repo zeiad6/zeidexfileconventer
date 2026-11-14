@@ -109,6 +109,9 @@ struct Described {
     actions: Vec<Choice>,
 }
 
+/// Saved recipes the Tools ring shows; the studio lists every one.
+const WHEEL_RECIPES: usize = 4;
+
 const ACTIONS: [(&str, &str, &str); 11] = [
     ("float", "Float to shelf", "علّق في الرف العائم"),
     ("archive", "Archive to ZIP", "أرشفة إلى ZIP"),
@@ -190,7 +193,9 @@ fn describe(app: AppHandle, paths: Vec<String>) -> Described {
             })
             .collect()
     };
-    let recipes = get_settings(app).recipes;
+    let recipes: Vec<Recipe> = get_settings(app).recipes.into_iter().take(WHEEL_RECIPES).collect();
+    let all: Vec<&ops::ToolDef> = ops::tools_for_paths(&paths).into_iter().filter(|t| t.id != "recipe").collect();
+    let (shown, more) = ops::wheel_tools(&all, recipes.len());
     let saved = recipes.into_iter().map(|r| Choice {
         kind: "tool",
         editor: false,
@@ -201,9 +206,18 @@ fn describe(app: AppHandle, paths: Vec<String>) -> Described {
         preset: HashMap::from([("steps".to_string(), r.steps)]),
         children: vec![],
     });
-    let tools = ops::tools_for_paths(&paths)
+    let more = more.then(|| Choice {
+        kind: "action",
+        editor: false,
+        id: "more-tools".into(),
+        label: "More tools…".into(),
+        label_ar: "المزيد من الأدوات…".into(),
+        params: vec![],
+        preset: HashMap::new(),
+        children: vec![],
+    });
+    let tools = shown
         .into_iter()
-        .filter(|t| t.id != "recipe")
         .map(|t| {
             let params: Vec<ParamOut> = t
                 .params
@@ -223,6 +237,7 @@ fn describe(app: AppHandle, paths: Vec<String>) -> Described {
             }
         })
         .chain(saved)
+        .chain(more)
         .collect();
     let actions = ACTIONS
         .iter()
@@ -347,6 +362,11 @@ fn action(app: &AppHandle, id: &str, paths: Vec<PathBuf>) -> Result<(), String> 
         }
         "checksum" => {
             spawn_job(app.clone(), Op::Checksum, paths, "SHA-256".into(), None);
+            Ok(())
+        }
+        // The ring shows the most useful tools; the studio window lists all of them.
+        "more-tools" => {
+            open_in_home(app.clone(), paths.iter().map(|p| p.to_string_lossy().into_owned()).collect());
             Ok(())
         }
         "send-phone" => {
@@ -1147,6 +1167,18 @@ pub fn run() {
                     let (p, s) = (m.position(), m.size());
                     let _ = shelf
                         .set_position(PhysicalPosition::new(p.x + s.width as i32 - 160, p.y + s.height as i32 - 220));
+                }
+            }
+
+            // macOS: the same rule through AppKit. `focusable(false)` makes tao's NSWindow answer
+            // NO to canBecomeKeyWindow/canBecomeMainWindow (what an NSPanel with
+            // .nonactivatingPanel gives), so the wheel never steals focus from Finder mid-drag; and
+            // the overlays follow the user across Spaces and full-screen apps.
+            #[cfg(target_os = "macos")]
+            for label in ["wheel", "shelf"] {
+                if let Some(w) = app.get_webview_window(label) {
+                    let _ = w.set_focusable(false);
+                    let _ = w.set_visible_on_all_workspaces(true);
                 }
             }
 

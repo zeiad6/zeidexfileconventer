@@ -106,7 +106,12 @@ export function Jobs() {
             key={row.key}
             className={`job border-t border-line py-2 ${row.state === 'done' ? 'done' : ''}${row.state === 'failed' ? 'failed' : ''}`}
           >
-            {row.name && <div className="name font-semibold break-words">{row.name}</div>}
+            {/* File names are mostly Latin: dir="auto" keeps "3 · 48.2 MB" from reversing under RTL. */}
+            {row.name && (
+              <div className="name font-semibold break-words" dir="auto">
+                {row.name}
+              </div>
+            )}
             {row.meta && <div className="meta text-xs text-muted">{row.meta}</div>}
             <div className="bar my-1.5 h-1.5 overflow-hidden rounded-sm bg-line">
               <i

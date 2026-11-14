@@ -40,6 +40,9 @@ describe('wheel', () => {
 
     expect(segs()).toHaveLength(13); // 3 modes + 10 formats
     expect(hot()).toHaveLength(1);
+    // The current mode is filled, so its light label sits on the accent, not on the pale ring.
+    expect(document.querySelector('[data-seg="mode-convert"]')!.classList.contains('current')).toBe(true);
+    expect(document.querySelector('[data-seg="mode-tools"]')!.classList.contains('current')).toBe(false);
   });
 
   it('opens the nested ring after a dwell and applies the value it was dropped on', async () => {

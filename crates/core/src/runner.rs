@@ -426,6 +426,12 @@ fn probe(op: &Op, inputs: &[PathBuf]) -> Ctx {
     if matches!(op, Op::Transcribe { .. }) {
         ctx.whisper_model = tools::whisper_model();
     }
+    if matches!(op, Op::Upscale { .. }) {
+        ctx.esrgan_models = tools::esrgan_models();
+    }
+    if matches!(op, Op::RemoveBackground { .. }) {
+        ctx.rembg_model = tools::rembg_model();
+    }
     ctx
 }
 

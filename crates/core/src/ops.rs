@@ -221,6 +221,15 @@ pub enum Op {
     Transcribe {
         lang: String,
     },
+    /// AI super-resolution with Real-ESRGAN: `scale` 2-4, `model` "photo" or "anime".
+    Upscale {
+        scale: u32,
+        model: String,
+    },
+    /// AI background removal with rembg and a local model: transparent PNG or WebP.
+    RemoveBackground {
+        to: String,
+    },
     /// Multi-size Windows .ico from an image.
     Icon,
     Checksum,
@@ -558,6 +567,24 @@ impl Op {
                     return Err(bad("lang", &lang));
                 }
                 Op::Transcribe { lang }
+            }
+            "upscale" => {
+                let scale = int("scale", 2)?;
+                if !(2..=4).contains(&scale) {
+                    return Err(bad("scale", "use 2, 3 or 4"));
+                }
+                let model = get("model").unwrap_or("photo");
+                if !matches!(model, "photo" | "anime") {
+                    return Err(bad("model", "photo or anime"));
+                }
+                Op::Upscale { scale, model: model.into() }
+            }
+            "remove-bg" => {
+                let to = get("to").unwrap_or("png");
+                if !matches!(to, "png" | "webp") {
+                    return Err(bad("to", "png or webp"));
+                }
+                Op::RemoveBackground { to: to.into() }
             }
             "icon" => Op::Icon,
             "checksum" => Op::Checksum,
@@ -902,6 +929,25 @@ pub const TOOLS: &[ToolDef] = &[
         cats: &[Video],
         multi: false,
         params: &[p("fps", "Frames per second", "إطارات في الثانية", "1")],
+    },
+    ToolDef {
+        id: "upscale",
+        label: "AI upscale",
+        label_ar: "تكبير بالذكاء الاصطناعي",
+        cats: &[Image, Video],
+        multi: false,
+        params: &[
+            p("scale", "Scale (2, 3 or 4)", "المقياس (2 أو 3 أو 4)", "2"),
+            p("model", "photo or anime", "photo أو anime", "photo"),
+        ],
+    },
+    ToolDef {
+        id: "remove-bg",
+        label: "Remove background (AI)",
+        label_ar: "إزالة الخلفية (ذكاء اصطناعي)",
+        cats: &[Image],
+        multi: false,
+        params: &[p("to", "png or webp", "png أو webp", "png")],
     },
     ToolDef {
         id: "transcribe",
@@ -1314,6 +1360,43 @@ pub const TOOLS: &[ToolDef] = &[
 
 /// Tools the desktop app opens in its visual editor instead of an options form.
 /// `trim` and `snapshot` use the frame-stepping timeline; `join` the clip-order list.
+/// Tools the Tools ring shows first, in this order; the rest follow in registry order.
+pub const WHEEL_FIRST: &[&str] = &[
+    "compress",
+    "resize",
+    "crop",
+    "remove-bg",
+    "upscale",
+    "strip",
+    "redact",
+    "trim",
+    "extract-audio",
+    "merge-pdf",
+    "ocr",
+    "transcribe",
+    "rotate",
+    "watermark",
+];
+
+/// Segments one ring holds before its labels stop fitting: the 480 px wheel overlaps names at
+/// 27 tools (measured on the image Tools ring), and stays legible at 12.
+pub const WHEEL_MAX: usize = 12;
+
+/// The tools the Tools ring shows when `reserved` segments are already taken (saved recipes),
+/// most useful first, and whether some were left out for a "More tools…" segment.
+pub fn wheel_tools<'a>(tools: &[&'a ToolDef], reserved: usize) -> (Vec<&'a ToolDef>, bool) {
+    let mut ordered: Vec<&'a ToolDef> =
+        WHEEL_FIRST.iter().filter_map(|id| tools.iter().find(|t| t.id == *id).copied()).collect();
+    ordered.extend(tools.iter().filter(|t| !WHEEL_FIRST.contains(&t.id)).copied());
+    let room = WHEEL_MAX.saturating_sub(reserved);
+    if ordered.len() <= room {
+        return (ordered, false);
+    }
+    // One segment goes to "More tools…".
+    ordered.truncate(room.saturating_sub(1));
+    (ordered, true)
+}
+
 pub const EDITOR_TOOLS: [&str; 9] =
     ["crop", "redact", "annotate", "adjust", "pages", "merge-pdf", "trim", "snapshot", "join"];
 
@@ -1416,6 +1499,22 @@ mod tests {
             Op::Split { parts: 2, at: vec![10.0, 90.0] }
         );
         assert!(Op::parse("channels", &opts(&[("left", "3")])).is_err());
+    }
+
+    #[test]
+    fn the_tools_ring_stays_legible() {
+        let image = tools_for_paths(&["/x/a.heic"]);
+        assert!(image.len() > WHEEL_MAX, "the image ring is the crowded case");
+        let (shown, more) = wheel_tools(&image, 1);
+        assert!(more);
+        assert_eq!(shown.len(), WHEEL_MAX - 2, "one recipe and one More segment");
+        assert_eq!(shown[0].id, "compress");
+        assert!(shown.iter().any(|t| t.id == "remove-bg") && shown.iter().any(|t| t.id == "upscale"));
+
+        let pdf: Vec<&ToolDef> = TOOLS.iter().filter(|t| t.id == "compress" || t.id == "info").collect();
+        let (shown, more) = wheel_tools(&pdf, 0);
+        assert!(!more);
+        assert_eq!(shown.iter().map(|t| t.id).collect::<Vec<_>>(), ["compress", "info"]);
     }
 
     #[test]

@@ -422,7 +422,7 @@ export function Wheel() {
               key={m}
               data-seg={`mode-${m}`}
               d={arcPath(i, MODES.length, MODES_R[0], MODES_R[1])}
-              className={`seg mode${i === state.chip ? ' hot' : ''}`}
+              className={`seg mode${m === state.mode ? ' current' : ''}${i === state.chip ? ' hot' : ''}`}
               fillRule="evenodd"
             />
           ))}

@@ -36,6 +36,8 @@ EXAMPLES:
   zeidex-convert tool ocr --lang ara+eng --to pdf scan.pdf
   zeidex-convert tool merge-pdf a.pdf b.pdf
   zeidex-convert tool motion photo.jpg
+  zeidex-convert tool upscale --scale 4 old-photo.jpg        (AI, needs realesrgan-ncnn-vulkan)
+  zeidex-convert tool remove-bg --to webp portrait.jpg      (AI, needs rembg + a local u2net.onnx)
   zeidex-convert tool rename --pattern "trip-{n:3}" *.jpg
   zeidex-convert watch ~/Downloads --ext heic --do "convert to=jpg"
 

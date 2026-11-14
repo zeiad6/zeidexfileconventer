@@ -38,6 +38,10 @@ pub struct Ctx {
     /// Pixel size of the first input, for ops that size things relative to it.
     pub dims: Option<(u32, u32)>,
     pub whisper_model: Option<PathBuf>,
+    /// Real-ESRGAN's `models` folder (AI upscale).
+    pub esrgan_models: Option<PathBuf>,
+    /// rembg's ONNX model file (AI background removal).
+    pub rembg_model: Option<PathBuf>,
     /// ExifTool is installed (lossless metadata removal for images).
     pub exiftool: bool,
     pub image: Option<ImageInfo>,
@@ -984,6 +988,26 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             s.push(run(Tool::Whisper, args!["-m", &model, "-f", &wav, "-l", lang, "-osrt", "-of", &base]));
             (tmp.join("transcript.srt"), named(&stem, "", "srt"))
         }
+        Op::Upscale { scale, model } if is(Category::Image) || is(Category::Video) => {
+            upscale(src, &from, is(Category::Video), *scale, model, ctx, tmp, &mut s, &stem)?
+        }
+        Op::RemoveBackground { to } if is(Category::Image) => {
+            let model = ctx.rembg_model.clone().ok_or_else(|| {
+                Error::Unsupported("background removal needs rembg and a local u2net.onnx model (see Engines)".into())
+            })?;
+            let (input, _) = ffmpeg_image_input(src, &from, tmp, &mut s);
+            let cut = tmp.join("cutout.png");
+            // u2net_custom + an explicit model path: rembg loads the file and never downloads.
+            let extras = format!("{{\"model_path\": {}}}", json_string(&model.to_string_lossy()));
+            s.push(run(Tool::Rembg, args!["i", "-m", "u2net_custom", "-x", extras, &input, &cut]));
+            if to == "webp" {
+                let out = tmp.join("cutout.webp");
+                s.push(run(Tool::Vips, args!["copy", &cut, suffixed(&out, "[Q=90]")]));
+                (out, named(&stem, "no-bg", "webp"))
+            } else {
+                (cut, named(&stem, "no-bg", "png"))
+            }
+        }
         Op::Icon if is(Category::Image) => {
             let (input, _) = ffmpeg_image_input(src, &from, tmp, &mut s);
             let mut pngs = Vec::new();
@@ -1148,6 +1172,123 @@ fn slideshow_canvas(dims: Option<(u32, u32)>) -> (u32, u32) {
     let (w, h) = dims.filter(|(w, h)| *w > 0 && *h > 0).unwrap_or((1920, 1080));
     let k = (SLIDESHOW_MAX as f64 / w.max(h) as f64).min(1.0);
     (((w as f64 * k) as u32).max(2) & !1, ((h as f64 * k) as u32).max(2) & !1)
+}
+
+/// Longest video AI upscale accepts: every frame is held as PNG on disk while it runs.
+const MAX_UPSCALE_SECS: f64 = 10.0 * 60.0;
+
+/// Real-ESRGAN network and the scale it runs at. The photo network is 4x only; smaller factors
+/// are a Lanczos resize of its output, which keeps its detail.
+fn esrgan_net(model: &str, scale: u32) -> (&'static str, u32) {
+    if model == "anime" {
+        ("realesr-animevideov3", scale)
+    } else {
+        ("realesrgan-x4plus", 4)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn upscale(
+    src: &Path,
+    from: &str,
+    video: bool,
+    scale: u32,
+    model: &str,
+    ctx: &Ctx,
+    tmp: &Path,
+    s: &mut Vec<Step>,
+    stem: &str,
+) -> Result<(PathBuf, String)> {
+    let models = ctx.esrgan_models.clone().ok_or_else(|| {
+        Error::Unsupported("AI upscale needs realesrgan-ncnn-vulkan with its models folder (see Engines)".into())
+    })?;
+    let (net, native) = esrgan_net(model, scale);
+    let esrgan = |input: &Path, output: &Path| {
+        run(
+            Tool::RealEsrgan,
+            args!["-i", input, "-o", output, "-n", net, "-s", native.to_string(), "-m", &models, "-f", "png"],
+        )
+    };
+    // Integer maths keeps even sizes for H.264; nothing to do when the network ran at `scale`.
+    let shrink = (scale != native)
+        .then(|| format!("scale=trunc(iw*{scale}/{native}/2)*2:trunc(ih*{scale}/{native}/2)*2:flags=lanczos"));
+    if !video {
+        let (input, _) = ffmpeg_image_input(src, from, tmp, s);
+        let png = tmp.join("upscale-in.png");
+        let mut a = ffmpeg_in(&input);
+        a.extend(args!["-frames:v", "1", &png]);
+        s.push(ffmpeg(a, ctx));
+        let up = tmp.join("upscaled.png");
+        s.push(esrgan(&png, &up));
+        let to = if from == "jpg" { "jpg" } else { "png" };
+        let out = tmp.join(format!("upscaled-final.{to}"));
+        let mut a = ffmpeg_in(&up);
+        if let Some(f) = &shrink {
+            a.extend(args!["-vf", f]);
+        }
+        a.extend(args!["-frames:v", "1", "-q:v", "2", &out]);
+        s.push(ffmpeg(a, ctx));
+        return Ok((out, named(stem, &format!("x{scale}"), to)));
+    }
+    let m = ctx.media.as_ref().ok_or_else(|| Error::Unsupported("could not read the video".into()))?;
+    if m.duration > MAX_UPSCALE_SECS {
+        return Err(Error::Unsupported(format!(
+            "AI video upscale takes clips up to {} minutes: trim the video first",
+            MAX_UPSCALE_SECS / 60.0
+        )));
+    }
+    let fps = if m.fps > 0.0 { m.fps } else { 30.0 };
+    let (frames, up) = (tmp.join("frames"), tmp.join("upscaled"));
+    s.push(Step::MkDir(frames.clone()));
+    s.push(Step::MkDir(up.clone()));
+    let mut a = ffmpeg_in(src);
+    a.extend(args!["-map", "0:v:0", "-r", format!("{fps}"), frames.join("%08d.png")]);
+    s.push(ffmpeg(a, ctx));
+    s.push(esrgan(&frames, &up));
+    let out = tmp.join("upscaled.mp4");
+    let mut a = args![
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-loglevel",
+        "error",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        "-framerate",
+        format!("{fps}"),
+        "-i",
+        up.join("%08d.png"),
+        "-i",
+        src,
+        "-map",
+        "0:v",
+        "-map",
+        "1:a?"
+    ];
+    let vf = match &shrink {
+        Some(f) => format!("{f},format=yuv420p"),
+        None => "format=yuv420p".into(),
+    };
+    a.extend(args!["-vf", vf, "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-c:a", "aac", "-b:a", "192k"]);
+    a.extend(args!["-shortest", &out]);
+    s.push(ffmpeg(a, ctx));
+    Ok((out, named(stem, &format!("x{scale}"), "mp4")))
+}
+
+/// `s` as a JSON string literal (rembg's `-x` takes JSON; Windows paths carry backslashes).
+fn json_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Image path FFmpeg decodes reliably, and the extension to write. HEIC/AVIF/SVG/WebP go
@@ -2045,6 +2186,59 @@ mod tests {
         }
         walk(&p.steps, &mut out);
         out
+    }
+
+    #[test]
+    fn ai_upscale_and_background_removal() {
+        assert!(plan_of("upscale", &[], &["/in/a.png"], Ctx::default()).is_err(), "needs Real-ESRGAN models");
+        let esr = Ctx { esrgan_models: Some("/e/models".into()), ..Ctx::default() };
+
+        // Photo network runs at 4x; 2x is a Lanczos resize of its output, JPEG stays JPEG.
+        let p = plan_of("upscale", &[("scale", "2")], &["/in/a.jpg"], esr.clone()).unwrap();
+        let a = argv(&p);
+        assert_eq!(p.name, "a-x2.jpg");
+        assert_eq!(
+            a[1],
+            (
+                Tool::RealEsrgan,
+                "-i /t/upscale-in.png -o /t/upscaled.png -n realesrgan-x4plus -s 4 -m /e/models -f png".into()
+            )
+        );
+        assert!(a[2].1.contains("-vf scale=trunc(iw*2/4/2)*2:trunc(ih*2/4/2)*2:flags=lanczos"), "{}", a[2].1);
+
+        // The anime network runs at the asked scale itself: no resize afterwards.
+        let p = plan_of("upscale", &[("scale", "3"), ("model", "anime")], &["/in/b.png"], esr.clone()).unwrap();
+        let a = argv(&p);
+        assert!(a[1].1.contains("-n realesr-animevideov3 -s 3"));
+        assert!(!a[2].1.contains("-vf"));
+        assert_eq!(p.name, "b-x3.png");
+        assert!(Op::parse("upscale", &[("scale".to_string(), "8".to_string())].into()).is_err());
+
+        // Video: frames out, upscaled as a folder, encoded back with the original audio.
+        let vid = Ctx { esrgan_models: Some("/e/models".into()), ..media(5.0) };
+        let p = plan_of("upscale", &[("scale", "4")], &["/in/clip.mp4"], vid).unwrap();
+        let a = argv(&p);
+        assert_eq!(p.name, "clip-x4.mp4");
+        assert!(a[0].1.contains("-map 0:v:0 -r 25 /t/frames/%08d.png"), "{}", a[0].1);
+        assert_eq!(a[1].1, "-i /t/frames -o /t/upscaled -n realesrgan-x4plus -s 4 -m /e/models -f png");
+        assert!(a[2].1.contains("-framerate 25 -i /t/upscaled/%08d.png -i /in/clip.mp4 -map 0:v -map 1:a?"));
+        assert!(a[2].1.contains("-vf format=yuv420p -c:v libx264"));
+        let long = Ctx { esrgan_models: Some("/e/models".into()), ..media(3600.0) };
+        assert!(plan_of("upscale", &[], &["/in/long.mp4"], long).is_err(), "frame budget");
+
+        assert!(plan_of("remove-bg", &[], &["/in/p.jpg"], Ctx::default()).is_err(), "needs a local model");
+        let bg = Ctx { rembg_model: Some(r"C:\m\u2net.onnx".into()), ..Ctx::default() };
+        let p = plan_of("remove-bg", &[], &["/in/p.jpg"], bg.clone()).unwrap();
+        assert_eq!(p.name, "p-no-bg.png");
+        let a = argv(&p);
+        assert_eq!(a.len(), 1);
+        // argv() turns backslashes into slashes for display; the JSON itself escapes them.
+        assert_eq!(a[0].0, Tool::Rembg);
+        assert!(a[0].1.starts_with("i -m u2net_custom -x {\"model_path\": "));
+        assert_eq!(json_string(r"C:\m\u2net.onnx"), r#""C:\\m\\u2net.onnx""#);
+        let p = plan_of("remove-bg", &[("to", "webp")], &["/in/p.heic"], bg).unwrap();
+        assert_eq!(p.name, "p-no-bg.webp");
+        assert_eq!(argv(&p).last().unwrap().0, Tool::Vips);
     }
 
     fn media(d: f64) -> Ctx {

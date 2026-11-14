@@ -113,17 +113,19 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
 | R6 | No way to hand files to the phone app. | **LocalDrop** (`crates/localdrop`, Android `LocalDropReceiver`): Actions ring → *Send to phone* shows a QR code holding the LAN address and a fresh 256-bit key; the phone photographs it, sees the file list and accepts. AES-256-GCM frames with implicit nonces, SHA-256 per file, LAN addresses only, one session per code, ten-minute expiry. A shared test vector (checked against Python's `cryptography`) pins Rust and Kotlin to identical bytes. It uses std sockets only and is never reached from a conversion; the offline test now covers its manifest too. |
 | R7 | Linux packages stopped at deb/rpm/AppImage/Flatpak. | `packaging/linux/`: Arch `PKGBUILD`/`.SRCINFO` (repackages the release deb), `snapcraft.yaml`, and `install.sh`, which picks apt/dnf/zypper/pacman/Flatpak/AppImage, verifies every download against the release `SHA256SUMS`, and installs the static musl CLI on Alpine and other musl systems (new `x86_64-unknown-linux-musl` CLI build). |
 
+| R8 | No AI image or video tools. | `upscale` (image and video, 2x/3x/4x, `photo` or `anime` network) runs **Real-ESRGAN ncnn/Vulkan**; `remove-bg` (PNG/WebP with transparency) runs **rembg** with `u2net_custom` and an explicit local model path, so rembg never downloads anything. Both follow the whisper.cpp pattern: external engines found like every other one (`ZEIDEX_REALESRGAN`, `ZEIDEX_REMBG`, `ZEIDEX_REALESRGAN_MODELS`, `ZEIDEX_REMBG_MODEL`, bundled `models/`), listed in Engines with install hints, and refused with a clear message when missing. Video upscale is capped at 10 minutes because every frame sits on disk as PNG while it runs. |
+| R9 | On macOS the wheel and orb could take focus from Finder mid-drag. | Both overlays are `focusable(false)` — tao's NSWindow then answers NO to `canBecomeKeyWindow`/`canBecomeMainWindow`, the behaviour of an NSPanel with `.nonactivatingPanel` — and visible on all Spaces. The block was type-checked by compiling it on Linux once; it has not run on a Mac. |
+| R10 | Found while capturing the real UI for the launch film: (a) an image's Tools ring held 27 tools, so labels overlapped ("Web ima…" over "ضبط"); (b) the current mode on the outer ring got white text on an unfilled segment — the code filled only the dwelled chip, contrary to its own comment; (c) in the 460×380 jobs window the LocalDrop row pushed Cancel off-screen; (d) Latin names such as "3 · 48.2 MB" reversed to "MB 48.2 · 3" in the Arabic UI. | (a) `ops::wheel_tools` caps a ring at 12 segments, most useful tools first, and the last segment opens the full list in the studio ("More tools…"); unit test. (b) The current mode segment is `.current` (filled) and the dwelled one is outlined; wheel test asserts it. (c) The jobs window is 470 px tall. (d) Row names carry `dir="auto"`. |
+
 Not done, on purpose:
-- **AI background removal / upscaling (ONNX, WGPU) and Whisper bundling**: they need models of
-  tens to hundreds of MB and native runtimes that cannot be built or tested on the development
-  host; adding them unverified would contradict the zero-defect goal. Transcription already
-  works when a Whisper model is installed.
-- **macOS NSPanel and Wayland layer-shell hooks**: no macOS or Wayland session to test on.
-  Windows uses the `GetAsyncKeyState` poll and X11 (and macOS, with the Accessibility
-  permission) use `rdev`; Wayland blocks global input by design, so there the orb and the
-  studio window remain the way in.
-- **mDNS discovery for LocalDrop**: the QR code already carries the address, so discovery would
-  add a dependency and a broadcast without removing a step.
+- **Bundling the AI engines and models in the installers**: Real-ESRGAN's networks and the
+  U²-Net model add 60–180 MB per platform; they stay optional downloads the Engines panel names.
+  Neither engine runs on the development host (no Vulkan device, and installing Python packages
+  here is not allowed), so their argv is pinned by plan tests, not by a real run.
+- **Wayland global hooks (layer-shell, GlobalShortcuts portal)**: no Wayland session to test
+  on. Wayland blocks global input by design; the orb and the studio window remain the way in.
+- **mDNS discovery for LocalDrop**: the QR code already carries the address, and the key has to
+  travel in it anyway, so discovery would add a broadcast without removing a step.
 
 ## 7. Known gaps
 
