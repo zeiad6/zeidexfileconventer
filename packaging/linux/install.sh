@@ -12,8 +12,8 @@ set -eu
 VERSION="${ZEIDEX_VERSION:-0.3.1}"
 REPO="https://github.com/zeiad6/zeidexfileconventer"
 BASE="$REPO/releases/download/v$VERSION"
-ASSET="Zeidex.Convert_${VERSION}_amd64.AppImage"
-SUMS="SHA256SUMS-linux.txt"
+ASSET=""
+SUMS=""
 
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN="$PREFIX/bin"
@@ -50,9 +50,13 @@ uninstall() {
 [ "${1:-}" = "--uninstall" ] && uninstall
 [ "${1:-}" = "--help" ] && { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 
-arch="$(uname -m)"
-[ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ] || \
-  die "the published AppImage is x86_64 only ($arch here); build from source: https://github.com/zeiad6/zeidexfileconventer#build"
+case "$(uname -m)" in
+  x86_64 | amd64) arch_tag=amd64 ;;
+  aarch64 | arm64) arch_tag=aarch64 ;;
+  *) die "unsupported CPU: $(uname -m); build from source: https://github.com/zeiad6/zeidexfileconventer#build" ;;
+esac
+ASSET="Zeidex.Convert_${VERSION}_${arch_tag}.AppImage"
+SUMS="SHA256SUMS-linux-${arch_tag}.txt"
 
 command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
 

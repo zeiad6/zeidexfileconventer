@@ -129,9 +129,19 @@ jobs:
   # the oldest LTS still available and runs on Debian 12+, Ubuntu 22.04+, Fedora 36+, Mint 21+
   # and anything newer. A build on 24.04 would demand glibc 2.39 and refuse to start on those.
   linux-bundles:
-    name: package (Linux AppImage)
+    name: package (Linux AppImage, ${{ matrix.arch }})
     needs: core
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            arch: amd64
+          # ARM64 hosted runners are available to public repositories; the engines are
+          # architecture-specific, so an x64 AppImage cannot stand in for this one.
+          - os: ubuntu-22.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
     env:
@@ -177,8 +187,8 @@ jobs:
       - name: Checksums
         run: |
           cd app/src-tauri/target/release/bundle/appimage
-          sha256sum *.AppImage > ../SHA256SUMS-linux.txt
-          cat ../SHA256SUMS-linux.txt
+          sha256sum *.AppImage > ../SHA256SUMS-linux-${{ matrix.arch }}.txt
+          cat ../SHA256SUMS-linux-${{ matrix.arch }}.txt
       - name: Upload Artifact
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
@@ -187,7 +197,7 @@ jobs:
           name: zeidex-convert-Linux
           path: |
             app/src-tauri/target/release/bundle/appimage/*.AppImage
-            app/src-tauri/target/release/bundle/SHA256SUMS-linux.txt
+            app/src-tauri/target/release/bundle/SHA256SUMS-linux-${{ matrix.arch }}.txt
           if-no-files-found: ignore
       - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -199,7 +209,7 @@ jobs:
             gh release view "$TAG" >/dev/null
           gh release upload "$TAG" \
             app/src-tauri/target/release/bundle/appimage/*.AppImage \
-            app/src-tauri/target/release/bundle/SHA256SUMS-linux.txt --clobber
+            app/src-tauri/target/release/bundle/SHA256SUMS-linux-${{ matrix.arch }}.txt --clobber
 
   # --- Windows: MSI (Group Policy / Intune) and NSIS setup (works on every Windows) ---
   windows-installers:
