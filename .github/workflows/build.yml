@@ -255,8 +255,8 @@ jobs:
       - name: Checksums
         shell: bash
         run: |
-          # shellcheck disable=SC2046
-          bash packaging/checksums.sh $(find app/src-tauri/target/release/bundle/nsis -name '*-setup.exe') \
+          # A glob, not $(find): the asset name has a space and would split into two args.
+          bash packaging/checksums.sh app/src-tauri/target/release/bundle/nsis/*-setup.exe \
             > app/src-tauri/target/release/bundle/SHA256SUMS-windows.txt
           cat app/src-tauri/target/release/bundle/SHA256SUMS-windows.txt
       - name: Upload Artifact
