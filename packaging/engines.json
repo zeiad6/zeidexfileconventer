@@ -1,5 +1,5 @@
 {
-  "_comment": "Pinned conversion-engine archives: URL + SHA-256 + size, used by packaging/fetch-engines.sh and packaging/fetch-engines.ps1 to build the self-contained installers. Nothing is downloaded at run time. Bumping a version = change url, sha256 and size together. minimumMacOS names the oldest macOS the binary runs on; the macOS packages target macOS 11 and newer.",
+  "_comment": "Pinned conversion-engine archives: URL + SHA-256 + size. packaging/fetch-engines.sh reads the per-platform entries below; packaging/fetch-engines.ps1 pins the same Windows builds inline because it also has to drive the MSI/conda extractors. Nothing is downloaded at run time. Bumping a version = change url, sha256 and size together. minimumMacOS names the oldest macOS the binary runs on; the macOS packages target macOS 11 and newer.",
   "components": {
     "rhwp": {
       "version": "0.8.7",
