@@ -49,7 +49,9 @@
 | 🧹 | **الحذف الآمن**: Shredder بمرور واحد أو عدة مرورات للملفات الحساسة |
 | 📡 | **LocalDrop**: إرسال الملفات من الحاسوب إلى الهاتف على نفس شبكة Wi-Fi عبر QR، دون سحابة |
 | 👀 | **مجلدات المراقبة**: حوّل كل ما يصل إلى مجلد تختاره تلقائياً |
-| 🌍 | **عربي وإنجليزي** بواجهة RTL كاملة، ووضع فاتح وداكن |
+| 🪟 | **نافذة كاملة**: شريط عنوان بأزرار الإغلاق والتصغير والتكبير، وشريط جانبي ثابت لا ينزل مع التمرير، وتخطيط يتكيّف مع كل حجم نافذة |
+| 🎛️ | **عجلة أصغر** (380px) تختفي تلقائياً بعد 4 ثوانٍ من عدم التحرك، مع انتقالات سلسة |
+| 🌍 | **عربي وإنجليزي** بواجهة RTL كاملة، ووضع فاتح وداكن، وإظهار/إخفاء أيقونة الدرج من الإعدادات |
 
 ## التثبيت
 
@@ -59,23 +61,20 @@
 curl -fsSL https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/packaging/linux/install.sh | sh
 ```
 
-يختار السكربت الحزمة التي تفهمها توزيعتك: `.deb` عبر `apt`، أو `.rpm` عبر `dnf`/`zypper`، أو وصفة AUR عبر `pacman`، أو Flatpak، وإلا فـ AppImage. يتحقّق من SHA-256 قبل التثبيت، ويثبّت `--cli` لسطر الأوامر وحدها، و`--uninstall` للإزالة.
+ينزّل سكربت التثبيت حزمة AppImage الواحدة إلى `~/.local`، ويتحقّق من SHA-256، ويضيف أيقونة ومدخلاً في قائمة التطبيقات — **دون `sudo` ودون أي طلب صلاحيات إدارية**. للإزالة: `sh install.sh --uninstall`.
 
 ### الملفات لكل نظام
 
 | النظام | الملف | ملاحظات |
 |---|---|---|
-| **أي توزيعة لينكس (x64)** | `*.AppImage` | `chmod +x` ثم التشغيل. مبني على Ubuntu 22.04 (glibc 2.35): يعمل على Debian 12+ وUbuntu 22.04+ وFedora 36+ وMint 21+ وopenSUSE 15.5+ |
-| Debian / Ubuntu / Mint | `*.deb` | `sudo apt install ./Zeidex.Convert_*.deb` |
-| Fedora / RHEL / openSUSE | `*.rpm` | `sudo dnf install ./Zeidex.Convert-*.rpm` |
-| أي توزيعة فيها Flatpak | `*.flatpak` | `flatpak install --user ./ZeidexConvert.flatpak` |
-| Arch / Manjaro | `packaging/linux/arch/PKGBUILD` | `makepkg -si` |
-| Windows 10/11 | `*-setup.exe` أو `*.msi` | NSIS لمستخدم عادي (تثبيت لك أو لكل المستخدمين، عربي/إنجليزي)، MSI للنشر المؤسسي |
-| macOS 11+ | `*.dmg` | نسختان: Apple Silicon وIntel. غير موقّعة: نقر يمين ← Open |
-| Android 8+ | `*.apk` | من [إصدارات مستودع أندرويد](https://github.com/zeiad6/zeidex-convert-android/releases)، أو بناء محلي |
-| سطر الأوامر | `zeidex-convert-*.tar.gz` / `.zip` | Linux x64/arm64 (glibc) وx64 (musl لـ Alpine)، macOS arm64، Windows x64 |
+| **لينكس (x64)** | `*.AppImage` | حزمة واحدة لكل التوزيعات. التثبيت بسطر واحد دون صلاحيات إدارية. مبنية على Ubuntu 22.04 (glibc 2.35): Debian 12+، Ubuntu 22.04+، Fedora 36+، Mint 21+، openSUSE 15.5+ |
+| **Windows 10/11** | `*-setup.exe` | مثبّت واحد للمستخدم الحالي (بلا UAC)، عربي/إنجليزي |
+| **macOS 11+** | `*.dmg` | ملف واحد لكل معمارية (Apple Silicon أو Intel) لأن المحرّكات المضمّنة معمارية. غير موقّع: نقر يمين ← Open |
+| **Android 8+** | `*.apk` | من [إصدارات مستودع أندرويد](https://github.com/zeiad6/zeidex-convert-android/releases) |
 
-> AppImage يحتاج `libfuse2` على بعض التوزيعات، أو شغّله بـ `--appimage-extract-and-run`. توزيعات musl مثل Alpine: استخدم `--cli` أو Flatpak.
+كل حزمة مكتفية: محرّكات FFmpeg و7-Zip وPandoc وrhwp مضمّنة داخلها، ويستخدم تحويل الصور FFmpeg المضمّن تلقائياً عند غياب libvips. توزيعات musl مثل Alpine تبني من المصدر.
+
+> AppImage يحتاج `libfuse2` على بعض التوزيعات، أو شغّله بـ `--appimage-extract-and-run`.
 
 ## البناء من المصدر
 
@@ -147,13 +146,13 @@ packaging/       المحرّكات، حزم لينكس، Flatpak، سجل ال�
 ## Install
 
 ```bash
-# Linux, one line: picks deb, rpm, AUR, Flatpak or AppImage for your distro
+# Linux: one AppImage for every distribution, installed per-user with no sudo
 curl -fsSL https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/packaging/linux/install.sh | sh
 ```
 
-Every release publishes installers for each platform: **Windows** (`.msi` for Intune/Group Policy, `*-setup.exe` with per-user or per-machine install in English and Arabic), **Linux** (`.deb`, `.rpm`, `.AppImage`, `.flatpak`, plus an Arch `PKGBUILD`), **macOS** (DMG for Apple Silicon and Intel, unsigned — right-click → Open), and **Android** (APK from the [Android repository releases](https://github.com/zeiad6/zeidex-convert-android/releases)). Standalone CLI archives ship alongside for Linux x64/arm64 (glibc) and x64 (musl for Alpine), macOS arm64 and Windows x64.
+One package per platform: **Linux** (`.AppImage`, installed into `~/.local` — no administrator prompt), **Windows** (`*-setup.exe`, per-user, no UAC), **macOS** (one DMG per Apple chip, unsigned — right-click → Open) and **Android** (APK from the [Android repository releases](https://github.com/zeiad6/zeidex-convert-android/releases)).
 
-The AppImage is the distro-independent Linux build. It is produced on Ubuntu 22.04 so it inherits glibc 2.35 and starts on Debian 12+, Ubuntu 22.04+, Fedora 36+, Mint 21+ and openSUSE 15.5+; musl distributions such as Alpine fall back to the CLI or Flatpak.
+Every package is self-contained: FFmpeg, 7-Zip, Pandoc and rhwp travel inside it, and image conversion automatically falls back to the bundled FFmpeg when libvips is not installed. The AppImage is built on Ubuntu 22.04, so it inherits glibc 2.35 and starts on Debian 12+, Ubuntu 22.04+, Fedora 36+, Mint 21+ and openSUSE 15.5+; musl distributions build from source.
 
 ## Build
 
@@ -182,6 +181,8 @@ It is a clean-room rebuild of the idea behind Tangerine File Converter — a mac
 - **Shredder** — single or multi-pass secure delete.
 - **LocalDrop** — send files from the desktop to your phone over the local network with a QR pair, never through a server.
 - **Watch folders**, recipes, batch rename, and a floating shelf for staging files.
+- **A proper window**: a full-width title bar with close/minimize/maximize, a sidebar that stays put while content scrolls, and a layout that adapts to any window size.
+- **A smaller wheel** (380 px) that fades out after 4 seconds without a choice, with tray-icon visibility in settings.
 - **Arabic and English** with full RTL, light and dark themes.
 
 ## Layout

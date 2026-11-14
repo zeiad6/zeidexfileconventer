@@ -129,7 +129,7 @@ jobs:
   # the oldest LTS still available and runs on Debian 12+, Ubuntu 22.04+, Fedora 36+, Mint 21+
   # and anything newer. A build on 24.04 would demand glibc 2.39 and refuse to start on those.
   linux-bundles:
-    name: package (Linux deb · rpm · AppImage)
+    name: package (Linux AppImage)
     needs: core
     runs-on: ubuntu-22.04
     permissions:
@@ -157,10 +157,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
-            libxdo-dev libssl-dev libxtst-dev libx11-dev patchelf file rpm libfuse2
-      # A stock runner has ~14 GB free and the payload is written several times (target dir,
-      # AppDir, squashfs). The image ships toolchains this build never touches; removing them
-      # keeps the bundler from failing at the last step with ENOSPC.
+            libxdo-dev libssl-dev libxtst-dev libx11-dev patchelf file libfuse2
+      # The AppImage is written several times (target dir, AppDir, squashfs); a stock runner
+      # sits close to full before the payload is added.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost \
@@ -172,15 +171,14 @@ jobs:
       - name: Clippy (app crate)
         working-directory: app/src-tauri
         run: cargo clippy --all-targets -- -D warnings
-      - name: Build deb, rpm and AppImage
+      - name: Build AppImage
         working-directory: app
-        run: npx tauri build --bundles deb,rpm,appimage
+        run: npx tauri build --bundles appimage
       - name: Checksums
         run: |
-          cd app/src-tauri/target/release/bundle
-          find . -maxdepth 2 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
-            -exec sha256sum {} \; | sed 's|  \./|  |' > SHA256SUMS-linux.txt
-          cat SHA256SUMS-linux.txt
+          cd app/src-tauri/target/release/bundle/appimage
+          sha256sum *.AppImage > ../SHA256SUMS-linux.txt
+          cat ../SHA256SUMS-linux.txt
       - name: Upload Artifact
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
@@ -188,8 +186,6 @@ jobs:
         with:
           name: zeidex-convert-Linux
           path: |
-            app/src-tauri/target/release/bundle/deb/*.deb
-            app/src-tauri/target/release/bundle/rpm/*.rpm
             app/src-tauri/target/release/bundle/appimage/*.AppImage
             app/src-tauri/target/release/bundle/SHA256SUMS-linux.txt
           if-no-files-found: ignore
@@ -198,97 +194,16 @@ jobs:
         shell: bash
         run: |
           TAG="${GITHUB_REF_NAME}"
-          # Five jobs may reach this line at the same time on a tag push; the last view
-          # succeeds when another job created the release a moment earlier.
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" --title "Zeidex Convert $TAG" --generate-notes || \
             gh release view "$TAG" >/dev/null
           gh release upload "$TAG" \
-            app/src-tauri/target/release/bundle/deb/*.deb \
-            app/src-tauri/target/release/bundle/rpm/*.rpm \
             app/src-tauri/target/release/bundle/appimage/*.AppImage \
             app/src-tauri/target/release/bundle/SHA256SUMS-linux.txt --clobber
 
-  # --- Linux: Flatpak (distro-independent, sandboxed, updates through the remote) ---
-  linux-flatpak:
-    name: package (Linux Flatpak)
-    needs: core
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: app/package-lock.json
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-          workspaces: app/src-tauri
-      - name: Build UI
-        working-directory: app
-        run: |
-          npm ci
-          npm run build
-      - name: Linux build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
-            libxdo-dev libssl-dev libxtst-dev libx11-dev patchelf flatpak flatpak-builder elfutils
-      # The Flatpak export writes the app three times (rofiles, repo, bundle). Without this the
-      # runner reaches "min-free-space-percent '3%' would be exceeded" after a full build.
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost \
-            /usr/share/swift /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-          sudo apt-get clean
-          df -h /
-      - name: Fetch engines (Linux)
-        run: bash packaging/fetch-engines.sh
-      - name: Build Linux Binary
-        working-directory: app/src-tauri
-        run: cargo build --release
-      - name: Cache Flatpak runtimes
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/share/flatpak
-          key: flatpak-runtime-gnome-46
-      - name: Build Flatpak Bundle
-        run: |
-          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          flatpak install -y --user --noninteractive flathub org.gnome.Platform//46 org.gnome.Sdk//46
-          bash packaging/build-flatpak.sh
-          sha256sum ZeidexConvert.flatpak > SHA256SUMS-flatpak.txt
-      - name: Upload Artifact
-        if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: zeidex-convert-Flatpak
-          path: |
-            ZeidexConvert.flatpak
-            SHA256SUMS-flatpak.txt
-          if-no-files-found: ignore
-      - name: Publish to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          # Five jobs may reach this line at the same time on a tag push; the last view
-          # succeeds when another job created the release a moment earlier.
-          gh release view "$TAG" >/dev/null 2>&1 || \
-            gh release create "$TAG" --title "Zeidex Convert $TAG" --generate-notes || \
-            gh release view "$TAG" >/dev/null
-          gh release upload "$TAG" ZeidexConvert.flatpak SHA256SUMS-flatpak.txt --clobber
-
   # --- Windows: MSI (Group Policy / Intune) and NSIS setup (works on every Windows) ---
   windows-installers:
-    name: package (Windows MSI + setup)
+    name: package (Windows setup)
     needs: core
     runs-on: windows-latest
     permissions:
@@ -317,12 +232,12 @@ jobs:
         run: ./packaging/fetch-engines.ps1
       - name: Build MSI and NSIS setup
         working-directory: app
-        run: npx tauri build --bundles msi,nsis
+        run: npx tauri build --bundles nsis
       - name: Checksums
         shell: bash
         run: |
           cd app/src-tauri/target/release/bundle
-          find . -maxdepth 2 -type f \( -name '*.msi' -o -name '*-setup.exe' \) \
+          find . -maxdepth 2 -type f -name '*-setup.exe' \
             -exec sha256sum {} \; | sed 's|  \./|  |' > SHA256SUMS-windows.txt
           cat SHA256SUMS-windows.txt
       - name: Upload Artifact
@@ -332,7 +247,6 @@ jobs:
         with:
           name: zeidex-convert-Windows
           path: |
-            app/src-tauri/target/release/bundle/msi/*.msi
             app/src-tauri/target/release/bundle/nsis/*-setup.exe
             app/src-tauri/target/release/bundle/SHA256SUMS-windows.txt
           if-no-files-found: ignore
@@ -347,7 +261,6 @@ jobs:
             gh release create "$TAG" --title "Zeidex Convert $TAG" --generate-notes || \
             gh release view "$TAG" >/dev/null
           gh release upload "$TAG" \
-            app/src-tauri/target/release/bundle/msi/*.msi \
             app/src-tauri/target/release/bundle/nsis/*-setup.exe \
             app/src-tauri/target/release/bundle/SHA256SUMS-windows.txt --clobber
 
@@ -421,104 +334,3 @@ jobs:
             app/src-tauri/target/release/bundle/SHA256SUMS-macos-${{ matrix.arch }}.txt --clobber
 
   # --- CLI: standalone binaries for Linux (x64 + arm64), macOS and Windows ---
-  cli-binaries:
-    name: cli (${{ matrix.target }})
-    needs: core
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            apt: ""
-          # The ARM64 CLI is cross-compiled from the x64 runner; zeidex-core has no C
-          # dependencies, so a linker is the only extra requirement.
-          - os: ubuntu-22.04
-            target: aarch64-unknown-linux-gnu
-            apt: gcc-aarch64-linux-gnu
-          # Static binary for musl distributions (Alpine, Void musl) where the glibc build
-          # cannot start; Rust links musl statically, so no extra package is needed.
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-musl
-            apt: ""
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            apt: ""
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            apt: ""
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: cli-${{ matrix.target }}
-      - name: Cross linker (Linux arm64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ${{ matrix.apt }}
-          mkdir -p .cargo
-          cat >> .cargo/config.toml <<'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          linker = "aarch64-linux-gnu-gcc"
-          EOF
-      - name: Build CLI
-        shell: bash
-        run: cargo build --release -p zeidex-cli --target ${{ matrix.target }}
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          VERSION=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
-          NAME="zeidex-convert-${VERSION}-${{ matrix.target }}"
-          mkdir -p dist
-          cp "target/${{ matrix.target }}/release/zeidex-convert" "dist/${NAME}"
-          tar -czf "dist/${NAME}.tar.gz" -C dist "${NAME}"
-          rm "dist/${NAME}"
-          cd dist
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum *.tar.gz > "SHA256SUMS-cli-${NAME}.txt"
-          else
-            shasum -a 256 *.tar.gz > "SHA256SUMS-cli-${NAME}.txt"
-          fi
-          cat "SHA256SUMS-cli-${NAME}.txt"
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"$').Matches[0].Groups[1].Value
-          $name = "zeidex-convert-$version-${{ matrix.target }}"
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/zeidex-convert.exe" "dist/$name.exe"
-          Compress-Archive -Path "dist/$name.exe" -DestinationPath "dist/$name.zip" -Force
-          Remove-Item "dist/$name.exe"
-          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  $name.zip" | Set-Content "dist/SHA256SUMS-cli-$name.txt"
-          Get-Content "dist/SHA256SUMS-cli-$name.txt"
-      - name: Upload Artifact
-        if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: zeidex-convert-CLI-${{ matrix.target }}
-          path: dist/*
-          if-no-files-found: ignore
-      - name: Publish to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          # Five jobs may reach this line at the same time on a tag push; the last view
-          # succeeds when another job created the release a moment earlier.
-          gh release view "$TAG" >/dev/null 2>&1 || \
-            gh release create "$TAG" --title "Zeidex Convert $TAG" --generate-notes || \
-            gh release view "$TAG" >/dev/null
-          gh release upload "$TAG" dist/* --clobber

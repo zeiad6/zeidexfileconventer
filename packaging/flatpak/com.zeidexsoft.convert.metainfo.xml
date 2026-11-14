@@ -16,17 +16,36 @@
     </p>
   </description>
   <url type="homepage">https://zeidexlink.zeidexsoft.com/zeidex</url>
+  <url type="bugtracker">https://github.com/zeiad6/zeidexfileconventer/issues</url>
+  <url type="vcs-browser">https://github.com/zeiad6/zeidexfileconventer</url>
   <url type="donation">https://zeidexsoft.com</url>
   <developer_name>ZeidexSoft</developer_name>
   <developer_name xml:lang="ar">ZeidexSoft</developer_name>
   <launchable type="desktop-id">com.zeidexsoft.convert.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <image type="source">https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/docs/assets/wheel.png</image>
+      <caption>The wheel: drop a file on a format</caption>
+      <caption xml:lang="ar">العجلة: أفلت الملف على الصيغة</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source">https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/docs/assets/banner.png</image>
+      <caption>Offline conversion on Windows, macOS, Linux and Android</caption>
+      <caption xml:lang="ar">تحويل محلي على ويندوز وماك ولينكس وأندرويد</caption>
+    </screenshot>
+  </screenshots>
   <provides>
     <binary>zeidex-app</binary>
   </provides>
   <releases>
+    <release version="0.3.1" date="2026-11-14">
+      <description>
+        <p>Image conversion, resizing, cropping, rotation and compression fall back to the bundled FFmpeg when libvips is absent, so every package converts images out of the box. The window has a full-width title bar with its controls, the sidebar no longer scrolls with the page, settings gain a tray-icon switch, and the popup wheel is smaller and hides itself when untouched. Linux ships one per-user AppImage and Windows one per-user setup that needs no administrator rights.</p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-11-14">
       <description>
-        <p>Packaging release: AppImage, deb and rpm alongside the Flatpak, an NSIS setup next to the MSI, DMG builds for Apple Silicon and Intel, and standalone CLI archives for Linux, macOS and Windows.</p>
+        <p>LocalDrop file transfer, secure shredder, PII redaction and AI upscale; installers for Windows, macOS, Linux and Android.</p>
       </description>
     </release>
     <release version="0.1.0" date="2026-10-22"/>

@@ -111,7 +111,7 @@ not just the READMEs. Findings are grouped by severity; each one names the fix t
 | R4 | **Auto-redact hid every line of text**, so redacting one phone number blacked out the whole document. | `redact boxes=pii` (and «Detect e-mails & numbers» in the editor) hides only e-mail addresses and digit runs of 7+ (phone, card, IBAN), which OCR often splits across words. |
 | R5 | No way to destroy a file. | `shred` (CLI `--yes`, Actions ring with a confirmation dialog): three passes (zeros, ones, random), each flushed, then rename, truncate, delete. The dialog and the help say plainly that SSDs, phones and copy-on-write disks can keep older copies. |
 | R6 | No way to hand files to the phone app. | **LocalDrop** (`crates/localdrop`, Android `LocalDropReceiver`): Actions ring → *Send to phone* shows a QR code holding the LAN address and a fresh 256-bit key; the phone photographs it, sees the file list and accepts. AES-256-GCM frames with implicit nonces, SHA-256 per file, LAN addresses only, one session per code, ten-minute expiry. A shared test vector (checked against Python's `cryptography`) pins Rust and Kotlin to identical bytes. It uses std sockets only and is never reached from a conversion; the offline test now covers its manifest too. |
-| R7 | Linux packages stopped at deb/rpm/AppImage/Flatpak. | `packaging/linux/`: Arch `PKGBUILD`/`.SRCINFO` (repackages the release deb), `snapcraft.yaml`, and `install.sh`, which picks apt/dnf/zypper/pacman/Flatpak/AppImage, verifies every download against the release `SHA256SUMS`, and installs the static musl CLI on Alpine and other musl systems (new `x86_64-unknown-linux-musl` CLI build). |
+| R7 | Too many Linux packages and an install that needed root. | One AppImage and a per-user `install.sh` that verifies the release `SHA256SUMS` and writes only under `~/.local`; the AppImage carries the engines. |
 
 | R8 | No AI image or video tools. | `upscale` (image and video, 2x/3x/4x, `photo` or `anime` network) runs **Real-ESRGAN ncnn/Vulkan**; `remove-bg` (PNG/WebP with transparency) runs **rembg** with `u2net_custom` and an explicit local model path, so rembg never downloads anything. Both follow the whisper.cpp pattern: external engines found like every other one (`ZEIDEX_REALESRGAN`, `ZEIDEX_REMBG`, `ZEIDEX_REALESRGAN_MODELS`, `ZEIDEX_REMBG_MODEL`, bundled `models/`), listed in Engines with install hints, and refused with a clear message when missing. Video upscale is capped at 10 minutes because every frame sits on disk as PNG while it runs. |
 | R9 | On macOS the wheel and orb could take focus from Finder mid-drag. | Both overlays are `focusable(false)` — tao's NSWindow then answers NO to `canBecomeKeyWindow`/`canBecomeMainWindow`, the behaviour of an NSPanel with `.nonactivatingPanel` — and visible on all Spaces. The block was type-checked by compiling it on Linux once; it has not run on a Mac. |
@@ -172,29 +172,19 @@ Not done, on purpose:
 
 ## Packaging
 
-- **Windows** now ships both an MSI (for Intune/Group Policy) and an NSIS setup, which needs no
-  installer service and offers a per-user or per-machine install with English and Arabic UI.
-- **Linux** ships four formats from one build: `.deb`, `.rpm`, Flatpak and an AppImage. The
-  AppImage is the distro-independent package — it needs no package manager and no root. It is
-  built on Ubuntu 22.04 deliberately: the AppImage inherits the build host's glibc (2.35), which
-  covers Debian 12+, Ubuntu 22.04+, Fedora 36+, Mint 21+ and openSUSE 15.5+. Building on 24.04
-  would have demanded glibc 2.39 and refused to start on all of those. It needs `libfuse2` (or
-  `--appimage-extract-and-run`) and does not target musl distributions such as Alpine; Flatpak
-  covers those. `bundle.targets` is `"all"`, so each host builds every format it supports.
-- **macOS** has DMG builds for Apple Silicon (`macos-latest`) and Intel (`macos-15-intel`) with a
-  minimum of 11.0. They are unsigned — no Apple Developer certificate exists for this project — so
-  the README documents the right-click → Open step. Bundled engines are 7zz, rhwp and Pandoc;
-  FFmpeg, Ghostscript and qpdf come from Homebrew, and the Engines panel now prints `brew install`
-  hints instead of the Windows `winget` or Linux `apt` lines it used to show on every platform.
-- **CLI** archives are built for Linux x64 and arm64, macOS arm64 and Windows x64. The arm64
-  Linux binary is cross-compiled from the x64 runner; `zeidex-core` has no C dependencies, so a
-  linker is the only requirement. `engines.json` already described macOS and arm64 downloads, but
-  `fetch-engines.sh` hardcoded `linux64`/`x64` URLs, so an arm64 Linux build silently bundled x64
-  binaries. The fetcher now resolves the platform from `engines.json`, verifies every SHA-256
-  before extracting, and builds the same component set on Linux and macOS.
-- **Publishing is tag-driven.** The package jobs used to `gh release upload --clobber` on every
-  push to `main`, which replaced the published bytes and invalidated the digests recorded in the
-  update registry without anyone noticing. They now build on every push but upload only for a `v*`
-  tag, and each platform publishes a `SHA256SUMS-*.txt`. Released files are therefore immutable,
-  and a registry row stays true until the next release.
+- **One package per system.** Windows ships a single NSIS setup with `installMode: currentUser`,
+  so it never asks for elevation and offers English and Arabic. Linux ships a single AppImage;
+  `install.sh` places it in `~/.local` with a desktop entry, so there is no root step. macOS
+  ships one DMG per Apple chip because the bundled engines are architecture-specific, and Android
+  ships one APK. The deb, rpm, Flatpak, Snap, Arch and standalone-CLI release assets were removed
+  so there is exactly one download per platform.
+- **Self-contained engines.** FFmpeg, FFprobe, 7-Zip, Pandoc and rhwp travel inside the package.
+  When libvips is absent, image conversion, resize, crop, rotate, compress and images-to-PDF fall
+  back to that FFmpeg build, so a plain install converts images without a second package. HEIC,
+  JXL and JP2 output still name libvips in a clear error because FFmpeg cannot encode them.
+- **The AppImage** is built on Ubuntu 22.04 so it inherits glibc 2.35: Debian 12+, Ubuntu 22.04+,
+  Fedora 36+, Mint 21+ and openSUSE 15.5+. `libfuse2` (or `--appimage-extract-and-run`) is the
+  only optional dependency. musl distributions build from source.
+- **macOS** DMGs are unsigned; the README documents right-click → Open. Bundled engines are 7zz,
+  rhwp and Pandoc, and the Engines panel prints `brew install` hints for FFmpeg and friends.
 
