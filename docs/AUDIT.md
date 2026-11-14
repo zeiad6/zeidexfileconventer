@@ -185,6 +185,10 @@ Not done, on purpose:
   collage, web-set and images-to-PDF fall back to that FFmpeg build; HEIC, JXL and JP2 output
   still name libvips in a clear error because FFmpeg cannot encode them. LibreOffice, Calibre,
   Tesseract, whisper.cpp and the AI models stay optional and are never downloaded by the app.
+- **Windows WebView2** is the one component the setup does not carry. Windows 11 and updated
+  Windows 10 ship the Evergreen runtime; when it is absent the installer runs Microsoft's
+  bootstrapper, which needs the network. The 127 MB offline installer was left out on purpose:
+  it would more than double the download to cover machines that ship the runtime anyway.
 - **The AppImage** is built on Ubuntu 22.04 so it inherits glibc 2.35: Debian 12+, Ubuntu 22.04+,
   Fedora 36+, Mint 21+ and openSUSE 15.5+. `libfuse2` (or `--appimage-extract-and-run`) is the
   only optional dependency. musl distributions build from source.
