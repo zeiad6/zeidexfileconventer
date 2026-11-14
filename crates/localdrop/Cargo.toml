@@ -1,0 +1,16 @@
+[package]
+name = "zeidex-localdrop"
+description = "LocalDrop: hand files from Zeidex Convert to a phone on the same network, end-to-end encrypted"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.80"
+publish = false
+
+# Its own workspace on purpose: the root crates (core, cli) have zero dependencies and build
+# fully offline, while this one needs a cipher. CI tests it with --manifest-path.
+[workspace]
+
+[dependencies]
+zeidex-core = { path = "../core" }
+ring = "0.17"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }

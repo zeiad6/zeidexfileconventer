@@ -49,7 +49,7 @@ check clip-2x.mp4           ffmpeg ffprobe -- tool speed --factor 2 clip.mp4
 check "clip parts"          ffmpeg ffprobe -- tool split --parts 3 clip.mp4
 ffmpeg -loglevel error -f lavfi -i testsrc2=size=320x240:rate=25 -t 2 -c:v libx264 -pix_fmt yuv420p silent.mov
 check joined.mp4            ffmpeg ffprobe -- tool join clip.mp4 silent.mov
-check "clip parts (2)"      ffmpeg -- tool split --at 1,2.5 clip.mp4
+check "clip parts 2"      ffmpeg -- tool split --at 1,2.5 clip.mp4
 check clip-redacted.mp4     ffmpeg -- tool redact --boxes "0,0,200,100" --style "#000000" --start 1 --end 3 clip.mp4
 check clip-cropped.mp4      ffmpeg -- tool crop --box 10,10,301,201 clip.mp4
 check clip-stereo.mp4       ffmpeg -- tool channels --count 2 --left 0 clip.mp4
@@ -79,10 +79,10 @@ check doc.txt               gs -- convert --to txt doc.pdf
 check doc-compressed.pdf    gs -- tool compress --preset low doc.pdf
 check doc-ocr.txt           gs tesseract -- tool ocr --to txt --lang eng doc.pdf
 check merged.pdf            qpdf -- tool merge-pdf doc.pdf other.pdf
-check "doc pages (2)"       qpdf -- tool split-pdf doc.pdf
+check "doc pages 2"       qpdf -- tool split-pdf doc.pdf
 check doc-pages.pdf         qpdf -- tool pages --spec 2,1 doc.pdf
 check doc-rotated.pdf       qpdf -- tool rotate doc.pdf
-check "doc-pages (2).pdf"   qpdf -- tool pages --spec 2,1,1 --rotate 1:90,3:180 doc.pdf
+check "doc-pages 2.pdf"   qpdf -- tool pages --spec 2,1,1 --rotate 1:90,3:180 doc.pdf
 check doc-clean.pdf         qpdf -- tool strip doc.pdf
 check arranged.pdf          qpdf -- tool arrange --items 2:1,1:2,1:1 --rotate 1:90 doc.pdf other.pdf
 
@@ -94,7 +94,7 @@ check archive.tar.gz        7z -- tool archive --format tgz folder subs.srt
 check archive.zip           7z -- convert --to zip archive.tar.gz
 check archive               7z -- tool extract archive.tar.gz
 
-[[ -d "clip parts (2)" ]] && n=$(ls "clip parts (2)" | wc -l) && [[ $n -ne 3 ]] && { echo "FAIL  split --at gave $n parts, want 3"; fail=$((fail + 1)); }
+[[ -d "clip parts 2" ]] && n=$(ls "clip parts 2" | wc -l) && [[ $n -ne 3 ]] && { echo "FAIL  split --at gave $n parts, want 3"; fail=$((fail + 1)); }
 [[ -f joined.mp4 ]] && ! ffprobe -v error -show_entries stream=width -of csv=p=0 joined.mp4 | grep -q 640 && { echo "FAIL  join did not use the first clip's canvas"; fail=$((fail + 1)); }
 [[ -f clip-tagged.mp4 ]] && ! ffprobe -v error -show_entries format_tags=title -of csv=p=0 clip-tagged.mp4 | grep -q "Zeidex test" && { echo "FAIL  tags not written"; fail=$((fail + 1)); }
 # ---- v0.4: beyond Tangerine ----
@@ -111,7 +111,7 @@ check "clip frames"         ffmpeg -- tool frames --fps 2 clip.mp4
 check clip-subtitled.mp4    ffmpeg -- tool add-subs clip.mp4 subs.srt
 cp clip-subtitled.mp4 withsubs.mp4
 check withsubs.srt          ffmpeg -- tool extract-subs withsubs.mp4
-check "clip-subtitled (2).mp4" ffmpeg -- tool burn-subs clip.mp4 subs.srt
+check "clip-subtitled 2.mp4" ffmpeg -- tool burn-subs clip.mp4 subs.srt
 check subs-shifted.srt      -- tool shift-subs --seconds 2 subs.srt
 check clip.mp4.sha256       -- tool checksum clip.mp4
 check clip-faded-trimmed.mp4 ffmpeg ffprobe -- recipe "fade seconds=0.5 | trim start=1 end=3" clip-faded.mp4
@@ -148,7 +148,7 @@ check clip-newaudio.mp4     ffmpeg -- tool replace-audio clip.mp4 voice.wav
 check voice-denoised.wav    ffmpeg -- tool denoise-audio voice.wav
 check voice-nosilence.wav   ffmpeg -- tool remove-silence voice.wav
 check "photo web"           vips -- tool web-set photo.png
-check "clip parts (3)"      7z -- tool archive --password s3cret --split 100KB clip.mp4
+check "clip parts 3"      7z -- tool archive --password s3cret --split 100KB clip.mp4
 check subs.7z               7z -- tool archive --format 7z --password s3cret subs.srt
 mv subs.7z secret.7z 2>/dev/null
 check secret                7z -- tool extract --password s3cret secret.7z

@@ -1,0 +1,25 @@
+pkgbase = zeidex-convert-bin
+	pkgdesc = Offline file converter with a drag-and-drop radial wheel, floating shelf and CLI
+	pkgver = 0.2.0
+	pkgrel = 1
+	url = https://github.com/zeiad6/zeidexfileconventer
+	arch = x86_64
+	license = custom
+	depends = webkit2gtk-4.1
+	depends = gtk3
+	depends = libayatana-appindicator
+	depends = xdg-utils
+	optdepends = ffmpeg: audio and video conversion
+	optdepends = libvips: fast image conversion
+	optdepends = libreoffice-fresh: office documents
+	optdepends = pandoc: markup documents
+	optdepends = ghostscript: PDF compression
+	optdepends = qpdf: PDF repair and merge
+	optdepends = tesseract: OCR for scanned PDFs
+	optdepends = 7zip: 7z archives
+	provides = zeidex-convert
+	conflicts = zeidex-convert
+	source_x86_64 = Zeidex.Convert_0.2.0_amd64.deb::https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.2.0/Zeidex.Convert_0.2.0_amd64.deb
+	sha256sums_x86_64 = 728b72497c9ca4559b977457eece26506668d790e1c7eb8dabb47bdaa6bb27fc
+
+pkgname = zeidex-convert-bin

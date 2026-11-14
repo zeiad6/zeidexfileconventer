@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useReducer } from 'react';
-import { reveal, safeListen } from '../lib/api';
+import { localdropCancel, reveal, safeListen } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import type { JobEvent } from '../lib/types';
 
@@ -17,6 +17,11 @@ interface Row {
   output?: string;
   error?: string;
   text?: string;
+  /** LocalDrop pairing code (SVG markup) while it waits for the phone. */
+  qr?: string;
+  address?: string;
+  pair?: boolean;
+  sent?: { device: string; files: number; declined: boolean };
 }
 
 type Action = { type: 'event'; event: JobEvent } | { type: 'clear' };
@@ -39,6 +44,16 @@ function reduce(rows: Row[], action: Action): Row[] {
       name: e.title,
     });
   }
+  if (e.type === 'pair') {
+    const key = `${e.job}:0`;
+    const seed: Row = { ...base, key, name: e.file, meta: e.title, pair: true, qr: e.svg, address: e.address };
+    return upsert(rows, key, (r) => ({ ...r, ...seed }), seed);
+  }
+  if (e.type === 'sent') {
+    const key = `${e.job}:0`;
+    const done = (r: Row): Row => ({ ...r, state: e.declined ? 'failed' : 'done', fraction: 1, qr: undefined, sent: e });
+    return upsert(rows, key, done, { ...base, key, pair: true });
+  }
   const key = `${e.job}:${e.index ?? 0}`;
   if (e.type === 'start') {
     return upsert(
@@ -49,7 +64,8 @@ function reduce(rows: Row[], action: Action): Row[] {
     );
   }
   if (e.type === 'progress') {
-    return upsert(rows, key, (r) => ({ ...r, fraction: e.fraction }), { ...base, key, fraction: e.fraction });
+    // Once the phone connects, the code has done its job.
+    return upsert(rows, key, (r) => ({ ...r, fraction: e.fraction, qr: undefined }), { ...base, key, fraction: e.fraction });
   }
   if (e.type === 'done') {
     return upsert(rows, key, (r) => ({ ...r, state: 'done', fraction: 1, output: e.output, meta: `→ ${e.output.split(/[\\/]/).pop()}` }), {
@@ -61,7 +77,7 @@ function reduce(rows: Row[], action: Action): Row[] {
       meta: `→ ${e.output.split(/[\\/]/).pop()}`,
     });
   }
-  return upsert(rows, key, (r) => ({ ...r, state: 'failed', fraction: 1, error: e.error }), {
+  return upsert(rows, key, (r) => ({ ...r, state: 'failed', fraction: 1, error: e.error, qr: undefined }), {
     ...base,
     key,
     state: 'failed',
@@ -90,7 +106,12 @@ export function Jobs() {
             key={row.key}
             className={`job border-t border-line py-2 ${row.state === 'done' ? 'done' : ''}${row.state === 'failed' ? 'failed' : ''}`}
           >
-            {row.name && <div className="name font-semibold break-words">{row.name}</div>}
+            {/* File names are mostly Latin: dir="auto" keeps "3 · 48.2 MB" from reversing under RTL. */}
+            {row.name && (
+              <div className="name font-semibold break-words" dir="auto">
+                {row.name}
+              </div>
+            )}
             {row.meta && <div className="meta text-xs text-muted">{row.meta}</div>}
             <div className="bar my-1.5 h-1.5 overflow-hidden rounded-sm bg-line">
               <i
@@ -106,6 +127,33 @@ export function Jobs() {
               <button type="button" onClick={() => void reveal(row.output!)}>
                 {t('show')}
               </button>
+            )}
+            {row.qr && (
+              <figure className="pair m-0 my-2 flex flex-col items-center gap-1.5">
+                {/* As an <img>, the SVG cannot run script even if its markup were hostile. */}
+                <img
+                  src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(row.qr)}`}
+                  alt={t('pairCode')}
+                  width={200}
+                  height={200}
+                  className="rounded-md bg-white p-1"
+                />
+                <figcaption className="text-center text-xs text-muted">
+                  {t('scanToReceive')} <bdi dir="ltr">{row.address}</bdi>
+                </figcaption>
+              </figure>
+            )}
+            {row.pair && row.state === 'run' && (
+              <button type="button" onClick={() => void localdropCancel()}>
+                {t('cancel')}
+              </button>
+            )}
+            {row.sent && (
+              <div className="text-xs">
+                {t(row.sent.declined ? 'declinedBy' : 'sentTo')
+                  .replace('{n}', String(row.sent.files))
+                  .replace('{device}', row.sent.device)}
+              </div>
             )}
             {row.error && <div className="text-xs break-words text-bad">{row.error}</div>}
             {row.text && (

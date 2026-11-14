@@ -38,6 +38,10 @@ pub fn run(op: &Op, inputs: &[PathBuf], on: impl FnMut(Event) + Send) -> Vec<Res
 /// `run` with an explicit number of files processed at the same time.
 pub fn run_with(op: &Op, inputs: &[PathBuf], parallel: usize, on: impl FnMut(Event) + Send) -> Vec<Result<PathBuf>> {
     let inputs: Vec<PathBuf> = inputs.iter().map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone())).collect();
+    let mut dirs: Vec<&Path> = inputs.iter().filter_map(|p| p.parent()).collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs.into_iter().for_each(sweep_stale_staging);
     let units: Vec<Vec<PathBuf>> =
         if op.is_multi() { vec![inputs] } else { inputs.into_iter().map(|p| vec![p]).collect() };
     let total = units.len();
@@ -89,7 +93,7 @@ fn run_unit(op: &Op, inputs: &[PathBuf], progress: &mut dyn FnMut(f32)) -> Resul
     }
     let dest = src.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
     // Scratch dir beside the output so the final rename never crosses filesystems.
-    let tmp = dest.join(format!(".zeidex-{}-{}", std::process::id(), JOB.fetch_add(1, Ordering::Relaxed)));
+    let tmp = staging_path(&dest, "");
     fs::create_dir_all(&tmp)?;
     let result = (|| {
         let steps: Vec<&Op> = match op {
@@ -124,11 +128,16 @@ fn run_unit(op: &Op, inputs: &[PathBuf], progress: &mut dyn FnMut(f32)) -> Resul
             last = Some(plan);
         }
         let plan = last.ok_or_else(|| Error::Unsupported("empty recipe".into()))?;
-        let _guard = PLACE.lock().unwrap_or_else(|p| p.into_inner());
         let target = dest.join(&plan.name);
-        let fin = if plan.output.is_dir() { unique_dir(&target) } else { unique_path(&target) };
-        fs::rename(&plan.output, &fin)?;
-        Ok(fin)
+        if plan.output.is_dir() {
+            // commit_new takes PLACE itself; only the folder path needs it here.
+            let _guard = PLACE.lock().unwrap_or_else(|p| p.into_inner());
+            let fin = unique_dir(&target);
+            fs::rename(&plan.output, &fin)?;
+            Ok(fin)
+        } else {
+            commit_new(&plan.output, &target)
+        }
     })();
     let _ = fs::remove_dir_all(&tmp);
     result
@@ -141,10 +150,7 @@ fn checksum(src: &Path) -> Result<PathBuf> {
     }
     let digest = crate::sha256::of_reader(fs::File::open(src)?)?;
     let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let _guard = PLACE.lock().unwrap_or_else(|p| p.into_inner());
-    let out = unique_path(&src.with_file_name(format!("{name}.sha256")));
-    fs::write(&out, format!("{digest}  {name}\n"))?;
-    Ok(out)
+    write_new(&src.with_file_name(format!("{name}.sha256")), format!("{digest}  {name}\n").as_bytes())
 }
 
 /// Tools whose result is a report rather than a file (QR contents, duplicate groups, renames).
@@ -246,8 +252,7 @@ pub fn duplicates(inputs: &[PathBuf], move_dupes: bool) -> Result<String> {
             if move_dupes && i > 0 {
                 let dir = f.parent().unwrap_or(Path::new(".")).join("Duplicates");
                 fs::create_dir_all(&dir)?;
-                let dst = unique_path(&dir.join(f.file_name().unwrap_or_default()));
-                fs::rename(f, &dst)?;
+                let dst = commit_new(f, &dir.join(f.file_name().unwrap_or_default()))?;
                 line += &format!("  -> {}", dst.display());
             }
             report += &line;
@@ -421,6 +426,12 @@ fn probe(op: &Op, inputs: &[PathBuf]) -> Ctx {
     if matches!(op, Op::Transcribe { .. }) {
         ctx.whisper_model = tools::whisper_model();
     }
+    if matches!(op, Op::Upscale { .. }) {
+        ctx.esrgan_models = tools::esrgan_models();
+    }
+    if matches!(op, Op::RemoveBackground { .. }) {
+        ctx.rembg_model = tools::rembg_model();
+    }
     ctx
 }
 
@@ -574,7 +585,12 @@ fn scratch_file(tag: &str, ext: &str) -> PathBuf {
 }
 
 /// Text lines found by Tesseract in an image file, as boxes in that image's pixels.
+/// A `pii:` language prefix keeps only personal data (see [`parse_tsv_pii`]).
 pub fn detect_text_file(src: &Path, lang: &str) -> Result<Vec<Rect>> {
+    let (pii, lang) = match lang.strip_prefix(crate::ops::PII_PREFIX) {
+        Some(l) => (true, l),
+        None => (false, lang),
+    };
     if !lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '_') {
         return Err(Error::BadOption(format!("lang={lang}")));
     }
@@ -590,11 +606,16 @@ pub fn detect_text_file(src: &Path, lang: &str) -> Result<Vec<Rect>> {
             detail: String::from_utf8_lossy(&out.stderr).trim().into(),
         });
     }
-    Ok(parse_tsv(&String::from_utf8_lossy(&out.stdout)))
+    let tsv = String::from_utf8_lossy(&out.stdout);
+    Ok(if pii { parse_tsv_pii(&tsv) } else { parse_tsv(&tsv) })
 }
 
 /// Text lines found by Tesseract in a PNG, as boxes in that PNG's pixels (for auto-redact).
 pub fn detect_text_png(png: &[u8], lang: &str) -> Result<Vec<Rect>> {
+    let (pii, lang) = match lang.strip_prefix(crate::ops::PII_PREFIX) {
+        Some(l) => (true, l),
+        None => (false, lang),
+    };
     if !lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '_') {
         return Err(Error::BadOption(format!("lang={lang}")));
     }
@@ -613,7 +634,8 @@ pub fn detect_text_png(png: &[u8], lang: &str) -> Result<Vec<Rect>> {
             detail: String::from_utf8_lossy(&out.stderr).trim().into(),
         });
     }
-    Ok(parse_tsv(&String::from_utf8_lossy(&out.stdout)))
+    let tsv = String::from_utf8_lossy(&out.stdout);
+    Ok(if pii { parse_tsv_pii(&tsv) } else { parse_tsv(&tsv) })
 }
 
 /// Merges confident words of each Tesseract line into one padded box.
@@ -648,6 +670,84 @@ fn parse_tsv(tsv: &str) -> Vec<Rect> {
             Rect { x, y, w: x1 + PAD - x, h: y1 + PAD - y }
         })
         .collect()
+}
+
+/// Boxes around personal data in Tesseract TSV: e-mail addresses, and runs of number-like
+/// words holding at least [`PII_MIN_DIGITS`] digits (phone, card, IBAN and ID numbers, which
+/// OCR often splits at spaces or dashes). Other text stays visible.
+fn parse_tsv_pii(tsv: &str) -> Vec<Rect> {
+    const MIN_CONF: f64 = 40.0;
+    const PAD: u32 = 4;
+    type LineKey = (u32, u32, u32);
+    type Bounds = (u32, u32, u32, u32);
+    let mut lines: Vec<(LineKey, Vec<(String, Bounds)>)> = Vec::new();
+    for row in tsv.lines().skip(1) {
+        let c: Vec<&str> = row.split('\t').collect();
+        if c.len() < 12 || c[0] != "5" || c[11].trim().is_empty() {
+            continue;
+        }
+        if c[10].parse::<f64>().unwrap_or(-1.0) < MIN_CONF {
+            continue;
+        }
+        let n = |i: usize| c[i].parse::<u32>().unwrap_or(0);
+        let key = (n(2), n(3), n(4));
+        let word = (c[11].trim().to_string(), (n(6), n(7), n(6) + n(8), n(7) + n(9)));
+        match lines.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, words)) => words.push(word),
+            None => lines.push((key, vec![word])),
+        }
+    }
+    let mut hits: Vec<Bounds> = Vec::new();
+    for (_, words) in &lines {
+        let mut run: Option<(Bounds, usize)> = None;
+        for (text, b) in words {
+            if is_email(text) {
+                hits.push(*b);
+            }
+            let numeric = text.chars().all(|ch| ch.is_numeric() || "+-()./".contains(ch));
+            let digits = text.chars().filter(|ch| ch.is_numeric()).count();
+            if numeric && digits > 0 {
+                run = Some(match run {
+                    Some((r, d)) => ((r.0.min(b.0), r.1.min(b.1), r.2.max(b.2), r.3.max(b.3)), d + digits),
+                    None => (*b, digits),
+                });
+            } else if let Some((r, d)) = run.take() {
+                if d >= PII_MIN_DIGITS {
+                    hits.push(r);
+                }
+            }
+        }
+        if let Some((r, d)) = run {
+            if d >= PII_MIN_DIGITS {
+                hits.push(r);
+            }
+        }
+    }
+    hits.into_iter()
+        .map(|(x0, y0, x1, y1)| {
+            let (x, y) = (x0.saturating_sub(PAD), y0.saturating_sub(PAD));
+            Rect { x, y, w: x1 + PAD - x, h: y1 + PAD - y }
+        })
+        .collect()
+}
+
+/// Shortest digit run treated as personal data: 7 covers local phone numbers without
+/// catching years, prices or page numbers.
+const PII_MIN_DIGITS: usize = 7;
+
+fn is_email(word: &str) -> bool {
+    // Sentence punctuation sticks to the address in OCR output ("mail me at a@b.com.").
+    let w = word.trim_matches(|c: char| ".,;:()<>[]\"'".contains(c));
+    match w.split_once('@') {
+        Some((user, host)) => {
+            !user.is_empty()
+                && !host.contains('@')
+                && host.contains('.')
+                && !host.ends_with('.')
+                && !host.starts_with('.')
+        }
+        None => false,
+    }
 }
 
 /// Longest side the face detector works at; boxes are scaled back to the original.
@@ -742,26 +842,111 @@ pub fn info(src: &Path) -> Result<String> {
     }
 }
 
-/// `name`, then `name (2)`, `name (3)`... for folders, whose names may contain dots.
+/// `name`, then `name 2`, `name 3`... for folders, whose names may contain dots.
 pub fn unique_dir(p: &Path) -> PathBuf {
-    if !p.exists() {
+    if !taken(p) {
         return p.to_path_buf();
     }
     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let parent = p.parent().unwrap_or(Path::new("."));
-    (2..).map(|n| parent.join(format!("{name} ({n})"))).find(|c| !c.exists()).expect("unbounded range")
+    (2..).map(|n| parent.join(format!("{name} {n}"))).find(|c| !taken(c)).expect("unbounded range")
 }
 
-/// `name.ext`, then `name (2).ext`, `name (3).ext`... until free.
+/// `name.ext`, then `name 2.ext`, `name 3.ext`... until free (the Android app's scheme too).
 pub fn unique_path(p: &Path) -> PathBuf {
-    if !p.exists() {
-        return p.to_path_buf();
-    }
+    candidates(p).find(|c| !taken(c)).expect("unbounded range")
+}
+
+/// `p`, then `stem 2.ext`, `stem 3.ext`...
+fn candidates(p: &Path) -> impl Iterator<Item = PathBuf> + '_ {
     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let stem = stem_of(p);
-    let rest = &name[stem.len()..];
-    let parent = p.parent().unwrap_or(Path::new("."));
-    (2..).map(|n| parent.join(format!("{stem} ({n}){rest}"))).find(|c| !c.exists()).expect("unbounded range")
+    let rest = name[stem.len()..].to_string();
+    let parent = p.parent().unwrap_or(Path::new(".")).to_path_buf();
+    std::iter::once(p.to_path_buf()).chain((2..).map(move |n| parent.join(format!("{stem} {n}{rest}"))))
+}
+
+/// A name is taken by anything at all, including a dangling symlink.
+fn taken(p: &Path) -> bool {
+    fs::symlink_metadata(p).is_ok()
+}
+
+/// Prefix of every staging file and folder; a crash can leave them behind (see
+/// [`sweep_stale_staging`]).
+pub const STAGING_PREFIX: &str = ".zeidex-";
+
+/// A fresh hidden name in `dir` for work in progress (`ext` may be empty).
+pub fn staging_path(dir: &Path, ext: &str) -> PathBuf {
+    let n = JOB.fetch_add(1, Ordering::Relaxed);
+    let dot = if ext.is_empty() { "" } else { "." };
+    dir.join(format!("{STAGING_PREFIX}{}-{n}{dot}{ext}", std::process::id()))
+}
+
+/// Moves the finished file `src` to `target`, or `target 2.ext`... when that name exists, and
+/// never replaces an existing file — not even one another program creates at the same moment.
+///
+/// The commit is a hard link, which the OS refuses when the name exists, followed by removing
+/// the staging name. Filesystems without hard links (FAT, exFAT, some network shares) fall
+/// back to a checked rename, serialised with every other commit in this process.
+pub fn commit_new(src: &Path, target: &Path) -> Result<PathBuf> {
+    // Flush the data before the name appears, so a power cut cannot leave a named but empty file.
+    if let Ok(f) = fs::OpenOptions::new().write(true).open(src) {
+        let _ = f.sync_all();
+    }
+    let _guard = PLACE.lock().unwrap_or_else(|p| p.into_inner());
+    for cand in candidates(target) {
+        match move_no_replace(src, &cand) {
+            Ok(()) => return Ok(cand),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    unreachable!("unbounded candidates")
+}
+
+/// Renames the file `src` to exactly `dst`, failing with `AlreadyExists` instead of replacing
+/// whatever is there. A hard link is the exclusive step; without hard-link support the name is
+/// checked right before a plain rename.
+pub fn move_no_replace(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if taken(dst) {
+        return Err(std::io::ErrorKind::AlreadyExists.into());
+    }
+    match fs::hard_link(src, dst) {
+        Ok(()) => fs::remove_file(src),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(e),
+        Err(_) if taken(dst) => Err(std::io::ErrorKind::AlreadyExists.into()),
+        Err(_) => fs::rename(src, dst),
+    }
+}
+
+/// Writes `data` to a staging file beside `target` and commits it with [`commit_new`].
+pub fn write_new(target: &Path, data: &[u8]) -> Result<PathBuf> {
+    let dir = target.parent().unwrap_or(Path::new("."));
+    let staged = staging_path(dir, "part");
+    let committed = fs::write(&staged, data).map_err(Error::from).and_then(|_| commit_new(&staged, target));
+    if committed.is_err() {
+        let _ = fs::remove_file(&staged);
+    }
+    committed
+}
+
+/// Staging older than this belongs to a run that was killed: no job writes for two days.
+const STALE_STAGING: std::time::Duration = std::time::Duration::from_secs(2 * 24 * 60 * 60);
+
+/// Removes staging files and folders a killed run left in `dir` (cancel and failure already
+/// clean up after themselves; only a crash or power cut can leave these).
+pub fn sweep_stale_staging(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        if !e.file_name().to_string_lossy().starts_with(STAGING_PREFIX) {
+            continue;
+        }
+        let stale = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok());
+        if stale.is_some_and(|age| age > STALE_STAGING) {
+            let p = e.path();
+            let _ = if e.file_type().is_ok_and(|t| t.is_dir()) { fs::remove_dir_all(&p) } else { fs::remove_file(&p) };
+        }
+    }
 }
 
 #[cfg(test)]
@@ -784,6 +969,35 @@ mod tests {
                    5\t1\t1\t1\t2\t1\t10\t80\t40\t20\t12\tnoise\n\
                    5\t1\t2\t1\t1\t1\t2\t2\t30\t10\t88\tTop\n";
         assert_eq!(parse_tsv(tsv), vec![Rect { x: 6, y: 16, w: 128, h: 38 }, Rect { x: 0, y: 0, w: 36, h: 16 }]);
+    }
+
+    #[test]
+    fn tesseract_tsv_pii_only() {
+        let h = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n";
+        let w = |line: u32, word: u32, x: u32, text: &str| {
+            format!("5\t1\t1\t1\t{line}\t{word}\t{x}\t10\t20\t10\t90\t{text}\n")
+        };
+        let tsv = [
+            h.to_string(),
+            // "Call +966 55 123 4567 now" -> one box over the four number words
+            w(1, 1, 0, "Call"),
+            w(1, 2, 30, "+966"),
+            w(1, 3, 60, "55"),
+            w(1, 4, 90, "123"),
+            w(1, 5, 120, "4567"),
+            w(1, 6, 150, "now"),
+            // "mail: a.b@example.com." -> the address only
+            w(2, 1, 0, "mail:"),
+            w(2, 2, 40, "a.b@example.com."),
+            // "Invoice 2024 total 350" -> nothing personal
+            w(3, 1, 0, "Invoice"),
+            w(3, 2, 40, "2024"),
+            w(3, 3, 70, "total"),
+            w(3, 4, 100, "350"),
+        ]
+        .concat();
+        assert_eq!(parse_tsv_pii(&tsv), vec![Rect { x: 26, y: 6, w: 118, h: 18 }, Rect { x: 36, y: 6, w: 28, h: 18 }]);
+        assert!(!is_email("@handle") && !is_email("a@b") && is_email("<x@y.org>"));
     }
 
     /// Needs FFmpeg; skipped when it is missing.
@@ -839,9 +1053,76 @@ mod tests {
         let a = d.join("a.tar.gz");
         assert_eq!(unique_path(&a), a);
         fs::write(&a, "").unwrap();
-        assert_eq!(unique_path(&a), d.join("a (2).tar.gz"));
-        fs::write(d.join("a (2).tar.gz"), "").unwrap();
-        assert_eq!(unique_path(&a), d.join("a (3).tar.gz"));
+        assert_eq!(unique_path(&a), d.join("a 2.tar.gz"));
+        fs::write(d.join("a 2.tar.gz"), "").unwrap();
+        assert_eq!(unique_path(&a), d.join("a 3.tar.gz"));
+        fs::create_dir(d.join("folder")).unwrap();
+        assert_eq!(unique_dir(&d.join("folder")), d.join("folder 2"));
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn commit_never_replaces_an_existing_file() {
+        let d = scratch("commit");
+        let target = d.join("photo.png");
+        fs::write(&target, "original").unwrap();
+        fs::write(d.join("photo 2.png"), "second").unwrap();
+
+        let staged = staging_path(&d, "part");
+        fs::write(&staged, "new").unwrap();
+        let out = commit_new(&staged, &target).unwrap();
+        assert_eq!(out, d.join("photo 3.png"));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "original");
+        assert_eq!(fs::read_to_string(d.join("photo 2.png")).unwrap(), "second");
+        assert_eq!(fs::read_to_string(&out).unwrap(), "new");
+        assert!(!staged.exists(), "the staging name is gone after the commit");
+
+        let written = write_new(&target, b"bytes").unwrap();
+        assert_eq!(written, d.join("photo 4.png"));
+        let left: Vec<_> = fs::read_dir(&d)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(STAGING_PREFIX))
+            .collect();
+        assert!(left.is_empty(), "no staging file survives: {left:?}");
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn parallel_commits_get_distinct_names() {
+        let d = scratch("race");
+        let target = d.join("out.txt");
+        let outs: Vec<PathBuf> = thread::scope(|s| {
+            let jobs: Vec<_> = (0..8)
+                .map(|i| {
+                    let target = &target;
+                    s.spawn(move || write_new(target, format!("{i}").as_bytes()).unwrap())
+                })
+                .collect();
+            jobs.into_iter().map(|j| j.join().unwrap()).collect()
+        });
+        let mut names = outs.clone();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 8, "{outs:?}");
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn stale_staging_is_swept_and_fresh_staging_kept() {
+        let d = scratch("sweep");
+        let fresh = staging_path(&d, "");
+        fs::create_dir(&fresh).unwrap();
+        let old = staging_path(&d, "part");
+        fs::write(&old, "partial").unwrap();
+        let two_days_ago = std::time::SystemTime::now() - STALE_STAGING - std::time::Duration::from_secs(60);
+        fs::File::options().write(true).open(&old).unwrap().set_modified(two_days_ago).unwrap();
+        fs::write(d.join("keep.txt"), "user file").unwrap();
+
+        sweep_stale_staging(&d);
+        assert!(!old.exists(), "a crash leftover is removed");
+        assert!(fresh.exists(), "a running job's staging stays");
+        assert!(d.join("keep.txt").exists());
         fs::remove_dir_all(&d).unwrap();
     }
 
@@ -867,7 +1148,7 @@ mod tests {
         });
         assert!(events.iter().all(|e| e.contains("index: 0")));
         let out = r[0].as_ref().unwrap();
-        assert_eq!(out, &d.join("talk (2).vtt"));
+        assert_eq!(out, &d.join("talk 2.vtt"));
         assert!(fs::read_to_string(out).unwrap().starts_with("WEBVTT"));
         assert!(fs::read_to_string(&src).unwrap().contains("00:00:01,000"), "original untouched");
         let leftovers: Vec<_> = fs::read_dir(&d)
@@ -902,7 +1183,7 @@ mod tests {
         // recipe: shift then convert, name built on the original stem
         let recipe = crate::ops::parse_recipe("shift-subs seconds=2 | convert to=vtt").unwrap();
         let out = run(&Op::Recipe(recipe), &files[..1], |_| {}).remove(0).unwrap();
-        assert_eq!(out, d.join("s0 (2).vtt"));
+        assert_eq!(out, d.join("s0 2.vtt"));
         assert!(fs::read_to_string(&out).unwrap().contains("00:00:03.000 --> 00:00:04.000"));
 
         let sum = run(&Op::Checksum, &files[..1], |_| {}).remove(0).unwrap();
@@ -937,7 +1218,7 @@ mod tests {
         };
         assert!(exec(&all_bad, &mut |_| {}).is_err(), "real error surfaces when nothing works");
         fs::create_dir_all(d.join("my.trip pages")).unwrap();
-        assert_eq!(unique_dir(&d.join("my.trip pages")), d.join("my.trip pages (2)"));
+        assert_eq!(unique_dir(&d.join("my.trip pages")), d.join("my.trip pages 2"));
         fs::remove_dir_all(&d).unwrap();
     }
 

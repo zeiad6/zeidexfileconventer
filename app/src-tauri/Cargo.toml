@@ -25,6 +25,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rdev = "0.5"
 zeidex-core = { path = "../../crates/core" }
+zeidex-localdrop = { path = "../../crates/localdrop" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

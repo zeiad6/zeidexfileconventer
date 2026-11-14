@@ -17,6 +17,8 @@
   --accent-text: #ffffff;
   --seg: rgba(255, 255, 255, 0.94);
   --seg-line: rgba(0, 0, 0, 0.08);
+  /* Sub-ring band: the accent at 14 % over --card, precomputed (no color-mix in older WebKit). */
+  --sub: #fdecdf;
   --ok: #2f8f4e;
   --bad: #c0392b;
   color-scheme: light dark;
@@ -32,6 +34,7 @@
     --line: #34302b;
     --seg: rgba(36, 33, 30, 0.95);
     --seg-line: rgba(255, 255, 255, 0.08);
+    --sub: #3e2b1b;
     --ok: #5cc581;
     --bad: #ff7a6b;
   }
@@ -46,6 +49,7 @@
   --line: #e6e0d8;
   --seg: rgba(255, 255, 255, 0.94);
   --seg-line: rgba(0, 0, 0, 0.08);
+  --sub: #fdecdf;
   --ok: #2f8f4e;
   --bad: #c0392b;
 }
@@ -355,17 +359,24 @@
   .seg.hot {
     fill: var(--accent);
   }
+  /* The wheel floats over any wallpaper or window, so its bands stay near-opaque: a translucent
+     band let the desktop behind decide whether its labels could be read. */
   .seg.mode {
     fill: var(--card);
-    fill-opacity: 0.55;
+    fill-opacity: 0.92;
   }
+  /* The dwelled mode is outlined; the current one is filled, so its white label reads. */
   .seg.mode.hot {
+    stroke: var(--accent);
+    stroke-width: 2;
+  }
+  .seg.mode.current {
     fill: var(--accent);
     fill-opacity: 0.85;
   }
   .seg.sub {
-    fill: var(--accent);
-    fill-opacity: 0.12;
+    fill: var(--sub);
+    fill-opacity: 0.96;
   }
   .seg.sub.hot {
     fill: var(--accent);

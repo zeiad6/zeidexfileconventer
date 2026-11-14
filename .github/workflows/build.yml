@@ -37,6 +37,15 @@ jobs:
         run: rustfmt --check --edition 2021 --config-path rustfmt.toml app/src-tauri/src/*.rs
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # LocalDrop is its own workspace (it needs a cipher; core and cli stay dependency-free).
+      - name: LocalDrop (fmt, clippy, tests)
+        run: |
+          cargo fmt --manifest-path crates/localdrop/Cargo.toml --check
+          cargo clippy --manifest-path crates/localdrop/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path crates/localdrop/Cargo.toml
+      - name: Packaging scripts (syntax)
+        if: runner.os == 'Linux'
+        run: sh -n packaging/linux/install.sh
       - name: UI tests (React + jsdom)
         working-directory: app
         run: |
@@ -427,6 +436,11 @@ jobs:
           - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             apt: gcc-aarch64-linux-gnu
+          # Static binary for musl distributions (Alpine, Void musl) where the glibc build
+          # cannot start; Rust links musl statically, so no extra package is needed.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            apt: ""
           - os: macos-latest
             target: aarch64-apple-darwin
             apt: ""

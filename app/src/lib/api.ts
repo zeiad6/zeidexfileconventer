@@ -154,4 +154,5 @@ export const closeEditor = () => invoke<void>('close_editor');
 export const frameAt = (t: number) => invoke<string>('frame_at', { t });
 export const detectText = (lang: string) =>
   invoke<{ x: number; y: number; w: number; h: number }[]>('detect_text', { lang });
+export const localdropCancel = () => invoke<void>('localdrop_cancel');
 export const detectFaces = () => invoke<{ x: number; y: number; w: number; h: number }[]>('detect_faces');
