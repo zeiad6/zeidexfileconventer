@@ -198,6 +198,12 @@ jobs:
           bash packaging/checksums.sh app/src-tauri/target/release/bundle/appimage/*.AppImage \
             > app/src-tauri/target/release/bundle/SHA256SUMS-linux-${{ matrix.arch }}.txt
           cat app/src-tauri/target/release/bundle/SHA256SUMS-linux-${{ matrix.arch }}.txt
+      - name: Package self-check (engines resolve inside the AppImage)
+        run: |
+          ./app/src-tauri/target/release/bundle/appimage/*.AppImage --appimage-extract >/dev/null
+          resources="$(find squashfs-root/usr/lib -mindepth 1 -maxdepth 1 -type d | head -n1)"
+          ZEIDEX_BUNDLE_DIR="$PWD/$resources" cargo test -p zeidex-core --test bundle
+          rm -rf squashfs-root
       - name: Upload Artifact
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
@@ -259,6 +265,14 @@ jobs:
           bash packaging/checksums.sh app/src-tauri/target/release/bundle/nsis/*-setup.exe \
             > app/src-tauri/target/release/bundle/SHA256SUMS-windows.txt
           cat app/src-tauri/target/release/bundle/SHA256SUMS-windows.txt
+      - name: Package self-check (engines resolve inside the setup)
+        shell: bash
+        run: |
+          # The bundle's own 7z.exe unpacks the installer, so the check assumes nothing about
+          # what the runner has installed.
+          app/src-tauri/engines/7z.exe x -y app/src-tauri/target/release/bundle/nsis/*-setup.exe -onsis_out >/dev/null
+          ZEIDEX_BUNDLE_DIR="$PWD/nsis_out" cargo test -p zeidex-core --test bundle
+          rm -rf nsis_out
       - name: Upload Artifact
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
@@ -327,6 +341,10 @@ jobs:
           bash packaging/checksums.sh app/src-tauri/target/release/bundle/dmg/*.dmg \
             > app/src-tauri/target/release/bundle/SHA256SUMS-macos-${{ matrix.arch }}.txt
           cat app/src-tauri/target/release/bundle/SHA256SUMS-macos-${{ matrix.arch }}.txt
+      - name: Package self-check (engines resolve inside the app)
+        run: |
+          ZEIDEX_BUNDLE_DIR="app/src-tauri/target/release/bundle/macos/Zeidex Convert.app/Contents/Resources" \
+            cargo test -p zeidex-core --test bundle
       - name: Upload Artifact
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4

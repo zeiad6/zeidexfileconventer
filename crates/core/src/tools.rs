@@ -261,13 +261,17 @@ fn bundle_dirs() -> Vec<PathBuf> {
     if let Some(exe_dir) = env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)) {
         dirs.push(exe_dir.join("engines"));
     }
-    // A bundled engine may live in its own `<engine>/bin` (libvips needs its DLLs beside it).
+    with_engine_bins(dirs)
+}
+
+/// Each registered dir, then its children's `bin` and `Library/bin`: two archive layouts travel —
+/// `<engine>/bin` (most releases) and `<engine>/Library/bin` (conda-built Ghostscript on Windows).
+/// The flat dir goes last so a tool unpacked straight into it still wins over nothing.
+fn with_engine_bins(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut all = Vec::new();
     for d in dirs {
         if let Ok(rd) = d.read_dir() {
             for e in rd.flatten() {
-                // Two layouts travel: `<engine>/bin` (most releases) and
-                // `<engine>/Library/bin` (conda-built Ghostscript on Windows).
                 all.push(e.path().join("bin"));
                 all.push(e.path().join("Library").join("bin"));
             }
@@ -338,4 +342,29 @@ pub fn rembg_model() -> Option<PathBuf> {
 
 pub fn require(tool: Tool) -> crate::Result<PathBuf> {
     locate(tool).ok_or(crate::Error::MissingTool(tool))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Engine archives unpack different ways; a bundled Ghostscript on Windows only exists under
+    /// `<engine>/Library/bin`, so the search has to reach it, and the flat dir has to stay last.
+    #[test]
+    fn engine_bins_are_found_under_bin_and_library_bin() {
+        let root = env::temp_dir().join(format!("zeidex-tools-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("gs").join("Library").join("bin")).unwrap();
+        fs::create_dir_all(root.join("qpdf").join("bin")).unwrap();
+        fs::write(root.join("gs").join("Library").join("bin").join("gswin64c.exe"), b"x").unwrap();
+
+        let dirs = with_engine_bins(vec![root.clone()]);
+
+        assert!(dirs.contains(&root.join("gs").join("Library").join("bin")));
+        assert!(dirs.contains(&root.join("qpdf").join("bin")));
+        assert_eq!(dirs.last(), Some(&root), "the flat dir is searched last");
+
+        fs::remove_dir_all(&root).unwrap();
+    }
 }
