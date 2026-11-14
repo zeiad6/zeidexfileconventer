@@ -271,7 +271,8 @@ jobs:
           # The bundle's own 7z.exe unpacks the installer, so the check assumes nothing about
           # what the runner has installed.
           app/src-tauri/engines/7z.exe x -y app/src-tauri/target/release/bundle/nsis/*-setup.exe -onsis_out >/dev/null
-          ZEIDEX_BUNDLE_DIR="$PWD/nsis_out" cargo test -p zeidex-core --test bundle
+          # cygpath: rustc is a native Windows program and needs a D:\ path, not /d/... from bash.
+          ZEIDEX_BUNDLE_DIR="$(cygpath -w "$PWD/nsis_out")" cargo test -p zeidex-core --test bundle
           rm -rf nsis_out
       - name: Upload Artifact
         if: github.event_name == 'pull_request'
@@ -343,7 +344,8 @@ jobs:
           cat app/src-tauri/target/release/bundle/SHA256SUMS-macos-${{ matrix.arch }}.txt
       - name: Package self-check (engines resolve inside the app)
         run: |
-          ZEIDEX_BUNDLE_DIR="app/src-tauri/target/release/bundle/macos/Zeidex Convert.app/Contents/Resources" \
+          # $PWD: cargo runs the test binary from crates/core, so a relative path would miss.
+          ZEIDEX_BUNDLE_DIR="$PWD/app/src-tauri/target/release/bundle/macos/Zeidex Convert.app/Contents/Resources" \
             cargo test -p zeidex-core --test bundle
       - name: Upload Artifact
         if: github.event_name == 'pull_request'

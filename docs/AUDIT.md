@@ -222,5 +222,8 @@ The 0.3.2 packages were downloaded from the release and opened, not assumed:
   dotted name for every bundle job, and CI asserts it.
 - `crates/core/tests/bundle.rs` re-checks a package on demand: with `ZEIDEX_BUNDLE_DIR` pointing
   at an unpacked package's resource directory it requires each engine to resolve *inside* the
-  package, never from the host `PATH`.
+  package, never from the host `PATH`. Every packaging job runs it against the artifact it just
+  built (the AppImage unpacked, the NSIS payload expanded with the bundle's own `7z.exe`, the
+  `.app`'s Resources), so a package that loses an engine, a notice or a screenshot fails before
+  it can be uploaded.
 
