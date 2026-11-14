@@ -193,3 +193,30 @@ Not done, on purpose:
   Ghostscript 10.03.1 — the newest conda build that still runs on macOS 11). The Engines panel
   prints `brew install` hints only for the optional tools.
 
+### Release 0.3.2, verified against the published artifacts
+
+The 0.3.2 packages were downloaded from the release and opened, not assumed:
+
+- The aarch64 AppImage was unpacked (`--appimage-extract`) and every engine run from inside it:
+  7-Zip 26.03, FFmpeg/FFprobe n9.0.2, Pandoc 3.12, rhwp 0.8.7, Ghostscript 10.08.0 and
+  qpdf 12.4.2. Ghostscript rendered a PDF to PNG from an unrelated working directory with no
+  `GS_LIB`, so it finds the bundled `share/ghostscript` on its own. The app itself launched under
+  Xvfb and drew the converter window and the float orb.
+- The NSIS setup was expanded with 7-Zip: `engines/` (694 MB, 413 files) holds `ffmpeg.exe`,
+  `7z.exe` and its DLL, `pandoc.exe`, `rhwp.exe`, `qpdf/bin/qpdf.exe`, libvips and the VC++
+  runtime the conda Ghostscript and rhwp link, and `gs/Library/bin/gswin64c.exe` with the
+  Ghostscript `Init`/`Font` tree one level up — the layout `tools.rs` searches.
+- Both DMGs were expanded: `Contents/Resources/{engines,legal,screens}` with `icon.icns`; the
+  bundled `qpdf` resolves `@rpath/libqpdf.30.dylib` to `engines/qpdf/lib`, and `gs/share`
+  carries 10.03.1.
+- `packaging/linux/install.sh` was run end to end: it downloaded the arm64 AppImage, checked
+  its SHA-256, installed it under a throwaway `PREFIX`, and wrote a 512×512 icon and the
+  desktop entry.
+- Checksum lines now carry the name GitHub serves. GitHub rewrites spaces in asset names to
+  dots, so the earlier lines (`Zeidex Convert_0.3.2_x64.dmg`) never matched a real download and
+  `install.sh` aborted with "not listed in SHA256SUMS". `packaging/checksums.sh` writes the
+  dotted name for every bundle job, and CI asserts it.
+- `crates/core/tests/bundle.rs` re-checks a package on demand: with `ZEIDEX_BUNDLE_DIR` pointing
+  at an unpacked package's resource directory it requires each engine to resolve *inside* the
+  package, never from the host `PATH`.
+
