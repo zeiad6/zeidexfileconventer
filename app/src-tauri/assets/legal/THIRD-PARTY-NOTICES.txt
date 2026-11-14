@@ -1,0 +1,44 @@
+Zeidex Convert — third-party notices
+====================================
+
+Zeidex Convert itself is MIT-licensed (see LICENSE.txt). It ships and invokes the
+programs below. Each remains under its own licence; nothing here changes those terms.
+
+Bundled desktop packages (Windows setup, Linux AppImage, macOS DMG) include:
+
+  FFmpeg and FFprobe  — GPL-3.0-or-later
+    Windows builds: https://github.com/BtbN/FFmpeg-Builds
+    macOS builds:   https://github.com/eugeneware/ffmpeg-static (release b6.1.1)
+    Source:         https://ffmpeg.org/download.html
+    FFmpeg is a separate executable invoked at run time. The GPL applies to the
+    FFmpeg binaries; the source for the exact builds is available at the URLs above.
+
+  7-Zip (7zz)         — LGPL-2.1-or-later, with the unRAR restriction
+    https://www.7-zip.org/
+
+  Pandoc              — GPL-2.0-or-later
+    https://pandoc.org/
+
+  rhwp                — MIT
+    https://github.com/edwardkim/rhwp
+
+  qpdf                — Apache-2.0
+    https://qpdf.readthedocs.io/
+
+  Ghostscript (gs)    — AGPL-3.0-or-later
+    https://www.ghostscript.com/
+    Source: https://github.com/ArtifexSoftware/ghostpdl
+    Ghostscript is an independent program invoked as a separate process for PDF
+    rendering. Its complete corresponding source is published at the URL above.
+
+  libvips (Windows)   — LGPL-2.1-or-later
+    https://www.libvips.org/
+
+Optional engines the app can use when the user installs them (not bundled):
+LibreOffice (MPL-2.0), Calibre (GPL-3.0), Tesseract (Apache-2.0),
+whisper.cpp (MIT), ExifTool (Artistic-2.0), ZBar (LGPL-2.1), qrencode (LGPL-2.1),
+Real-ESRGAN (BSD-3-Clause), rembg (MIT).
+
+The Rust and JavaScript dependencies keep their own licences; `cargo deny`/`cargo
+about` and `npm ls` report them for the exact versions in Cargo.lock and
+package-lock.json.

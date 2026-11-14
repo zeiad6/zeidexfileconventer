@@ -72,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/pac
 | **macOS 11+** | `*.dmg` | ملف واحد لكل معمارية (Apple Silicon أو Intel) لأن المحرّكات المضمّنة معمارية. غير موقّع: نقر يمين ← Open |
 | **Android 8+** | `*.apk` | من [إصدارات مستودع أندرويد](https://github.com/zeiad6/zeidex-convert-android/releases) |
 
-كل حزمة مكتفية: محرّكات FFmpeg و7-Zip وPandoc وrhwp مضمّنة داخلها، ويستخدم تحويل الصور FFmpeg المضمّن تلقائياً عند غياب libvips. توزيعات musl مثل Alpine تبني من المصدر.
+كل حزمة مكتفية: FFmpeg وFFprobe و7-Zip وPandoc وrhwp وqpdf وGhostscript مضمّنة داخلها، ويستخدم تحويل الصور FFmpeg المضمّن تلقائياً عند غياب libvips. توزيعات musl مثل Alpine تبني من المصدر.
 
 > AppImage يحتاج `libfuse2` على بعض التوزيعات، أو شغّله بـ `--appimage-extract-and-run`.
 
@@ -152,7 +152,7 @@ curl -fsSL https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/pac
 
 One package per platform: **Linux** (`.AppImage` for x64 or arm64, matching the machine, installed into `~/.local` — no administrator prompt), **Windows** (`*-setup.exe`, per-user, no UAC), **macOS** (one DMG per Apple chip, unsigned — right-click → Open) and **Android** (APK from the [Android repository releases](https://github.com/zeiad6/zeidex-convert-android/releases)).
 
-Every package is self-contained: FFmpeg, 7-Zip, Pandoc and rhwp travel inside it, and image conversion automatically falls back to the bundled FFmpeg when libvips is not installed. The AppImage is built on Ubuntu 22.04, so it inherits glibc 2.35 and starts on Debian 12+, Ubuntu 22.04+, Fedora 36+, Mint 21+ and openSUSE 15.5+; musl distributions build from source.
+Every package is self-contained: FFmpeg, FFprobe, 7-Zip, Pandoc, rhwp, qpdf and Ghostscript travel inside it, and image conversion automatically falls back to the bundled FFmpeg when libvips is not installed. LibreOffice, Calibre, Tesseract, whisper.cpp and the AI models stay optional — the Engines panel shows the one-line install for each, and the app never downloads anything by itself. The AppImage is built on Ubuntu 22.04, so it inherits glibc 2.35 and starts on Debian 12+, Ubuntu 22.04+, Fedora 36+, Mint 21+ and openSUSE 15.5+; musl distributions build from source.
 
 ## Build
 

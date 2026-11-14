@@ -178,13 +178,18 @@ Not done, on purpose:
   ships one DMG per Apple chip because the bundled engines are architecture-specific, and Android
   ships one APK. The deb, rpm, Flatpak, Snap, Arch and standalone-CLI release assets were removed
   so there is exactly one download per platform.
-- **Self-contained engines.** FFmpeg, FFprobe, 7-Zip, Pandoc and rhwp travel inside the package.
-  When libvips is absent, image conversion, resize, crop, rotate, compress and images-to-PDF fall
-  back to that FFmpeg build, so a plain install converts images without a second package. HEIC,
-  JXL and JP2 output still name libvips in a clear error because FFmpeg cannot encode them.
+- **Self-contained engines.** FFmpeg, FFprobe, 7-Zip, Pandoc, rhwp, qpdf and Ghostscript travel
+  inside every desktop package. qpdf covers PDF merge/split/pages/rotate/protect/unlock and
+  Ghostscript renders PDF pages and compresses PDFs, so those tools run on a clean machine.
+  When libvips is absent, image conversion, resize, crop, rotate, grayscale, background framing,
+  collage, web-set and images-to-PDF fall back to that FFmpeg build; HEIC, JXL and JP2 output
+  still name libvips in a clear error because FFmpeg cannot encode them. LibreOffice, Calibre,
+  Tesseract, whisper.cpp and the AI models stay optional and are never downloaded by the app.
 - **The AppImage** is built on Ubuntu 22.04 so it inherits glibc 2.35: Debian 12+, Ubuntu 22.04+,
   Fedora 36+, Mint 21+ and openSUSE 15.5+. `libfuse2` (or `--appimage-extract-and-run`) is the
   only optional dependency. musl distributions build from source.
-- **macOS** DMGs are unsigned; the README documents right-click → Open. Bundled engines are 7zz,
-  rhwp and Pandoc, and the Engines panel prints `brew install` hints for FFmpeg and friends.
+- **macOS** DMGs are unsigned; the README documents right-click → Open. The same engine set as
+  Linux travels inside (FFmpeg/FFprobe from eugeneware/ffmpeg-static, 7zz, rhwp, Pandoc, qpdf and
+  Ghostscript 10.03.1 — the newest conda build that still runs on macOS 11). The Engines panel
+  prints `brew install` hints only for the optional tools.
 

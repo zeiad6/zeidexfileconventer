@@ -6,28 +6,33 @@ its digest is pinned there. Every other row is regenerated from the assets that 
 the release, so the registry can never describe a file that was never uploaded or carry a digest
 from an older upload.
 
-Usage: packaging/sync-release-digests.py [tag]   (default: v0.2.0)
-Requires: gh, authenticated.
+Usage: packaging/sync-release-digests.py <tag>   e.g. v0.3.2
+Requires: gh, authenticated. Run after the release workflow finishes uploading so every row
+describes a file that exists.
 """
 from __future__ import annotations
 
 import json
 import pathlib
-import re
 import subprocess
 import sys
 from datetime import date
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "packaging" / "updates" / "manifest.json"
-TAG = sys.argv[1] if len(sys.argv) > 1 else "v0.2.0"
+if len(sys.argv) != 2:
+    print("usage: packaging/sync-release-digests.py <tag>", file=sys.stderr)
+    raise SystemExit(2)
+TAG = sys.argv[1]
 CHANGELOG_AR = (
-    "إصدار {version}: حزم تثبيت لكل الأنظمة — Windows (MSI وsetup)، Linux (AppImage وdeb وrpm "
-    "وFlatpak)، macOS (Apple Silicon وIntel)، وسطر أوامر لكل نظام."
+    "إصدار {version}: حزمة واحدة لكل نظام — Windows (setup)، Linux (AppImage لـ x64 وarm64)، "
+    "macOS (Apple Silicon وIntel)، وأندرويد (APK). كل حزمة سطح مكتب تحمل محرّكاتها كاملة: "
+    "FFmpeg و7-Zip وPandoc وrhwp وqpdf وGhostscript، فلا حاجة لتثبيت أي شيء آخر."
 )
 CHANGELOG_EN = (
-    "Release {version}: installers for every system — Windows (MSI and setup), Linux (AppImage, "
-    "deb, rpm and Flatpak), macOS (Apple Silicon and Intel), and the CLI for each platform."
+    "Release {version}: one package per system — Windows setup, Linux AppImage (x64 and arm64), "
+    "macOS DMG (Apple Silicon and Intel) and the Android APK. Every desktop package carries its "
+    "engines — FFmpeg, 7-Zip, Pandoc, rhwp, qpdf and Ghostscript — so nothing else needs installing."
 )
 
 
@@ -48,24 +53,16 @@ def repo() -> str:
 
 
 def classify(name: str) -> tuple[str, str, str] | None:
-    if name.endswith(".msi"):
-        return "zeidex-convert-windows-x64-msi", "windows", "x64"
-    if name.endswith("-setup.exe"):
+    """Only the assets the release workflow actually uploads: one package per system."""
+    lower = name.lower()
+    if lower.endswith("-setup.exe"):
         return "zeidex-convert-windows-x64-setup", "windows", "x64"
-    if name.endswith(".deb"):
-        return "zeidex-convert-linux-amd64-deb", "linux", "amd64"
-    if name.endswith(".rpm"):
-        return "zeidex-convert-linux-amd64-rpm", "linux", "amd64"
-    if name.endswith(".AppImage"):
-        return "zeidex-convert-linux-amd64-appimage", "linux", "amd64"
-    if name.endswith(".flatpak"):
-        return "com.zeidexsoft.convert.flatpak", "linux", "x86_64"
-    if name.endswith(".dmg"):
-        arch = "arm64" if "aarch64" in name else "x64"
+    if lower.endswith(".appimage"):
+        arch = "arm64" if ("aarch64" in lower or "arm64" in lower) else "amd64"
+        return f"zeidex-convert-linux-{arch}-appimage", "linux", arch
+    if lower.endswith(".dmg"):
+        arch = "arm64" if "aarch64" in lower else "x64"
         return f"zeidex-convert-macos-{arch}", "macos", arch
-    match = re.search(r"zeidex-convert-[\d.]+-(.+?)\.(tar\.gz|zip)$", name)
-    if match:
-        return f"zeidex-convert-cli-{match.group(1)}", "cli", match.group(1)
     return None
 
 

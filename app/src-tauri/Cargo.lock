@@ -5560,7 +5560,7 @@ dependencies = [
 
 [[package]]
 name = "zeidex-app"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "rdev",
  "serde",
@@ -5578,7 +5578,7 @@ dependencies = [
 
 [[package]]
 name = "zeidex-core"
-version = "0.3.1"
+version = "0.3.2"
 
 [[package]]
 name = "zeidex-localdrop"

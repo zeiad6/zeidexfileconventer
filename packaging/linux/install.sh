@@ -9,7 +9,7 @@
 # Nothing is written outside the user's home, so no administrator prompt ever appears.
 set -eu
 
-VERSION="${ZEIDEX_VERSION:-0.3.1}"
+VERSION="${ZEIDEX_VERSION:-0.3.2}"
 REPO="https://github.com/zeiad6/zeidexfileconventer"
 BASE="$REPO/releases/download/v$VERSION"
 ASSET=""

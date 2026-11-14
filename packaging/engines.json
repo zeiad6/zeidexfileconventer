@@ -1,5 +1,5 @@
 {
-  "_comment": "Downloadable conversion engines: pinned URL + SHA-256. Used by the app (Settings > Engines, first-run setup) and by build/fetch-engines.ps1. Bumping a version = change url, sha256 and size together. minimumMacOS: the oldest macOS a macOS download runs on; older Macs are not offered it.",
+  "_comment": "Pinned conversion-engine archives: URL + SHA-256 + size, used by packaging/fetch-engines.sh and packaging/fetch-engines.ps1 to build the self-contained installers. Nothing is downloaded at run time. Bumping a version = change url, sha256 and size together. minimumMacOS names the oldest macOS the binary runs on; the macOS packages target macOS 11 and newer.",
   "components": {
     "rhwp": {
       "version": "0.8.7",
@@ -70,6 +70,13 @@
       "sha256": "0F96AE06165C2419607C1C66726C091A78E89E08EA69F077CF3E2C884E800853",
       "size": 226549760,
       "kind": "msi"
+    },
+    "qpdf": {
+      "version": "12.4.2",
+      "url": "https://github.com/qpdf/qpdf/releases/download/v12.4.2/qpdf-12.4.2-msvc64.zip",
+      "sha256": "DB87077E683630C1217E0E8F9A20A9749D952AB676E881C3689187763A5DE25D",
+      "size": 28183147,
+      "kind": "zip"
     }
   },
   "platforms": {
@@ -109,6 +116,13 @@
           "sha256": "3F5301C0AA51E5FB2D5F6DCD04024BA4E86501AB328CE5D9D6760EFCCB887990",
           "size": 194998300,
           "kind": "tar.xz"
+        },
+        "qpdf": {
+          "version": "12.4.2",
+          "url": "https://github.com/qpdf/qpdf/releases/download/v12.4.2/qpdf-12.4.2-bin-linux-x86_64.zip",
+          "sha256": "DB367D897829F22C4198CE1094143C9D467BD6EE7DFABC44BA6F02056B24F8B1",
+          "size": 4040257,
+          "kind": "zip"
         }
       }
     },
@@ -148,6 +162,13 @@
           "sha256": "15AB887F9D787809BC834CA0EA6408E981B409F0B23046C41C18DE948EB50A38",
           "size": 182488416,
           "kind": "tar.xz"
+        },
+        "qpdf": {
+          "version": "12.4.2",
+          "url": "https://github.com/qpdf/qpdf/releases/download/v12.4.2/qpdf-12.4.2-bin-linux-aarch64.zip",
+          "sha256": "8FD9D009EB0838398180A603F2CF76531E5C68A4ECC8847598E0A1CCB1D3B600",
+          "size": 3872113,
+          "kind": "zip"
         }
       }
     },
@@ -188,6 +209,29 @@
           "sha256": "135B8A95B8133396D54BF8E726DBC0066145EFA0D785963FC3D4592ACBFCFE5B",
           "size": 308308875,
           "kind": "dmg"
+        },
+        "qpdf": {
+          "version": "12.4.2",
+          "url": "https://github.com/qpdf/qpdf/releases/download/v12.4.2/qpdf-12.4.2-bin-macos-x86_64.zip",
+          "sha256": "DD3B01F4414D198529BB0F13BBA59C2F016A328BB3506695087A96FB80FC1481",
+          "size": 2975560,
+          "kind": "zip"
+        },
+        "ffmpeg": {
+          "version": "b6.1.1",
+          "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-x64.gz",
+          "sha256": "929B375C1182D956C51F7AC25E0B2B0411FB01F6F407AA15C9758EFEB4242106",
+          "size": 25296431,
+          "kind": "raw.gz",
+          "minimumMacOS": "11.0"
+        },
+        "ffprobe": {
+          "version": "b6.1.1",
+          "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-darwin-x64.gz",
+          "sha256": "D4DA574D6E2E197BD259B47D69CF262DF9E312AF24AD960444F6D806D3D4C186",
+          "size": 25239438,
+          "kind": "raw.gz",
+          "minimumMacOS": "11.0"
         }
       }
     },
@@ -228,6 +272,29 @@
           "sha256": "94BB3248DF074C225490A8A6D1D9DC87C7D6783DBB7A8E9F0D0C3D94348552AF",
           "size": 297798926,
           "kind": "dmg"
+        },
+        "qpdf": {
+          "version": "12.4.2",
+          "url": "https://github.com/qpdf/qpdf/releases/download/v12.4.2/qpdf-12.4.2-bin-macos-arm64.zip",
+          "sha256": "62E46987A30EA167CBC530CCB22690AEC3D8C812ED09979A941BCEE92E504B79",
+          "size": 3269125,
+          "kind": "zip"
+        },
+        "ffmpeg": {
+          "version": "b6.1.1",
+          "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-arm64.gz",
+          "sha256": "8923876AFA8DB5585022D7860EC7E589AF192F441C56793971276D450ED3BBFA",
+          "size": 19246198,
+          "kind": "raw.gz",
+          "minimumMacOS": "11.0"
+        },
+        "ffprobe": {
+          "version": "b6.1.1",
+          "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-darwin-arm64.gz",
+          "sha256": "D986A8EC7B030899FE66A8A288ED809A3543338705A3CE178CFB85869C5D80BE",
+          "size": 19207077,
+          "kind": "raw.gz",
+          "minimumMacOS": "11.0"
         }
       }
     }
