@@ -72,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/pac
 | Arch / Manjaro | `packaging/linux/arch/PKGBUILD` | `makepkg -si` |
 | Windows 10/11 | `*-setup.exe` أو `*.msi` | NSIS لمستخدم عادي (تثبيت لك أو لكل المستخدمين، عربي/إنجليزي)، MSI للنشر المؤسسي |
 | macOS 11+ | `*.dmg` | نسختان: Apple Silicon وIntel. غير موقّعة: نقر يمين ← Open |
-| Android 8+ | `*.apk` | من صفحة الإصدارات، أو بناء محلي |
+| Android 8+ | `*.apk` | من [إصدارات مستودع أندرويد](https://github.com/zeiad6/zeidex-convert-android/releases)، أو بناء محلي |
 | سطر الأوامر | `zeidex-convert-*.tar.gz` / `.zip` | Linux x64/arm64، macOS arm64، Windows x64 |
 
 > AppImage يحتاج `libfuse2` على بعض التوزيعات، أو شغّله بـ `--appimage-extract-and-run`. توزيعات musl مثل Alpine: استخدم `--cli` أو Flatpak.
@@ -151,7 +151,7 @@ packaging/       المحرّكات، حزم لينكس، Flatpak، سجل ال�
 curl -fsSL https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/packaging/linux/install.sh | sh
 ```
 
-Every release publishes installers for each platform: **Windows** (`.msi` for Intune/Group Policy, `*-setup.exe` with per-user or per-machine install in English and Arabic), **Linux** (`.deb`, `.rpm`, `.AppImage`, `.flatpak`, plus an Arch `PKGBUILD`), **macOS** (DMG for Apple Silicon and Intel, unsigned — right-click → Open), and **Android** (APK). Standalone CLI archives ship alongside for Linux x64/arm64, macOS arm64 and Windows x64.
+Every release publishes installers for each platform: **Windows** (`.msi` for Intune/Group Policy, `*-setup.exe` with per-user or per-machine install in English and Arabic), **Linux** (`.deb`, `.rpm`, `.AppImage`, `.flatpak`, plus an Arch `PKGBUILD`), **macOS** (DMG for Apple Silicon and Intel, unsigned — right-click → Open), and **Android** (APK from the [Android repository releases](https://github.com/zeiad6/zeidex-convert-android/releases)). Standalone CLI archives ship alongside for Linux x64/arm64, macOS arm64 and Windows x64.
 
 The AppImage is the distro-independent Linux build. It is produced on Ubuntu 22.04 so it inherits glibc 2.35 and starts on Debian 12+, Ubuntu 22.04+, Fedora 36+, Mint 21+ and openSUSE 15.5+; musl distributions such as Alpine fall back to the CLI or Flatpak.
 
