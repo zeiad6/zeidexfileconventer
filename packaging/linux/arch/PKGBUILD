@@ -3,7 +3,7 @@
 # identical bytes. Bump pkgver and sha256sums together, then regenerate .SRCINFO with
 # `makepkg --printsrcinfo > .SRCINFO`.
 pkgname=zeidex-convert-bin
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
 pkgdesc="Offline file converter with a drag-and-drop radial wheel, floating shelf and CLI"
 arch=('x86_64')

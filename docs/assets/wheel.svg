@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="620" viewBox="0 0 1000 620" role="img" aria-label="The Zeidex wheel: hold Shift on a file and a ring of format targets appears">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7f5f2"/>
+      <stop offset="1" stop-color="#efeae2"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0.55" stop-color="#f07b1d" stop-opacity="0"/>
+      <stop offset="0.86" stop-color="#f07b1d" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#f07b1d" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#2a2119" flood-opacity="0.18"/>
+    </filter>
+    <style>
+      .latin { font-family: 'IBM Plex Sans', 'Noto Sans', sans-serif; }
+      .arabic { font-family: 'IBM Plex Sans Arabic', 'Noto Sans Arabic UI', sans-serif; }
+      .label { font-size: 18px; font-weight: 600; fill: #1d1b19; }
+      .cap { font-size: 22px; font-weight: 600; fill: #1d1b19; }
+      .sub { font-size: 15px; fill: #6d665f; }
+      .spin { animation: spin 40s linear infinite; transform-origin: 500px 310px; }
+      .breathe { animation: breathe 5s ease-in-out infinite; transform-origin: 500px 310px; }
+      @keyframes spin { to { transform: rotate(360deg) } }
+      @keyframes breathe { 0%,100% { opacity: 1 } 50% { opacity: 0.82 } }
+    </style>
+  </defs>
+
+  <rect width="1000" height="620" fill="url(#bg)"/>
+  <circle cx="500" cy="310" r="290" fill="url(#halo)"/>
+  <circle class="spin" cx="500" cy="310" r="215" fill="none" stroke="#e2d9cc" stroke-width="2" stroke-dasharray="3 10"/>
+  <circle cx="500" cy="310" r="150" fill="#ffffff" stroke="#e6e0d8" filter="url(#shadow)"/>
+  <circle class="breathe" cx="500" cy="310" r="106" fill="#fdecdf"/>
+
+  <g transform="translate(500 292)">
+    <path d="M-26 -40h34l24 24v56a8 8 0 0 1-8 8h-50a8 8 0 0 1-8-8v-72a8 8 0 0 1 8-8z" fill="#ffffff" stroke="#f07b1d" stroke-width="3"/>
+    <path d="M8 -40v18a6 6 0 0 0 6 6h18" fill="none" stroke="#f07b1d" stroke-width="3"/>
+  </g>
+  <g transform="translate(500 372)">
+    <rect x="-58" y="-16" width="116" height="32" rx="9" fill="#1d1b19"/>
+    <text class="latin" x="0" y="6" text-anchor="middle" font-size="14" font-weight="600" fill="#f7f5f2">hold ⇧ Shift</text>
+  </g>
+
+  <g class="label">
+    <g transform="translate(500 66)">
+      <rect x="-42" y="-21" width="84" height="42" rx="21" fill="#ffffff" stroke="#e6e0d8"/>
+      <text class="latin" x="0" y="7" text-anchor="middle" fill="#f07b1d">MP4</text>
+    </g>
+    <g transform="translate(746 132)">
+      <rect x="-52" y="-21" width="104" height="42" rx="21" fill="#ffffff" stroke="#e6e0d8"/>
+      <text class="latin" x="0" y="7" text-anchor="middle">DOCX</text>
+    </g>
+    <g transform="translate(822 336)">
+      <rect x="-46" y="-21" width="92" height="42" rx="21" fill="#ffffff" stroke="#e6e0d8"/>
+      <text class="latin" x="0" y="7" text-anchor="middle">WEBP</text>
+    </g>
+    <g transform="translate(676 512)">
+      <rect x="-42" y="-21" width="84" height="42" rx="21" fill="#ffffff" stroke="#e6e0d8"/>
+      <text class="latin" x="0" y="7" text-anchor="middle">MP3</text>
+    </g>
+    <g transform="translate(500 556)">
+      <rect x="-52" y="-21" width="104" height="42" rx="21" fill="#ffffff" stroke="#e6e0d8"/>
+      <text class="latin" x="0" y="7" text-anchor="middle">SRT</text>
+    </g>
+    <g transform="translate(324 512)">
+      <rect x="-46" y="-21" width="92" height="42" rx="21" fill="#ffffff" stroke="#e6e0d8"/>
+      <text class="latin" x="0" y="7" text-anchor="middle">EPUB</text>
+    </g>
+    <g transform="translate(178 336)">
+      <rect x="-46" y="-21" width="92" height="42" rx="21" fill="#ffffff" stroke="#e6e0d8"/>
+      <text class="latin" x="0" y="7" text-anchor="middle">HEIC</text>
+    </g>
+    <g transform="translate(254 132)">
+      <rect x="-42" y="-21" width="84" height="42" rx="21" fill="#ffffff" stroke="#e6e0d8"/>
+      <text class="latin" x="0" y="7" text-anchor="middle">ZIP</text>
+    </g>
+  </g>
+
+  <text class="arabic cap" x="500" y="602" text-anchor="middle" font-size="19" fill="#6d665f">اسحب الملف، اضغط Shift، أفلته على الصيغة</text>
+</svg>

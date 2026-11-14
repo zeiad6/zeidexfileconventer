@@ -2,7 +2,7 @@
 # Build: cd packaging/linux/snap && snapcraft   (LXD), or `snapcraft --destructive-mode` on core22.
 name: zeidex-convert
 base: core22
-version: '0.2.0'
+version: '0.3.0'
 summary: Offline file converter with a radial drag-and-drop wheel
 description: |
   Convert images, audio, video, documents, subtitles and archives without uploading
@@ -30,7 +30,7 @@ apps:
 parts:
   zeidex-convert:
     plugin: dump
-    source: https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.2.0/Zeidex.Convert_0.2.0_amd64.deb
+    source: https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.3.0/Zeidex.Convert_0.3.0_amd64.deb
     source-type: deb
     source-checksum: sha256/728b72497c9ca4559b977457eece26506668d790e1c7eb8dabb47bdaa6bb27fc
     stage-packages:

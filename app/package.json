@@ -1,7 +1,7 @@
 {
   "name": "zeidex-ui",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Zeidex Convert desktop UI: React 19, TypeScript, Tailwind CSS v4, Framer Motion",
   "scripts": {
@@ -35,5 +35,15 @@
     "vitest": "^3.2.4",
     "@types/node": "^24.10.1",
     "@tauri-apps/cli": "^2.12.4"
-  }
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Zeidexsoft",
+    "url": "https://zeidexsoft.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zeiad6/zeidexfileconventer.git"
+  },
+  "homepage": "https://zeidexsoft.com"
 }

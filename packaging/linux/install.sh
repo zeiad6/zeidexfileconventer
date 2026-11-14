@@ -11,7 +11,7 @@
 # release's SHA256SUMS file before anything is installed.
 set -eu
 
-VERSION="${ZEIDEX_VERSION:-0.2.0}"
+VERSION="${ZEIDEX_VERSION:-0.3.0}"
 REPO="https://github.com/zeiad6/zeidexfileconventer"
 BASE="$REPO/releases/download/v$VERSION"
 PREFIX="${PREFIX:-$HOME/.local}"
@@ -52,7 +52,7 @@ sha256_of() {
 }
 
 # GitHub turns spaces in asset names into dots, and the sums files list bundle paths
-# ("deb/Zeidex Convert_0.2.0_amd64.deb"), so compare on that normalised basename.
+# ("deb/Zeidex Convert_0.3.0_amd64.deb"), so compare on that normalised basename.
 verify() { # file asset sumsfile
   expected=$(awk -v want="$2" '{ line=$0; sub(/^[0-9a-f]+[ *]+/, "", line); n=split(line, p, "/");
              name=p[n]; gsub(/ /, ".", name); if (name == want) { print $1; exit } }' "$3")

@@ -4,11 +4,11 @@ version = 3
 
 [[package]]
 name = "zeidex-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "zeidex-core",
 ]
 
 [[package]]
 name = "zeidex-core"
-version = "0.2.0"
+version = "0.3.0"

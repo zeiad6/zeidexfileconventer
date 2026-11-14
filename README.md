@@ -1,227 +1,206 @@
-# Zeidex Convert
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="Zeidex Convert — محوّل ملفات محلي لـ Windows و macOS و Linux و Android" width="100%">
+</p>
 
-محوّل ملفات محلي لـ **Windows و macOS و Linux**: اسحب ملفاً، واضغط Shift، وأفلته على الصيغة التي تريدها.
-لا يُرفع أي ملف إلى أي خادم.
+<p align="center">
+  <a href="https://github.com/zeiad6/zeidexfileconventer/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/zeiad6/zeidexfileconventer?style=flat-square&color=f07b1d"></a>
+  <a href="LICENSE"><img alt="license MIT" src="https://img.shields.io/badge/license-MIT-2f8f4e?style=flat-square"></a>
+  <img alt="platforms" src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-1d1b19?style=flat-square">
+  <a href="https://github.com/zeiad6/zeidexfileconventer/actions/workflows/build.yml"><img alt="build" src="https://github.com/zeiad6/zeidexfileconventer/actions/workflows/build.yml/badge.svg"></a>
+</p>
 
-إعادة بناء بأسلوب clean-room لفكرة [Tangerine File Converter](https://apps.apple.com/us/app/tangerine-file-converter/id6813034065) (وهو تطبيق لـ macOS فقط)، مع ميزات إضافية.
-لم يُفكَّك ثنائي Tangerine ولم يُنسخ منه شيء: النسخة الوحيدة منه في Mac App Store، وهي مشفّرة بـ FairPlay.
-المواصفات مستخرجة من المواد العامة فقط (صفحة المتجر والموقع). انظر [`specs/tangerine_reverse_spec.md`](specs/tangerine_reverse_spec.md).
+<p align="center">
+  <b>حوّل أي ملف، على جهازك، دون رفع.</b><br>
+  اسحب ملفاً، اضغط <kbd>Shift</kbd>، وأفلته على الصيغة التي تريدها.
+</p>
 
-## لماذا Rust + Tauri v2
+---
 
-- العمل الثقيل تنفّذه محرّكات أصلية (FFmpeg و libvips وغيرها)، فلا حاجة لـ runtime ثقيل مثل Electron أو Python.
-- حجم الثنائي نحو 10–15MB قبل المحرّكات، مقابل 97.6MB لـ Tangerine.
-- النواة `zeidex-core` بلا أي تبعيات (std فقط)، لذا تُجمَّع وتُختبر offline.
-- Tauri يوفّر نافذة شفافة دائماً في الأعلى تستقبل الإفلات أصلياً، وهذا أساس العجلة.
+## ما هو؟
 
-## المحرّكات المدمجة
+**Zeidex Convert** محوّل ملفات ومعالج وسائط يعمل **بالكامل دون إنترنت**. لا حساب، ولا سحابة، ولا طابور انتظار: الملف يُقرأ من قرصك ويُكتب على قرصك، والبرنامج يعمل حتى لو فصلت الشبكة.
 
-| المحرّك | الاستخدام | مضمَّن في Windows | Linux | macOS |
-|---|---|---|---|---|
-| FFmpeg | الفيديو والصوت وBMP وGIF | ✓ | ✓ (AppImage) | brew |
-| libvips | الصور: HEIC وAVIF وWebP وSVG، والقص، والكولاج | ✓ | تبعية `.deb` | brew |
-| qpdf | دمج PDF وتقسيمه وترتيب صفحاته وتدويرها | ✓ | تبعية `.deb` | brew |
-| 7-Zip | ZIP و7z وTAR وGZIP وفك RAR | ✓ | ✓ | ✓ |
-| Ghostscript | ضغط PDF، و PDF→صور بدقة 300DPI، و PDF→نص | winget (رخصة AGPL) | تبعية `.deb` | brew |
-| LibreOffice | DOCX وPPTX وXLSX وODT وPages ↔ PDF | winget | apt | brew cask |
-| Pandoc | Markdown وHTML وEPUB وDOCX | winget | apt | ✓ |
-| Calibre | **PDF→EPUB** (غير موجود في Tangerine؛ طلبه أحد المراجعين) وMOBI وAZW3 | winget | apt | brew cask |
-| Tesseract | **OCR**: إنشاء PDF قابل للبحث أو TXT من صور وملفات ممسوحة، والعربية مدعومة | winget | apt | brew |
-| ExifTool | تحرير EXIF/GPS وقراءة بيانات أغنى وإزالة بلا خسارة (اختياري) | winget | apt | brew |
-| ZBar / qrencode | قراءة QR والباركود / توليد QR (اختياري) | يدوي / scoop | apt | brew |
-| whisper.cpp | **تفريغ صوتي إلى SRT** محلياً (اختياري؛ يحتاج نموذج `ggml-*.bin` عبر `ZEIDEX_WHISPER_MODEL` أو `engines/models/`) | يدوي | يدوي | brew |
+النسخة المكتبية مكتوبة بـ **Rust + Tauri 2** وواجهتها **React 19 + TypeScript + Tailwind v4**، والنسخة الجوالة بـ **Kotlin + Jetpack Compose**. المحرّكات الثقيلة (FFmpeg، libvips، qpdf، Pandoc، 7-Zip، Tesseract) تعمل محلياً.
 
-لوحة **Engines** في التطبيق، والأمر `zeidex-convert doctor`، يعرضان ما هو مفقود مع أمر التثبيت المناسب.
-للبحث عن كل محرّك ترتيب ثابت: المتغيّر `ZEIDEX_<TOOL>`، ثم مجلد `engines/` المضمَّن، ثم `PATH`، ثم مسارات التثبيت المعروفة.
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="عرض متحرك: العجلة، الخصوصية، وحزم التثبيت" width="820">
+  <br>
+  <a href="docs/assets/demo.mp4">▶ تشغيل الفيديو بجودة كاملة (MP4)</a>
+</p>
 
-## الاستخدام
+## العجلة
 
-**العجلة (Windows و X11):** اسحب ملفاً أو أكثر من مدير الملفات، ثم اضغط أثناء السحب:
-- `Shift` للتحويل
-- `Ctrl` للأدوات
-- `Alt` للإجراءات
+<p align="center">
+  <img src="docs/assets/wheel.svg" alt="عجلة الصيغ: اسحب ملفاً واضغط Shift وأفلته على الصيغة" width="720">
+</p>
 
-العجلة ثلاث حلقات متداخلة: **الخارجية** للأوضاع الثلاثة، **الوسطى** لخيارات الوضع، **الداخلية** للحلقة الفرعية (إعدادات الجودة أو القيم الافتراضية لأدوات ذات خيارات). أبقِ المؤشر على قطاع لثانية تقريباً لتفتح حلقته الفرعية، أو أفلت فوق القطاع مباشرة لتطبيقه. تدوير عجلة الفأرة (في وضع لوحة المفاتيح) يبدّل الأوضاع بانتقال سلس. **الإفلات في المركز يلغي العملية.**
-مرّر المؤشر فوق قطاع ثم أفلت. الناتج يُحفظ بجانب الأصل، ولا يُمس الأصل أبداً.
-في Windows تُكتشف السحبة باستطلاع `GetAsyncKeyState(VK_LBUTTON)` بتردد 60Hz (دون hook منخفض المستوى يزعج مضادات الفيروسات)، وتُقرأ `CF_HDROP` من الحافظة كفحص أولي؛ والقائمة النهائية تأتي من هدف الإفلات الأصلي (OLE). نوافذ العجلة والدائرة تحمل `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST` فلا تسرق التركيز ولا تظهر في Alt+Tab.
+ملف واحد، عشرات الصيغ. عند سحب ملف مع إبقاء <kbd>Shift</kbd> مضغوطاً تدور حوله حلقة من الأهداف؛ أفلته على الهدف ليبدأ التحويل فوراً، مع معاينة مباشرة للنتيجة. العجلة نافذة شفافة دائماً في الأعلى، فلا تحتاج إلى فتح التطبيق لكل ملف.
 
-**حلقة الإجراءات** تعمل على أي ملف: تعليق في الرف العائم، أرشفة إلى ZIP، فك الأرشيف هنا، إعادة تسمية دفعية (تفتح نافذة النمط مع المعاينة الحية)، حساب SHA-256، إظهار في المجلد، نسخ المسار، نقل إلى…، والطرفية.
+## المزايا
 
-إذا خلطت التحديد (مثلاً 10 صور ومقطع فيديو) فلا تظهر عجلة فارغة: يعرض وضع التحويل كل صيغة يدعمها ملف واحد على الأقل مع عدد الملفات الداعمة لها (`JPG 10/11`)، ويُطبَّق الاختيار على ما يدعمه ويُبلَّغ عن الباقي.
+| | الميزة |
+|---|---|
+| 🎯 | **العجلة**: تحويل بالسحب والإفلات إلى 40+ صيغة بضغطة واحدة |
+| 🖼️ | **الصور**: JPEG، PNG، WebP، AVIF، HEIC، TIFF، GIF، BMP، SVG، ICO، PDF، مع قصّ بنِسب جاهزة وإزالة EXIF |
+| 🎬 | **الفيديو**: MP4، MKV، WebM، MOV، AVI، GIF، MP3، M4A، WAV؛ ضغط، قصّ، تسريع، تدوير، دمج |
+| 📄 | **المستندات**: PDF ↔ DOCX، PDF → صور، دمج وتقسيم وترتيب صفحات PDF، Markdown/HTML/EPUB/DOCX عبر Pandoc |
+| ✍️ | **الترجمة النصية**: SRT ↔ VTT ↔ ASS، تفريغ صوتي محلي عبر whisper.cpp |
+| 🔐 | **الخصوصية**: لا رفع، لا تتبّع، إزالة بيانات GPS والبيانات الوصفية اختيارياً |
+| 🧹 | **الحذف الآمن**: Shredder بمرور واحد أو عدة مرورات للملفات الحساسة |
+| 📡 | **LocalDrop**: إرسال الملفات من الحاسوب إلى الهاتف على نفس شبكة Wi-Fi عبر QR، دون سحابة |
+| 👀 | **مجلدات المراقبة**: حوّل كل ما يصل إلى مجلد تختاره تلقائياً |
+| 🌍 | **عربي وإنجليزي** بواجهة RTL كاملة، ووضع فاتح وداكن |
 
-**Wayland:** يمنع Wayland الاختصارات العامة، فاسحب الملفات إلى **الدائرة البرتقالية العائمة** لتظهر العجلة حولها.
+## التثبيت
 
-**المحرّر المرئي:** أدوات القص وإخفاء المناطق والتعليق التوضيحي تفتح نافذة ترسم فيها على الصورة أو على إطار من الفيديو.
-القص والإخفاء يُطبَّقان على كل الملفات المحددة بالإحداثيات نفسها. التعليق يُحفظ PNG بجانب الأصل. الاختصارات: `Ctrl+Z` تراجع، `Enter` تطبيق، `Esc` إغلاق.
-- **إخفاء المناطق:** زر «كشف الوجوه» (محلي بالكامل، دون أي محرّك إضافي) وزر «كشف النصوص» (Tesseract) يضيفان المربعات تلقائياً، ويمكن تعديلها قبل التطبيق.
-- **الاقتطاع وحفظ الإطارات:** خط زمني مع موجة الصوت، تنقّل إطاراً بإطار (`←` `→`، ومع `Shift` ثانية كاملة)، و`I` / `O` لتعيين البداية والنهاية بدقة الإطار.
-- **الدمج:** بطاقة لكل مقطع مع صورة مصغّرة ومدته، لإعادة الترتيب أو الحذف قبل الدمج.
-
-**الإعدادات:** تغيير مفتاح كل عجلة (الافتراضي Shift للتحويل، Control للأدوات، Alt للإجراءات، مع إتاحة Meta)، وتشغيل أو إيقاف إظهار النتائج في مدير الملفات وتشغيل أو إيقاف Ctrl+Shift+Space، وتحرير الوصفات والمجلدات المراقَبة.
-
-**نافذة الاستوديو:** شريط جانبي بأربعة أقسام — *التحويل* (إفلات واختيار وصيغ)، *أدوات الاستوديو* (نفس شبكة الأدوات لملفات محددة)، *الرف العائم* (ملفات محجوزة من مجلدات مختلفة، تُفتح دفعة واحدة أو تُسحب من الدائرة البرتقالية)، *مجلدات مراقَبة* (ملخص القواعد مع انتقال مباشر إلى الإعدادات)، ثم *الإعدادات*. على Windows 11 22H2+ تُطبَّق خلفية **Mica**، وعلى Windows 10 1809+ **Acrylic**، وقبلها تمويه عادي، مع إطار داكن/فاتح يتبع سمة النظام وزوايا مستديرة — والقشرة نفسها شبه معتمة لتبقى مقروءة إن غاب مركّب النوافذ.
-
-**النافذة الرئيسية:** إفلات الملفات أو اختيارها ثم النقر. زر «إضافة إلى مدير الملفات» يضيف:
-- Windows: اختصار في قائمة *Send To*
-- Linux: سكربت Nautilus، وإجراء Nemo، وقائمة خدمة Dolphin
-
-**CLI:**
-```bash
-zeidex-convert convert --to webp *.png --quality 85   # جودة 1-100 لكل مرمّز ضياعي
-zeidex-convert tool strip-exif *.jpg                  # إزالة EXIF/GPS (بلا إعادة ترميز)
-zeidex-convert convert --to jpg *.heic
-zeidex-convert tool compress --target 8MB clip.mov        # ترميز على مرحلتين للوصول إلى الحجم المطلوب
-zeidex-convert tool ocr --lang ara+eng --to pdf scan.pdf
-zeidex-convert tool pages --spec 3,1-2,z doc.pdf          # إعادة ترتيب الصفحات أو حذفها
-zeidex-convert tool redact --boxes "40,40,300,80" --style blur --start 5 --end 9 clip.mp4
-zeidex-convert tool split --at 1:30,4:10 talk.mp4
-zeidex-convert tool redact --boxes auto --lang ara+eng scan.png   # يغطي كل النصوص المكتشفة
-zeidex-convert tool redact --boxes faces --style "#000000" team.jpg   # يغطي كل الوجوه المكتشفة
-zeidex-convert tool dehaze --strength 0.8 foggy.jpg
-zeidex-convert tool adjust --saturation 1.3 --sharpen 0.8 photo.heic
-zeidex-convert tool tags --title "حلقة 1" --artist ZeidexSoft episode.mp3
-zeidex-convert recipe "resize max=1600 | compress percent=60 | strip" --jobs 4 *.heic
-zeidex-convert watch ~/Downloads --ext heic --do "convert to=jpg"
-zeidex-convert tool rename --pattern "رحلة-{n:3}" *.jpg
-ZEIDEX_WHISPER_MODEL=~/models/ggml-base.bin zeidex-convert tool transcribe --lang ar lecture.mp4
-zeidex-convert tool burn-subs video.mp4 video.srt
-zeidex-convert tool social --ratio 9:16 clip.mp4
-zeidex-convert tool archive --format 7z --password "…" --split 25MB project/
-zeidex-convert tool duplicates ~/Pictures --move 1
-zeidex-convert tool exif --artist "Zeiad" --gps 24.7136,46.6753 photo.jpg
-zeidex-convert qr-make "https://example.com" --out code.png && zeidex-convert tool qr-read code.png
-zeidex-convert tools                                      # كل الأدوات وخياراتها
-```
-
-## الصيغ والأدوات
-
-- **التحويل:** صور (9 صيغ)، فيديو (10)، صوت (8)، PDF ← DOCX وPPTX وEPUB وTXT وPNG وJPG، ومستندات وعروض وجداول وكتب إلكترونية وترجمات SRT/VTT/TXT وأرشيفات.
-- **60 أداة:**
-  - عامة: ضغط (نسبة مئوية أو حجم مستهدف أو preset، مع تصغير اختياري)، إزالة البيانات الوصفية (صور وفيديو وصوت وPDF)، عرضها، تحرير وسوم الفيديو والصوت (العنوان والفنان...)، أرشفة، فك أرشيف
-  - صور: ضبط الألوان (سطوع، تباين، تشبع، تدرج، غاما، حدة، وضوح، إزالة تشويش، حبيبات) مع معاينة حية، إزالة الضباب (dark channel prior مع guided filter)، تغيير الحجم، قص (بنسبة أبعاد أو مربع دقيق)، إخفاء مناطق (تمويه أو لون، مع كشف الوجوه محلياً بمصنّف Haar مدمج، أو كشف النصوص عبر Tesseract)، تعليق توضيحي (مربعات وأسهم ونص وأرقام وتظليل) يُركَّب على الأصل بدقته الكاملة، تدوير، خلفية، أبيض وأسود، صور→PDF، كولاج، OCR
-  - فيديو وصوت: اقتطاع (مع حذف الصمت في الأطراف)، سرعة، حفظ إطار، استخراج الصوت، كتم، قص وإخفاء مناطق ضمن فترة زمنية، تقسيم (بالتساوي أو عند نقاط محددة)، دمج (يأخذ أبعاد أول مقطع ومعدل إطاراته، ويقبل مقاطع صامتة)، توحيد مستوى الصوت (loudnorm)، القنوات مع مستوى مستقل لليسار واليمين، تصفير مقطع (bleep)، فيديو موجة صوتية
-  - PDF: دمج مع ترتيب صفحات كل الملفات قبل الدمج، فصل الصفحات، منظّم صفحات مرئي (إعادة ترتيب وتدوير وتكرار وحذف)، تدوير
-- **ما يتفوّق به على Tangerine:**
-  - معالجة دفعات متوازية (`--jobs`، افتراضياً نصف الأنوية حتى 4).
-  - **استخراج فيديو الصور الحية (Motion/Live Photos)**: استخراج الفيديو المدمج في صور Motion Photo (Pixel وSamsung) أو Apple Live Photo (`.livp` أو ملفات HEIC/JPG المقترنة) عبر `zeidex-convert tool motion`.
-  - **سحب وإفلات مباشر من المتصفحات**: إمكانية سحب الصور والروابط مباشرة من متصفحات الويب (Chrome وEdge وFirefox) إلى التطبيق لتحويلها.
-  - **دعم صيغ موسّع**: صور إضافية (JPEG XL `jxl`، JPEG 2000 `jp2`، RAW الكاميرات `dng/cr2/nef/arw`، `psd`، `tga`)، وفيديو/صوت (`m2ts`، `ac3`، `opus`)، وترجمات (`ass`، `ssa`، `smi`، `lrc`)، ومستندات مارك آب (`rst`، `tex`، `org`، `adoc`، `typ` عبر Pandoc)، وأرشيفات (`cab`، `iso`، `deb`، `rpm`، والامتدادات المركبة `.tar.bz2` و`.tar.xz`).
-  - **تكامل موسّع لمديري الملفات**: دعم Thunar (XFCE) عبر SendTo وقوائم الإجراءات المخصصة، وتشغيل تلقائي XDG Autostart، بجانب Nautilus وNemo وDolphin.
-  - **بيان محركات موحّد وموثّق**: ملف `packaging/engines.json` معتمد من مشروع Filee يحتوي على روابط وبصمات SHA-256 محددة لكل المحركات المستقلة.
-  - **وصفات**: سلسلة أدوات بخطوة واحدة (`resize max=1600 | compress percent=60 | strip`)، تُحفظ في الإعدادات وتظهر في عجلة الأدوات بنجمة ★.
-  - **مجلدات مراقَبة**: كل ملف يصل إلى مجلد يُعالَج تلقائياً بعد اكتمال نسخه (`zeidex-convert watch` أو من الإعدادات).
-  - **إعادة تسمية دفعية** بأنماط `{name}` `{n:3}` `{date}` `{ext}` `{parent}`، آمنة مع تبديل الأسماء ولا تكتب فوق ملفات أخرى.
-  - **بصمة SHA-256** بصيغة `sha256sum` (يتحقق منها `sha256sum -c`).
-  - **علامة مائية** (شعار بشفافية وموضع وحجم) على الصور والفيديو.
-  - **ترجمات**: تفريغ صوتي محلي إلى SRT عبر whisper.cpp، إزاحة التوقيت، استخراج، إضافة مسار ترجمة، حرق الترجمة في الصورة.
-  - **فيديو**: عكس، تكرار، تثبيت الاهتزاز، تصدير الإطارات، عرض شرائح من صور مع تلاشي، تلاشي دخول/خروج.
-  - **PDF**: حماية بكلمة مرور وإزالتها.
-  - **أيقونات ico** متعددة المقاسات (16 حتى 256) من أي صورة.
-  - **فيديو للتواصل الاجتماعي**: 9:16 أو 1:1 أو 4:5 أو 16:9 فوق خلفية مموّهة من المحتوى نفسه (صور وفيديو)، لوحة مصغّرات 4×4، تغيير الدقة (من 2160p إلى 360p)، استبدال صوت الفيديو.
-  - **صوت**: تقليل الضوضاء، حذف فترات الصمت.
-  - **أرشيف محمي**: zip بتشفير AES-256 و 7z مع إخفاء أسماء الملفات، تقسيم إلى أجزاء (مثل 25MB)، فك أرشيف محمي.
-  - **كاشف المكررات**: يقارن الحجم ثم SHA-256 داخل المجلدات، ويمكنه نقل النسخ إلى مجلد Duplicates.
-  - **صور ويب متجاوبة**: AVIF و WebP بعروض 480 و960 و1600 (دون تكبير) مع وسم `<picture>` جاهز.
-  - **قراءة QR والباركود** (ZBar) و**توليد QR** (`zeidex-convert qr-make`).
-  - **تحرير EXIF والموقع** (المصوّر، الحقوق، التاريخ، الكاميرا، GPS) عبر ExifTool، وإزالة البيانات الوصفية من الصور بلا إعادة ترميز عند وجوده.
-  - **Ctrl+Shift+Space**: يفتح العجلة لملفات محددة دون سحب (تحديد Explorer على Windows، أو الملفات المنسوخة بـ Ctrl+C على Linux)، مع التنقل بالأسهم و Enter و Tab والنقر.
-  - واجهة عربية كاملة، وسطر أوامر لكل الأدوات.
-- **إجراءات:** تعليق في الدائرة (Float)، إظهار في المجلد، نسخ المسار، نقل إلى، فتح طرفية.
-- **Float:** إفلات الملفات على مركز العجلة أو على الدائرة البرتقالية يحتفظ بها هناك (يظهر عدّاد). اسحب الدائرة نفسها لتنقل الملفات إلى أي تطبيق آخر. نقرة مزدوجة تفتحها في النافذة الرئيسية، والنقر الأيمن يفرغها.
-
-## البناء
+### أسرع طريقة على لينكس
 
 ```bash
-cargo test --workspace                    # النواة والـ CLI، بلا شبكة ولا محرّكات
-cargo build -p zeidex-cli --release
-bash packaging/smoke.sh target/release/zeidex-convert   # تحويلات حقيقية؛ يتخطى المحرّكات المفقودة
-cd app && npm ci && npm test && npm run build   # واجهة React 19 على jsdom، ثم بناء ui-dist
-
-# التطبيق (يتطلب تبعيات Tauri على Linux: webkit2gtk-4.1, libxtst, ...)
-bash packaging/fetch-engines.sh           # لينكس وماك: يختار المعمارية تلقائياً
-./packaging/fetch-engines.ps1             # ويندوز (PowerShell)
-cd app && npm run bundle:linux            # أو bundle:windows / bundle:macos
+curl -fsSL https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/packaging/linux/install.sh | sh
 ```
 
-## حزم التثبيت لكل نظام 📦
+يختار السكربت الحزمة التي تفهمها توزيعتك: `.deb` عبر `apt`، أو `.rpm` عبر `dnf`/`zypper`، أو وصفة AUR عبر `pacman`، أو Flatpak، وإلا فـ AppImage. يتحقّق من SHA-256 قبل التثبيت، ويثبّت `--cli` لسطر الأوامر وحدها، و`--uninstall` للإزالة.
 
-| النظام | الحزمة | ملاحظات |
-| --- | --- | --- |
-| Windows 10/11 (x64) | `*.msi` و `*-setup.exe` | MSI للنشر المؤسسي (Intune/Group Policy)، وNSIS setup لمستخدم عادي مع اختيار التثبيت للجميع أو للمستخدم الحالي، بواجهة إنجليزية/عربية |
-| Linux (x64) | `*.AppImage` | **حزمة موحّدة لكل التوزيعات**: لا تحتاج تثبيتًا ولا مدير حزم. مبنية على Ubuntu 22.04 (glibc 2.35) لتعمل على Debian 12+ وUbuntu 22.04+ وFedora 36+ وMint 21+ وopenSUSE 15.5+. تستخدم `libwebkit2gtk-4.1` الموجود افتراضياً في توزيعات سطح المكتب |
-| Linux (Debian/Ubuntu/Mint/Pop) | `*.deb` | يعتمد على `libvips-tools` و`ghostscript` و`qpdf` من المستودع |
-| Linux (Fedora/RHEL/openSUSE) | `*.rpm` | نفس المحرّكات من مستودع التوزيعة |
-| Linux (أي توزيعة) | `*.flatpak` | معزول بـ GNOME Runtime 46، يعمل على أي توزيعة فيها Flatpak |
-| macOS 11+ | `*.dmg` | نسختان: Apple Silicon وIntel. غير موقّعة بشهادة Apple، لذا أول تشغيل: نقر يمين ← Open أو `xattr -dr com.apple.quarantine "/Applications/Zeidex Convert.app"` |
-| Android 8+ | `zeidex-convert-v1.2.0.apk` | من مستودع أندرويد، موقّعة بمفتاح `d24bf9df…` |
-| سطر الأوامر | `zeidex-convert-<version>-<target>.tar.gz` / `.zip` | Linux x64 وarm64، macOS arm64، Windows x64 |
+### الملفات لكل نظام
 
-ملاحظات التوافق:
-- AppImage يحتاج `libfuse2` على التوزيعات التي لا توفّره (Ubuntu 22.04+)، أو شغّله بـ `./Zeidex*.AppImage --appimage-extract-and-run`.
-- لا يدعم AppImage توزيعات musl مثل Alpine؛ استخدم Flatpak أو حزمة التوزيعة.
-- محرّكات الصور/PDF في AppImage تأتي من النظام أو من لوحة Engines؛ FFmpeg و7-Zip مضمّنان. على macOS يُضمَّن 7zz وrhwp وpandoc، والباقي عبر `brew install` (اللوحة تعرض الأمر لكل أداة).
-- كل إصدار يُرفق ملف `SHA256SUMS-<platform>.txt`؛ تحقّق بـ `sha256sum -c SHA256SUMS-linux.txt`.
+| النظام | الملف | ملاحظات |
+|---|---|---|
+| **أي توزيعة لينكس (x64)** | `*.AppImage` | `chmod +x` ثم التشغيل. مبني على Ubuntu 22.04 (glibc 2.35): يعمل على Debian 12+ وUbuntu 22.04+ وFedora 36+ وMint 21+ وopenSUSE 15.5+ |
+| Debian / Ubuntu / Mint | `*.deb` | `sudo apt install ./Zeidex.Convert_*.deb` |
+| Fedora / RHEL / openSUSE | `*.rpm` | `sudo dnf install ./Zeidex.Convert-*.rpm` |
+| أي توزيعة فيها Flatpak | `*.flatpak` | `flatpak install --user ./ZeidexConvert.flatpak` |
+| Arch / Manjaro | `packaging/linux/arch/PKGBUILD` | `makepkg -si` |
+| Windows 10/11 | `*-setup.exe` أو `*.msi` | NSIS لمستخدم عادي (تثبيت لك أو لكل المستخدمين، عربي/إنجليزي)، MSI للنشر المؤسسي |
+| macOS 11+ | `*.dmg` | نسختان: Apple Silicon وIntel. غير موقّعة: نقر يمين ← Open |
+| Android 8+ | `*.apk` | من صفحة الإصدارات، أو بناء محلي |
+| سطر الأوامر | `zeidex-convert-*.tar.gz` / `.zip` | Linux x64/arm64، macOS arm64، Windows x64 |
 
-`.github/workflows/build.yml` ينفّذ clippy واختبارات Rust واختبارات الواجهة (Vitest على jsdom) وبناء Vite و smoke test على Linux بكل المحرّكات، ثم يبني الحزم أعلاه ويرفعها كـ artifacts في الـ PRs فقط. **النشر يتم عند دفع وسم `v*` فقط**، فتظل ملفات الإصدار ثابتة وتطابق البصمات المسجّلة؛ الدفع إلى `main` يبني ويتحقق دون أن يستبدل ملفات إصدار قديم. مهمة أندرويد تحتاج سرًّا اسمه `ANDROID_SUBMODULE_TOKEN` (fine-grained PAT بصلاحية Contents: read على مستودع أندرويد) لأن المستودع خاص؛ بدونه تُتخطى المهمة بتحذير بدل أن تفشل.
+> AppImage يحتاج `libfuse2` على بعض التوزيعات، أو شغّله بـ `--appimage-extract-and-run`. توزيعات musl مثل Alpine: استخدم `--cli` أو Flatpak.
 
-## تطبيق أندرويد (Android) 📱
+## البناء من المصدر
 
-يتوفر للمشروع تطبيق أندرويد أصلي ومستقل في المجلد [`android/`](android/) ومستودع خاص به على GitHub:
-- **المستودع المستقل**: [`zeiad6/zeidex-convert-android`](https://github.com/zeiad6/zeidex-convert-android)
-- **التقنيات**: مبني بلغة **Kotlin 2.0** وواجهات **Jetpack Compose (Material 3)**.
-- **الإصدار الحالي**: **v1.2.0** (حزمة موقّعة رسمياً ومكتفية ذاتياً).
-- **الميزات الأساسية**:
-  - **واجهة عصرية وبسيطة**: بطاقات اختيار سريعة وإزالة واجهة العجلة لتحسين تجربة الاستخدام وسرعة الأداء.
-  - **تطبيق أندرويد مستقل واحترافي (v1.2.0)**:
-    - **تنزيل أحدث حزمة موقعة رسمياً**: [zeidex-convert-v1.2.0.apk](https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.1.0/zeidex-convert-v1.2.0.apk) — البصمة `3e394fc8…` والمفتاح `d24bf9df…`، وهي نفس القيم المثبتة في سجل التحديثات. النسخة المرفوعة في مستودع أندرويد تحمل توقيعاً مختلفاً (`fb4994b5…`) ولا يمكن تحديثها فوق هذه؛ التفاصيل في [`android/RELEASING.md`](android/RELEASING.md).
-    - **مستودع المشروع المخصص للأندرويد**: [zeiad6/zeidex-convert-android](https://github.com/zeiad6/zeidex-convert-android)
-    - **إصلاح استخراج فيديو الصور الحية**: دعم كامل لكافة أجهزة Google Pixel و Samsung Galaxy و Xiaomi و Apple Live Photo (.livp وحزم ZIP وملفات MOV المدمجة) بـ 6 استراتيجيات ثنائية دقيقة.
-    - **إشعار النظام بمسار حفظ الملف المكتمل**: إشعار نظام فوري يحتوي على المسار الكامل للملف مع خيارات التشغيل والمشاركة الفورية.
-    - **إضافة صيغة MP4**: دعم استخراج وتحويل الصور الحية مباشرة إلى MP4، وإعادة تغليف الفيديو (remux) إلى MP4 دون إعادة ترميز.
-    - **أداة تحسين الجودة (بما تدعمه فعلياً)**:
-      - الفيديو: إعادة تغليف MP4 ومضاعفة نقاء المسار الصوتي AAC. التطبيق **لا** يكبّر الدقة ولا يرفع معدل البت، ويُظهر رسالة صريحة بذلك ويوجّه إلى تطبيق سطح المكتب (FFmpeg) عند طلب تكبير حقيقي.
-      - الصور: توضيح وحِدة التفاصيل بمصفوفة Laplacian، وموازنة التباين والألوان، وتصدير BMP و WEBP و PNG و JPG و PDF (دون تكبير مصطنع).
-      - **قص وتصغير**: نسب قص مركزية (1:1، 16:9، 4:3، 9:16) في الشاشة الرئيسية وفي شاشة الأدوات، ومقاسات جاهزة (عرض 1920px، عرض 1080px، 50%) مع فك ترميز بـ `inSampleSize` لتفادي استنزاف الذاكرة.
-    - **الحفظ التلقائي في ذاكرة الهاتف**: توجيه النتائج تلقائياً إلى مجلد مخصص `Download/ZeidexConvert/` مع مجلدات فرعية منظمة (`Images`, `Videos`, `Audio`, `PDF`, `Documents`, `Archives`, `LivePhotos`, `QR`) مع الفهرسة الفورية في معرض الصور ومستكشف ملفات النظام.
-    - **إصلاح استخراج الأرشيفات**: فك ضغط كامل لملفات ZIP و TAR و GZ مع تحقّق صارم من أن كل مسار داخل مجلد الهدف (حماية Zip-Slip)، وكتابة ذرّية لكل ناتج (ملف مرحلي مخفي ثم إعادة تسمية، وبلا كتابة فوق الموجود: `photo 2.jpg`).
-    - **استخراج الصوت من الفيديو**: محرك أصلي `MediaAudioExtractor` ينسخ المسار الصوتي كما هو إلى MP4/M4A (دون إعادة ترميز). تصدير MP3/WAV/FLAC/OGG غير مدعوم على أندرويد، ويُظهر التطبيق رسالة صريحة بذلك بدل إنشاء ملف بامتداد مضلّل.
-    - **إعدادات الضغط المتقدمة**: التحكم بنسبة جودة الضغط (10% - 100%) وتحديد الدقة القصوى (1080p, 720p, 480p).
-    - **التحديثات التلقائية والتحقق من التوقيع الرقمي**: كشف التحديثات تلقائياً من موقع `zeidexsoft.com` ومستودع GitHub مع التحقق الصارم من التوقيع الرقمي وبصمة شهادة المطور SHA-256 لحماية المستخدم من أي حزم معدلة.
-    - **التنفيذ بالخلفية وإشعارات التقدم**: خدمة أمامية `ConversionForegroundService` مع إشعار دائم يُظهر نسبة التقدم وإمكانية الإيقاف والاستئناف.
-    - **معلومات المطور والدعم**: بطاقة تعريفية بالمطور **Zeidexsoft** ورابط [المطور](https://zeidexlink.zeidexsoft.com/zeidex)، وزر تبرع بطرق الدفع المتاحة في `zeidexsoft.com` (بطاقات بنكية، PayPal، عملات رقمية USDT TRC20/BTC، تحويل بنكي).
-    - **أيقونة عصرية محسنة**: خلفية تقنية داكنة فخمة مع أسهم التحويل المتوهجة ورمز Z المركزي.
-    - **دعم ثنائي كامل**: دعم كامل للغتين العربية والإنجليزية لجميع الواجهات والرسائل.
+```bash
+# المتطلّبات: Rust 1.80+، Node 22+، واعتماديات Tauri (webkit2gtk-4.1 على لينكس)
+git clone https://github.com/zeiad6/zeidexfileconventer.git
+cd zeidexfileconventer
 
-## نظام التحديثات الموحد والتحقق من التوقيع 🛡️
+bash packaging/fetch-engines.sh      # لينكس وماك
+./packaging/fetch-engines.ps1        # ويندوز
 
-يتضمن المشروع سجلاً موحداً للتحديثات `packaging/updates/manifest.json` للحزم المنشورة فعلاً (أندرويد، ويندوز، لينكس)، مرتبطاً بموقع `zeidexsoft.com`. لا يُضاف سطر إلى السجل إلا بعد وجود ملف منشور وبصمة SHA-256 حقيقية له:
-- فحص الإصدارات الجديدة وقراءة سجل التغييرات ثنائي اللغة (العربية والإنجليزية).
-- التحقق التلقائي من بصمات التجزئة SHA-256 والتوقيعات الرقمية المعتمدة لكل حزمة قبل التثبيت.
-- يمكن فحص الحزم وسجل تواقيعها عبر أداة سطر الأوامر:
-  ```bash
-  zeidex-convert update
-  ```
-
-## البنية
-
-```
-crates/core   منطق نقي: الصيغ، الأدوات، التخطيط (argv)، التنفيذ، PDF writer، SRT/VTT
-crates/cli    zeidex-convert
-app/src-tauri النوافذ، الـ tray، كشف السحب (Win32 poll على Windows وrdev على X11)، خلفية Mica/Acrylic، أوامر IPC
-app/src       واجهة React 19 + TypeScript + Tailwind v4 + Framer Motion: العجلة، الدائرة، الرئيسية، المهام، المحرر
-app/ui-dist   ناتج Vite الذي يحزمه Tauri (خمس صفحات: home, wheel, shelf, jobs, editor)
-specs/        مواصفات clean-room بصيغة EARS
-packaging/    جلب المحرّكات و smoke test
+cd app && npm ci && npm run build && cd ..
+cargo build --release -p zeidex-cli  # سطر الأوامر
+cd app && npx tauri build            # الحزم المكتبية
 ```
 
-## القيود الحالية
+الاختبارات: `cargo test --workspace`، `npm test` في `app/`، و`gradle :app:testDebugUnitTest` في `android/`.
 
-- قراءة تحديد مدير الملفات مباشرة على Linux: لا توجد واجهة موحّدة، لذا يعتمد الاختصار هناك على الملفات المنسوخة بـ Ctrl+C.
-- كشف الوجوه يلتقط الوجوه الأمامية فقط (مصنّف Haar)، ويعمل على الصور. للفيديو استخدم مربعات يدوية مع فترة زمنية.
-- GIF المتحرك يُعالَج كإطار واحد في أدوات الصور.
+## المعمار
 
-## الترخيص
+```
+crates/core      النواة: التخطيط والتنفيذ والتحقق، بلا أي تبعية خارجية
+crates/cli       سطر الأوامر zeidex-convert (doctor، convert، watch، update)
+crates/localdrop نقل الملفات على الشبكة المحلية
+app/src-tauri    تطبيق Tauri: الأوامر، النوافذ، عجلة السحب
+app/src          واجهة React 19 + TypeScript + Tailwind v4
+android/         تطبيق أندرويد Kotlin + Compose (مستودع فرعي)
+packaging/       المحرّكات، حزم لينكس، Flatpak، سجل التحديثات
+```
 
-لم يُختر ترخيص للمشروع بعد.
-FFmpeg المضمَّن بنسخة GPL، و Ghostscript بترخيص AGPL. عند التوزيع يلزم الالتزام بشروطهما، وأولها توفير المصدر.
-مصنّف الوجوه `crates/core/data/haarcascade_frontalface_default.xml` من OpenCV بترخيص Intel License Agreement (نصّه في رأس الملف).
+## الخصوصية
+
+- لا يفتح التطبيق أي اتصال شبكي إلا عند فحص التحديثات أو استخدام LocalDrop على شبكتك المحلية.
+- لا تحليلات ولا تتبّع ولا معرّفات.
+- إزالة EXIF/GPS خيار صريح في كل تحويل صور.
+- التحديثات تُقبل فقط إذا طابقت SHA-256 **وشهادة التوقيع** المثبّتة في التطبيق.
+
+## المطوّر
+
+<table>
+  <tr>
+    <td width="96" align="center">
+      <img src="docs/assets/logo.svg" width="72" height="72" alt="Zeidexsoft">
+    </td>
+    <td>
+      <b>Zeidexsoft</b> — تطوير تطبيقات محلية سريعة تحترم الخصوصية.<br>
+      المطوّر: <a href="https://github.com/zeiad6">@zeiad6</a> · الموقع: <a href="https://zeidexsoft.com">zeidexsoft.com</a> · بطاقة المطوّر: <a href="https://zeidexlink.zeidexsoft.com/zeidex">zeidexlink.zeidexsoft.com/zeidex</a>
+    </td>
+  </tr>
+</table>
+
+للدعم أو الاقتراحات: افتح [issue](https://github.com/zeiad6/zeidexfileconventer/issues) أو راسل المطوّر عبر [بطاقة المطوّر](https://zeidexlink.zeidexsoft.com/zeidex).
+
+## الرخصة
+
+[MIT](LICENSE) © 2026 Zeidexsoft. الكود مفتوح المصدر ومتاح للاستخدام التجاري والبيع داخل منتجك، مع الإبقاء على نص الترخيص. لا تُقدَّم أي ضمانات.
+
+---
+
+# English
+
+<p align="center">
+  <b>Convert anything, on your own machine.</b><br>
+  Drag a file, hold <kbd>Shift</kbd>, drop it on the format you want.
+</p>
+
+**Zeidex Convert** is a fully offline file converter and media processor for **Windows, macOS, Linux and Android**. Files are read from your disk and written to your disk — no uploads, no accounts, no queue. The desktop app is **Rust + Tauri 2** with a **React 19 / TypeScript / Tailwind v4** interface; the Android app is **Kotlin + Jetpack Compose**. FFmpeg, libvips, qpdf, Pandoc, 7-Zip, Ghostscript and Tesseract do the work locally.
+
+## Install
+
+```bash
+# Linux, one line: picks deb, rpm, AUR, Flatpak or AppImage for your distro
+curl -fsSL https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/packaging/linux/install.sh | sh
+```
+
+Every release publishes installers for each platform: **Windows** (`.msi` for Intune/Group Policy, `*-setup.exe` with per-user or per-machine install in English and Arabic), **Linux** (`.deb`, `.rpm`, `.AppImage`, `.flatpak`, plus an Arch `PKGBUILD`), **macOS** (DMG for Apple Silicon and Intel, unsigned — right-click → Open), and **Android** (APK). Standalone CLI archives ship alongside for Linux x64/arm64, macOS arm64 and Windows x64.
+
+The AppImage is the distro-independent Linux build. It is produced on Ubuntu 22.04 so it inherits glibc 2.35 and starts on Debian 12+, Ubuntu 22.04+, Fedora 36+, Mint 21+ and openSUSE 15.5+; musl distributions such as Alpine fall back to the CLI or Flatpak.
+
+## Build
+
+```bash
+bash packaging/fetch-engines.sh          # Linux/macOS engines
+./packaging/fetch-engines.ps1            # Windows
+cd app && npm ci && npm run build && cd ..
+cargo build --release -p zeidex-cli
+cd app && npx tauri build
+```
+
+Tests: `cargo test --workspace`, `npm test` (in `app/`), `gradle :app:testDebugUnitTest` (in `android/`).
+
+## Why it exists
+
+It is a clean-room rebuild of the idea behind Tangerine File Converter — a macOS-only app — extended with PDF↔DOCX, subtitle conversion, EXIF stripping, LocalDrop phone transfer, watch folders, and a CLI. No Tangerine binary was decompiled: only public store and website material was used, and the specification is in [`specs/tangerine_reverse_spec.md`](specs/tangerine_reverse_spec.md).
+
+## Features
+
+- **The wheel** — drop a file on 40+ format targets without opening the app; the ring appears while Shift is held.
+- **Images** — JPEG, PNG, WebP, AVIF, HEIC, TIFF, GIF, BMP, SVG, ICO and PDF, with aspect crops, resolution presets and lossless EXIF removal.
+- **Video and audio** — MP4, MKV, WebM, MOV, AVI, GIF, MP3, M4A, WAV; compress, trim, speed, rotate, join.
+- **Documents** — PDF ↔ DOCX, PDF → images, merge/split/reorder/rotate PDFs, Markdown, HTML, EPUB and DOCX through Pandoc.
+- **Subtitles** — SRT ↔ VTT ↔ ASS, plus local transcription with whisper.cpp.
+- **Privacy** — no uploads, no telemetry, optional GPS and metadata stripping.
+- **Shredder** — single or multi-pass secure delete.
+- **LocalDrop** — send files from the desktop to your phone over the local network with a QR pair, never through a server.
+- **Watch folders**, recipes, batch rename, and a floating shelf for staging files.
+- **Arabic and English** with full RTL, light and dark themes.
+
+## Layout
+
+```
+crates/core      planning, execution and verification; zero external dependencies
+crates/cli       zeidex-convert (doctor, convert, watch, update)
+crates/localdrop LAN transfer between the desktop app and Android
+app/src-tauri    Tauri commands, windows, the drag wheel
+app/src          React 19 + TypeScript + Tailwind v4
+android/         Kotlin + Compose app (git submodule)
+packaging/       engines, Linux packaging, Flatpak, update registry
+```
+
+## Developer
+
+**Zeidexsoft** — fast, local-first apps that respect your privacy.
+Maintainer: [@zeiad6](https://github.com/zeiad6) · Website: [zeidexsoft.com](https://zeidexsoft.com) · Developer card: [zeidexlink.zeidexsoft.com/zeidex](https://zeidexlink.zeidexsoft.com/zeidex)
+
+## License
+
+[MIT](LICENSE) © 2026 Zeidexsoft. Use it commercially, ship it inside a paid product, or resell it, provided the license notice is kept. No warranty.
