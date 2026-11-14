@@ -74,6 +74,7 @@ export function Home() {
   const [flashWatch, setFlashWatch] = useState(false);
   const [about, setAbout] = useState(false);
   const [donate, setDonate] = useState(false);
+  const [runError, setRunError] = useState('');
 
   const pathsRef = useRef(paths);
   pathsRef.current = paths;
@@ -93,9 +94,11 @@ export function Home() {
       return;
     }
     if (!it.params.length) {
-      void runJob(pathsRef.current, it.kind, it.id, it.preset ?? {});
+      setRunError('');
+      void runJob(pathsRef.current, it.kind, it.id, it.preset ?? {}).catch((e) => setRunError(String(e)));
       return;
     }
+    setRunError('');
     setForm(it);
   }, []);
 
@@ -118,6 +121,7 @@ export function Home() {
   const load = useCallback(
     async (next: string[]) => {
       if (!next.length) return;
+      setRunError('');
       const d = await describePaths(next);
       setPaths(next);
       setDesc(d);
@@ -358,6 +362,9 @@ export function Home() {
                   <p className="hint">{desc ? t('nothing') : ''}</p>
                 )}
               </div>
+              <p className="err run-error" id="runError" role="alert">
+                {runError}
+              </p>
               {form ? (
                 <ParamsForm
                   id="form"

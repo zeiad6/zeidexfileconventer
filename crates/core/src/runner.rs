@@ -403,7 +403,12 @@ fn probe(op: &Op, inputs: &[PathBuf]) -> Ctx {
                 ctx.inputs = inputs.iter().map_while(|p| probe_media(p)).collect();
             }
         }
-        Some(Category::Image) if matches!(op, Op::Crop(_) | Op::Background { .. }) => ctx.image = probe_image(src),
+        Some(Category::Image) if matches!(op, Op::Crop(_) | Op::Background { .. }) => {
+            // libvips reads the exact size and band count; without it FFprobe still supplies the
+            // pixel size, which is all a ratio crop or a padding calculation needs.
+            ctx.image = probe_image(src)
+                .or_else(|| probe_media(src).map(|m| ImageInfo { width: m.width, height: m.height, bands: 3 }))
+        }
         // Full-size render (the preview never upscales), so OCR boxes are already in source pixels.
         Some(Category::Image) => {
             if let Op::Redact { auto: Some(what), .. } = op {
@@ -464,6 +469,7 @@ fn parse_ffprobe(out: &str) -> MediaInfo {
                 in_video = t == "video" && !m.has_video;
                 m.has_video |= t == "video";
                 m.has_audio |= t == "audio";
+                m.has_subs |= t == "subtitle";
             }
             Some(("width", v)) if in_video => m.width = v.parse().unwrap_or(0),
             Some(("height", v)) if in_video => m.height = v.parse().unwrap_or(0),
@@ -1134,6 +1140,8 @@ mod tests {
         assert_eq!((m.width, m.height), (640, 360));
         assert!((m.fps - 29.97).abs() < 0.01);
         assert!(!parse_ffprobe("duration=N/A").has_audio);
+        assert!(parse_ffprobe("codec_type=video\ncodec_type=subtitle\n").has_subs);
+        assert!(!m.has_subs);
     }
 
     /// End to end without engines: subtitle conversion is built in.

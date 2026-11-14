@@ -1,6 +1,6 @@
 //! Multi-package update and cryptographic signature verification system.
-//! Supports automatic detection and verification of updates from zeidexsoft.com
-//! for all packages in the project (Android, Linux Flatpak/tar, Windows MSI, macOS DMG, CLI).
+//! Detects and verifies updates from zeidexsoft.com for every package the project ships:
+//! Android APK, Windows setup, Linux AppImage (x64/arm64) and macOS DMG (Intel/Apple Silicon).
 
 use crate::sha256;
 use std::fs::File;

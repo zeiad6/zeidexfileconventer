@@ -13,9 +13,10 @@
  */
 
 import { AnimatePresence, motion } from 'framer-motion';
-import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ParamsForm } from '../components/ParamsForm';
 import {
+  C,
   CHILD_R,
   DWELL_MS,
   HUB_R,
@@ -132,7 +133,9 @@ export function Wheel() {
   const openTimer = useRef<number | undefined>(undefined);
   const hideTimer = useRef<number | undefined>(undefined);
   const idleTimer = useRef<number | undefined>(undefined);
+  const errTimer = useRef<number | undefined>(undefined);
   const clickMode = useRef(false);
+  const [runError, setRunError] = useState('');
 
   const items = state.desc ? state.desc[state.mode] : [];
   const kids = state.open >= 0 && items[state.open] ? items[state.open].children ?? [] : [];
@@ -142,7 +145,14 @@ export function Wheel() {
     window.clearTimeout(openTimer.current);
     window.clearTimeout(hideTimer.current);
     window.clearTimeout(idleTimer.current);
+    window.clearTimeout(errTimer.current);
   };
+
+  const fail = useCallback((e: unknown) => {
+    setRunError(e instanceof Error ? e.message : String(e));
+    window.clearTimeout(errTimer.current);
+    errTimer.current = window.setTimeout(() => setRunError(''), IDLE_MS);
+  }, []);
 
   /** Hide the wheel when the pointer rests on it and nothing is picked for a while. */
   const bumpIdle = useCallback(() => {
@@ -180,14 +190,15 @@ export function Wheel() {
         void openEditor(s.paths, it.id);
         return;
       }
+      setRunError('');
       if (!it.params.length) {
-        void runJob(s.paths, it.kind, it.id, it.preset ?? {});
+        void runJob(s.paths, it.kind, it.id, it.preset ?? {}).catch(fail);
         return;
       }
       void keepWheel();
       dispatch({ type: 'form', choice: it });
     },
-    [],
+    [fail],
   );
 
   const chooseSub = useCallback((it: Choice, child: Sub) => {
@@ -197,8 +208,9 @@ export function Wheel() {
       return;
     }
     const opts = { ...(it.preset ?? {}), [child.key]: child.value };
-    void runJob(s.paths, it.kind, it.id, opts);
-  }, [choose]);
+    setRunError('');
+    void runJob(s.paths, it.kind, it.id, opts).catch(fail);
+  }, [choose, fail]);
 
   /** Which part of the wheel the pointer is on now, using the freshest description. */
   const hitOf = useCallback((pos: { x: number; y: number }): Hit => {
@@ -419,7 +431,10 @@ export function Wheel() {
     return t(state.mode);
   }, [state.centre, state.sub, state.hover, state.desc, state.mode, kids, items, t, zl]);
 
-  const closeForm = () => dispatch({ type: 'form', choice: null });
+  const closeForm = () => {
+    dispatch({ type: 'form', choice: null });
+    bumpIdle();
+  };
 
   return (
     <div className="relative select-none" style={{ width: WHEEL_PX, height: WHEEL_PX }}>
@@ -431,6 +446,20 @@ export function Wheel() {
         aria-label="Zeidex wheel: modes, choices and options"
         onDragStart={(e) => e.preventDefault()}
       >
+        <defs>
+          <radialGradient id="wheel-hub-fill">
+            <stop offset="0%" stopColor="var(--card)" />
+            <stop offset="100%" stopColor="var(--card)" stopOpacity="0.8" />
+          </radialGradient>
+        </defs>
+
+        {/* One quiet disc under the three bands keeps the labels readable over a busy desktop
+            and gives the hover accent a stable surface to sit on. */}
+        <motion.g initial={{ opacity: 0, scale: 0.94 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.18 }} style={ORIGIN}>
+        <circle cx={C} cy={C} r={234} className="wheel-disc" />
+        <circle cx={C} cy={C} r={ITEMS_R[1]} className="ring-line" />
+        <circle cx={C} cy={C} r={CHILD_R[1]} className="ring-line" />
+
         {/* Outer ring: the three modes. The current one is filled, a dwelled one is outlined. */}
         <g className="ring-modes">
           {MODES.map((m, i) => (
@@ -548,14 +577,21 @@ export function Wheel() {
           )}
 
         {/* Hub: cancel, plus the hovered choice as the caption. */}
-        <circle cx={240} cy={240} r={HUB_R} className={state.centre ? 'hub cancel' : 'hub'} />
-        <text x={240} y={232} className="cap" textAnchor="middle">
-          {shortLabel(caption, 20)}
+        <circle cx={C} cy={C} r={HUB_R} className={state.centre ? 'hub cancel' : 'hub'} />
+        <text x={C} y={230} className="cap" textAnchor="middle">
+          {shortLabel(caption, 18)}
         </text>
-        <text x={240} y={256} className="hub-x" textAnchor="middle">
+        <text x={C} y={256} className="hub-x" textAnchor="middle">
           {state.centre ? '✕' : '◎'}
         </text>
+        </motion.g>
       </svg>
+
+      {runError && (
+        <p className="wheel-err" role="alert" aria-live="assertive">
+          {runError}
+        </p>
+      )}
 
       <AnimatePresence>
         {state.form && (

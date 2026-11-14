@@ -8,7 +8,7 @@
 
 export const SIZE = 480;
 /** Rendered size of the popup wheel window; the viewBox stays 480 so the maths is unchanged. */
-export const WHEEL_PX = 380;
+export const WHEEL_PX = 344;
 export const SCALE = WHEEL_PX / SIZE;
 export const C = SIZE / 2;
 export const MODES_R = [186, 228] as const;
@@ -25,7 +25,7 @@ export const OPEN_MS = 260;
 /** Grace period after the drag leaves before the wheel hides. */
 export const LEAVE_MS = 900;
 /** A wheel nobody touches hides itself, so it never sits on top of other windows. */
-export const IDLE_MS = 4000;
+export const IDLE_MS = 3200;
 
 export function polar(r: number, angle: number): [number, number] {
   return [C + r * Math.cos(angle), C + r * Math.sin(angle)];

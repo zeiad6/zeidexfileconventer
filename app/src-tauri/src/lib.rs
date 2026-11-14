@@ -77,8 +77,30 @@ fn children_for(kind: &str, id: &str, params: &[ParamOut]) -> Vec<Sub> {
         return out;
     }
     if kind == "tool" && !params.is_empty() {
+        // A segment must be runnable as it stands. Empty defaults (a watermark path, a password)
+        // and an adjust run where every value is already neutral would be rejected by `Op::parse`,
+        // so those only offer the form, where the user can type the missing value.
+        let runnable = |p: &ParamOut| {
+            if p.default.trim().is_empty() {
+                return false;
+            }
+            !(id == "adjust"
+                && matches!(
+                    (p.key, p.default),
+                    ("brightness", "0")
+                        | ("contrast", "1")
+                        | ("saturation", "1")
+                        | ("gamma", "1")
+                        | ("hue", "0")
+                        | ("sharpen", "0")
+                        | ("denoise", "0")
+                        | ("grain", "0")
+                        | ("clarity", "0")
+                ))
+        };
         let mut out: Vec<Sub> = params
             .iter()
+            .filter(|p| runnable(p))
             .map(|p| Sub {
                 key: p.key.into(),
                 value: p.default.into(),
@@ -1152,6 +1174,7 @@ pub fn run() {
                 app,
                 &[
                     &MenuItem::with_id(app, "home", "Open Zeidex", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "toggle", "Show / hide Zeidex", true, None::<&str>)?,
                     &MenuItem::with_id(app, "shelf", "Show / hide drop orb", true, None::<&str>)?,
                     &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
                 ],
@@ -1160,6 +1183,15 @@ pub fn run() {
                 TrayIconBuilder::with_id("main").tooltip("Zeidex Convert").menu(&menu).on_menu_event(|app, event| {
                     match event.id.as_ref() {
                         "home" => show(app, "home"),
+                        "toggle" => {
+                            if let Some(w) = app.get_webview_window("home") {
+                                if w.is_visible().unwrap_or(false) {
+                                    let _ = w.hide();
+                                } else {
+                                    show(app, "home");
+                                }
+                            }
+                        }
                         "shelf" => {
                             if let Some(w) = app.get_webview_window("shelf") {
                                 let _ = if w.is_visible().unwrap_or(false) { w.hide() } else { w.show() };
@@ -1225,4 +1257,65 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Zeidex Convert");
+}
+
+/// The custom title bar reaches the OS through the JS Window API, and Tauri denies every plugin
+/// command a capability does not grant. `core:window:default` ships getters plus
+/// `internal-toggle-maximize` only, so each mutating call needs its own permission or the button
+/// silently does nothing in a packaged build. These tests fail when one is dropped.
+#[cfg(test)]
+mod capability_tests {
+    use std::collections::BTreeSet;
+
+    const CAPABILITY: &str = include_str!("../capabilities/default.json");
+
+    /// One entry per title-bar control in `home/Home.tsx`, plus the resize strips.
+    const REQUIRED_WINDOW_PERMISSIONS: [&str; 4] = [
+        "core:window:allow-close",                 // #winClose -> appWindow().close()
+        "core:window:allow-minimize",              // #winMin -> appWindow().minimize()
+        "core:window:allow-toggle-maximize",       // #winMax -> appWindow().toggleMaximize()
+        "core:window:allow-start-resize-dragging", // resize strips -> startResizeDragging()
+    ];
+
+    fn capability() -> serde_json::Value {
+        serde_json::from_str(CAPABILITY).expect("capabilities/default.json is not valid JSON")
+    }
+
+    fn granted(capability: &serde_json::Value) -> BTreeSet<&str> {
+        capability["permissions"]
+            .as_array()
+            .expect("capability has no `permissions` array")
+            .iter()
+            .map(|p| p.as_str().expect("permission entries are strings"))
+            .collect()
+    }
+
+    #[test]
+    fn titlebar_window_controls_are_permitted() {
+        let capability = capability();
+        let granted = granted(&capability);
+        let missing: Vec<&str> =
+            REQUIRED_WINDOW_PERMISSIONS.into_iter().filter(|permission| !granted.contains(permission)).collect();
+        assert!(
+            missing.is_empty(),
+            "capabilities/default.json is missing {missing:?}; the matching title-bar buttons \
+             are denied at runtime and do nothing"
+        );
+    }
+
+    #[test]
+    fn capability_applies_to_the_home_window() {
+        let capability = capability();
+        let windows: Vec<&str> = capability["windows"]
+            .as_array()
+            .expect("capability has no `windows` array")
+            .iter()
+            .map(|w| w.as_str().expect("window entries are strings"))
+            .collect();
+        assert!(
+            windows.contains(&"home"),
+            "capabilities/default.json does not apply to the `home` window, so its title-bar \
+             permissions are never used; windows = {windows:?}"
+        );
+    }
 }

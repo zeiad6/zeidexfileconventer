@@ -265,7 +265,12 @@ fn bundle_dirs() -> Vec<PathBuf> {
     let mut all = Vec::new();
     for d in dirs {
         if let Ok(rd) = d.read_dir() {
-            all.extend(rd.flatten().map(|e| e.path().join("bin")));
+            for e in rd.flatten() {
+                // Two layouts travel: `<engine>/bin` (most releases) and
+                // `<engine>/Library/bin` (conda-built Ghostscript on Windows).
+                all.push(e.path().join("bin"));
+                all.push(e.path().join("Library").join("bin"));
+            }
         }
         all.push(d);
     }

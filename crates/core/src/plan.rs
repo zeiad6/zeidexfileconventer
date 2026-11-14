@@ -15,6 +15,7 @@ pub struct MediaInfo {
     pub duration: f64,
     pub has_video: bool,
     pub has_audio: bool,
+    pub has_subs: bool,
     pub width: u32,
     pub height: u32,
     pub fps: f64,
@@ -189,11 +190,18 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
                 let out = tmp.join(format!("clean.{from}"));
                 s.push(run(Tool::ExifTool, args!["-q", "-all=", "-o", &out, "--", src]));
                 (out, named(&stem, "clean", &from))
-            } else if is(Category::Image) && from != "bmp" && from != "svg" {
+            } else if is(Category::Image) && from != "svg" && (ctx.vips || FFMPEG_STILL.contains(&from.as_str())) {
                 let out = tmp.join(format!("clean.{from}"));
-                let opts = if from == "jpg" { "[Q=95,strip]" } else { "[strip]" };
-                let input = image_src(src, &from, tmp, &mut s);
-                s.push(run(Tool::Vips, args!["copy", &input, suffixed(&out, opts)]));
+                if ctx.vips && from != "bmp" {
+                    let opts = if from == "jpg" { "[Q=95,strip]" } else { "[strip]" };
+                    let input = image_src(src, &from, tmp, &mut s);
+                    s.push(run(Tool::Vips, args!["copy", &input, suffixed(&out, opts)]));
+                } else {
+                    // Re-encoding drops EXIF/XMP just as well; `-map_metadata -1` is the explicit
+                    // switch, and the still encoder keeps the pixels lossless where it can.
+                    let q = if from == "jpg" { Some(95) } else { None };
+                    ffmpeg_still(src, &out, &from, q, None, &mut s);
+                }
                 (out, named(&stem, "clean", &from))
             } else if av {
                 let to = av_out_ext(&from, cat);
@@ -308,26 +316,44 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             &stem,
         ),
         Op::WebSet if is(Category::Image) => {
+            if !ctx.vips && !FFMPEG_STILL.contains(&from.as_str()) {
+                return Err(Error::Unsupported(format!(
+                    "web-set cannot read .{from} without libvips; convert it to jpg or png first"
+                )));
+            }
             let dir = tmp.join("web");
             s.push(Step::MkDir(dir.clone()));
-            let input = image_src(src, &from, tmp, &mut s);
+            let input = if ctx.vips { image_src(src, &from, tmp, &mut s) } else { src.to_path_buf() };
             let source_w = ctx.dims.map_or(u32::MAX, |(w, _)| w);
             let mut widths: Vec<u32> = WEB_WIDTHS.iter().copied().filter(|w| *w <= source_w).collect();
             if widths.is_empty() {
                 widths.push(source_w);
             }
-            let srcset = |ext: &str, opts: &str, s: &mut Vec<Step>| {
+            let vips = ctx.vips;
+            let srcset = |ext: &str, quality: u8, s: &mut Vec<Step>| {
                 let mut set = Vec::new();
                 for w in &widths {
                     let file = format!("{stem}-{w}.{ext}");
-                    let dst = suffixed(&dir.join(&file), opts);
-                    s.push(run(Tool::Vips, args!["thumbnail", &input, dst, w.to_string(), "--size", "down"]));
+                    let dst = dir.join(&file);
+                    if vips {
+                        let opts = match ext {
+                            "avif" => "[Q=55,strip]".to_string(),
+                            "webp" => "[Q=80,strip]".to_string(),
+                            _ => "[strip]".to_string(),
+                        };
+                        s.push(run(Tool::Vips, args!["thumbnail", &input, suffixed(&dst, &opts), w.to_string(), "--size", "down"]));
+                    } else {
+                        // `-2` keeps the aspect ratio and rounds the height to an even number,
+                        // which is what the AV1 and WebP encoders need.
+                        let vf = format!("scale={w}:-2");
+                        ffmpeg_still(&input, &dst, ext, Some(quality), Some(&vf), s);
+                    }
                     set.push(format!("{file} {w}w"));
                 }
                 set.join(", ")
             };
-            let avif = srcset("avif", "[Q=55,strip]", &mut s);
-            let webp = srcset("webp", "[Q=80,strip]", &mut s);
+            let avif = srcset("avif", 55, &mut s);
+            let webp = srcset("webp", 80, &mut s);
             let fallback = format!("{stem}-{}.webp", widths[widths.len() / 2]);
             let html = format!(
                 "<picture>\n  <source type=\"image/avif\" srcset=\"{avif}\" sizes=\"100vw\">\n  \
@@ -338,7 +364,7 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             (dir, format!("{stem} web"))
         }
         Op::Dehaze { strength } if is(Category::Image) => {
-            let (input, to) = ffmpeg_image_input(src, &from, tmp, &mut s);
+            let (input, to) = ffmpeg_image_input(src, &from, tmp, &mut s, ctx.vips);
             let (raw_in, raw_out) = (tmp.join("in.ppm"), tmp.join("out.ppm"));
             let out = tmp.join(format!("dehazed.{to}"));
             s.push(run(
@@ -459,32 +485,40 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             _ => return Err(unsupported("Rotate", &from)),
         },
         Op::Background { rgb, padding } if is(Category::Image) => {
-            let info = ctx.image.ok_or_else(|| Error::Unsupported("could not read the image size".into()))?;
             let [r, g, b] = *rgb;
-            let bg = match info.bands {
-                1 => format!("{}", (r as u32 + g as u32 + b as u32) / 3),
-                2 => format!("{} 255", (r as u32 + g as u32 + b as u32) / 3),
-                4 => format!("{r} {g} {b} 255"),
-                _ => format!("{r} {g} {b}"),
-            };
-            let (input, out, to) = image_io(src, &from, tmp, "framed", &mut s);
             let p = *padding;
-            s.push(run(
-                Tool::Vips,
-                args![
-                    "embed",
-                    &input,
-                    &out,
-                    p.to_string(),
-                    p.to_string(),
-                    (info.width + 2 * p).to_string(),
-                    (info.height + 2 * p).to_string(),
-                    "--extend",
-                    "background",
-                    "--background",
-                    bg
-                ],
-            ));
+            let (out, to) = if ctx.vips {
+                let info = ctx.image.ok_or_else(|| Error::Unsupported("could not read the image size".into()))?;
+                let bg = match info.bands {
+                    1 => format!("{}", (r as u32 + g as u32 + b as u32) / 3),
+                    2 => format!("{} 255", (r as u32 + g as u32 + b as u32) / 3),
+                    4 => format!("{r} {g} {b} 255"),
+                    _ => format!("{r} {g} {b}"),
+                };
+                let (input, out, to) = image_io(src, &from, tmp, "framed", &mut s);
+                s.push(run(
+                    Tool::Vips,
+                    args![
+                        "embed",
+                        &input,
+                        &out,
+                        p.to_string(),
+                        p.to_string(),
+                        (info.width + 2 * p).to_string(),
+                        (info.height + 2 * p).to_string(),
+                        "--extend",
+                        "background",
+                        "--background",
+                        bg
+                    ],
+                ));
+                (out, to)
+            } else {
+                let (_input, out, to) = image_io_ffmpeg(src, &from, tmp, "framed");
+                let pad = format!("pad=w=iw+{}:h=ih+{}:x={p}:y={p}:color=0x{r:02X}{g:02X}{b:02X}", 2 * p, 2 * p);
+                ffmpeg_still(src, &out, to, None, Some(&pad), &mut s);
+                (out, to)
+            };
             (out, named(&stem, "framed", to))
         }
         Op::Grayscale if is(Category::Image) => {
@@ -506,46 +540,51 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             (out, "images.pdf".into())
         }
         Op::Collage { across, gap } => {
-            let mut cells = Vec::new();
-            for (i, img) in inputs.iter().enumerate() {
-                let f = ext_of(img).unwrap_or_default();
-                let input = image_src(img, &f, tmp, &mut s);
-                let cell = format!("c{i}.jpg");
-                s.push(run(
-                    Tool::Vips,
-                    args![
-                        "thumbnail",
-                        &input,
-                        suffixed(&tmp.join(&cell), "[background=255]"),
-                        "800",
-                        "--height",
-                        "800"
+            let out = tmp.join("collage.jpg");
+            if ctx.vips {
+                let mut cells = Vec::new();
+                for (i, img) in inputs.iter().enumerate() {
+                    let f = ext_of(img).unwrap_or_default();
+                    let input = image_src(img, &f, tmp, &mut s);
+                    let cell = format!("c{i}.jpg");
+                    s.push(run(
+                        Tool::Vips,
+                        args![
+                            "thumbnail",
+                            &input,
+                            suffixed(&tmp.join(&cell), "[background=255]"),
+                            "800",
+                            "--height",
+                            "800"
+                        ],
+                    ));
+                    cells.push(cell);
+                }
+                // Relative names + cwd: vips splits the image list on spaces, and tmp may contain some.
+                s.push(Step::Run {
+                    tool: Tool::Vips,
+                    args: args![
+                        "arrayjoin",
+                        cells.join(" "),
+                        "collage.jpg[Q=90]",
+                        "--across",
+                        across.to_string(),
+                        "--shim",
+                        gap.to_string(),
+                        "--background",
+                        "255 255 255",
+                        "--halign",
+                        "centre",
+                        "--valign",
+                        "centre"
                     ],
-                ));
-                cells.push(cell);
+                    cwd: Some(tmp.to_path_buf()),
+                    progress_secs: None,
+                });
+            } else {
+                collage_ffmpeg(inputs, *across, *gap, tmp, &out, &mut s)?;
             }
-            // Relative names + cwd: vips splits the image list on spaces, and tmp may contain some.
-            s.push(Step::Run {
-                tool: Tool::Vips,
-                args: args![
-                    "arrayjoin",
-                    cells.join(" "),
-                    "collage.jpg[Q=90]",
-                    "--across",
-                    across.to_string(),
-                    "--shim",
-                    gap.to_string(),
-                    "--background",
-                    "255 255 255",
-                    "--halign",
-                    "centre",
-                    "--valign",
-                    "centre"
-                ],
-                cwd: Some(tmp.to_path_buf()),
-                progress_secs: None,
-            });
-            (tmp.join("collage.jpg"), "collage.jpg".into())
+            (out, "collage.jpg".into())
         }
         Op::Ocr { to, lang } => {
             let input = match cat {
@@ -609,6 +648,7 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
                 duration: 0.0,
                 has_video: is(Category::Video),
                 has_audio: true,
+                has_subs: false,
                 ..MediaInfo::default()
             });
             let mut a = ffmpeg_in(src);
@@ -633,6 +673,9 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             (out, named(&stem, &format!("frame-{}s", *at as u64), "png"))
         }
         Op::ExtractAudio if is(Category::Video) => {
+            if ctx.media.as_ref().is_some_and(|m| !m.has_audio) {
+                return Err(Error::Unsupported(format!("{stem} has no audio track to extract")));
+            }
             let out = tmp.join("audio.mp3");
             let mut a = ffmpeg_in(src);
             a.extend(encode_args("mp3"));
@@ -802,7 +845,7 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             visual_filter(src, &from, cat, &graph, "adjusted", ctx, tmp, &mut s, &stem)
         }
         Op::Overlay { png, width, height } if is(Category::Image) => {
-            let (input, to) = ffmpeg_image_input(src, &from, tmp, &mut s);
+            let (input, to) = ffmpeg_image_input(src, &from, tmp, &mut s, ctx.vips);
             let out = tmp.join(format!("annotated.{to}"));
             let mut a = ffmpeg_in(&input);
             a.extend(args![
@@ -851,7 +894,7 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             let (input, to) = if video {
                 (src.to_path_buf(), av_out_ext(&from, cat))
             } else {
-                ffmpeg_image_input(src, &from, tmp, &mut s)
+                ffmpeg_image_input(src, &from, tmp, &mut s, ctx.vips)
             };
             let out = tmp.join(format!("watermarked.{to}"));
             let mut a = ffmpeg_in(&input);
@@ -872,6 +915,9 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             (out, named(&stem, "shifted", &from))
         }
         Op::ExtractSubs if is(Category::Video) => {
+            if ctx.media.as_ref().is_some_and(|m| !m.has_subs) {
+                return Err(Error::Unsupported(format!("{stem} has no subtitle track to extract")));
+            }
             let out = tmp.join("subs.srt");
             let mut a = ffmpeg_in(src);
             a.extend(args!["-map", "0:s:0", "-c:s", "srt", &out]);
@@ -990,7 +1036,7 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             let fade = (secs / 6.0).min(0.5);
             for (i, img) in inputs.iter().enumerate() {
                 let f = ext_of(img).unwrap_or_default();
-                let (input, _) = ffmpeg_image_input(img, &f, tmp, &mut s);
+                let (input, _) = ffmpeg_image_input(img, &f, tmp, &mut s, ctx.vips);
                 a.extend(args!["-loop", "1", "-t", format!("{secs}"), "-i", &input]);
                 graph.push(format!(
                     "[{i}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=30,format=yuv420p,\
@@ -1058,21 +1104,25 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             let model = ctx.rembg_model.clone().ok_or_else(|| {
                 Error::Unsupported("background removal needs rembg and a local u2net.onnx model (see Engines)".into())
             })?;
-            let (input, _) = ffmpeg_image_input(src, &from, tmp, &mut s);
+            let (input, _) = ffmpeg_image_input(src, &from, tmp, &mut s, ctx.vips);
             let cut = tmp.join("cutout.png");
             // u2net_custom + an explicit model path: rembg loads the file and never downloads.
             let extras = format!("{{\"model_path\": {}}}", json_string(&model.to_string_lossy()));
             s.push(run(Tool::Rembg, args!["i", "-m", "u2net_custom", "-x", extras, &input, &cut]));
             if to == "webp" {
                 let out = tmp.join("cutout.webp");
-                s.push(run(Tool::Vips, args!["copy", &cut, suffixed(&out, "[Q=90]")]));
+                if ctx.vips {
+                    s.push(run(Tool::Vips, args!["copy", &cut, suffixed(&out, "[Q=90]")]));
+                } else {
+                    ffmpeg_still(&cut, &out, "webp", Some(90), None, &mut s);
+                }
                 (out, named(&stem, "no-bg", "webp"))
             } else {
                 (cut, named(&stem, "no-bg", "png"))
             }
         }
         Op::Icon if is(Category::Image) => {
-            let (input, _) = ffmpeg_image_input(src, &from, tmp, &mut s);
+            let (input, _) = ffmpeg_image_input(src, &from, tmp, &mut s, ctx.vips);
             let mut pngs = Vec::new();
             for size in ICON_SIZES {
                 let png = tmp.join(format!("i{size}.png"));
@@ -1276,7 +1326,7 @@ fn upscale(
     let shrink = (scale != native)
         .then(|| format!("scale=trunc(iw*{scale}/{native}/2)*2:trunc(ih*{scale}/{native}/2)*2:flags=lanczos"));
     if !video {
-        let (input, _) = ffmpeg_image_input(src, from, tmp, s);
+        let (input, _) = ffmpeg_image_input(src, from, tmp, s, ctx.vips);
         let png = tmp.join("upscale-in.png");
         let mut a = ffmpeg_in(&input);
         a.extend(args!["-frames:v", "1", &png]);
@@ -1356,14 +1406,19 @@ fn json_string(s: &str) -> String {
 
 /// Image path FFmpeg decodes reliably, and the extension to write. HEIC/AVIF/SVG/WebP go
 /// through libvips first because FFmpeg's support for them as stills is patchy.
-fn ffmpeg_image_input(src: &Path, from: &str, tmp: &Path, s: &mut Vec<Step>) -> (PathBuf, &'static str) {
+fn ffmpeg_image_input(src: &Path, from: &str, tmp: &Path, s: &mut Vec<Step>, vips: bool) -> (PathBuf, &'static str) {
     if ["jpg", "png", "bmp", "tiff"].contains(&from) {
         return (src.to_path_buf(), if from == "jpg" { "jpg" } else { "png" });
     }
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let png = tmp.join(format!("decoded{}.png", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
-    let decoded = image_src(src, from, tmp, s);
-    s.push(run(Tool::Vips, args!["copy", &decoded, &png]));
+    if vips {
+        let decoded = image_src(src, from, tmp, s);
+        s.push(run(Tool::Vips, args!["copy", &decoded, &png]));
+    } else {
+        // FFmpeg decodes WebP, AVIF, GIF, TIFF and the common camera formats on its own.
+        ffmpeg_still(src, &png, "png", None, None, s);
+    }
     (png, "png")
 }
 
@@ -1381,8 +1436,11 @@ fn visual_filter(
     stem: &str,
 ) -> (PathBuf, String) {
     let video = cat == Some(Category::Video);
-    let (input, to) =
-        if video { (src.to_path_buf(), av_out_ext(from, cat)) } else { ffmpeg_image_input(src, from, tmp, s) };
+    let (input, to) = if video {
+        (src.to_path_buf(), av_out_ext(from, cat))
+    } else {
+        ffmpeg_image_input(src, from, tmp, s, ctx.vips)
+    };
     let out = tmp.join(format!("{tag}.{to}"));
     let mut a = ffmpeg_in(&input);
     a.extend(args!["-filter_complex", graph, "-map", "[v]"]);
@@ -1612,6 +1670,50 @@ fn images_to_jpegs(inputs: &[PathBuf], tmp: &Path, s: &mut Vec<Step>, vips: bool
             jpg
         })
         .collect()
+}
+
+/// FFmpeg-only collage: each input is letterboxed onto an 800x800 white tile, then the tiles are
+/// placed on a grid with `xstack`. This keeps the collage tool working when libvips is absent.
+fn collage_ffmpeg(
+    inputs: &[PathBuf],
+    across: u32,
+    gap: u32,
+    tmp: &Path,
+    out: &Path,
+    s: &mut Vec<Step>,
+) -> crate::Result<()> {
+    if inputs.is_empty() {
+        return Err(Error::Unsupported("collage needs at least one image".into()));
+    }
+    const CELL: u32 = 800;
+    let mut tiles = Vec::new();
+    for (i, img) in inputs.iter().enumerate() {
+        let tile = tmp.join(format!("tile{i}.jpg"));
+        let vf = format!(
+            "scale={CELL}:{CELL}:force_original_aspect_ratio=decrease,\
+             pad={CELL}:{CELL}:(ow-iw)/2:(oh-ih)/2:color=white"
+        );
+        ffmpeg_still(img, &tile, "jpg", Some(90), Some(&vf), s);
+        tiles.push(tile);
+    }
+    if tiles.len() == 1 {
+        s.push(Step::Copy { src: tiles.remove(0), dst: out.to_path_buf() });
+        return Ok(());
+    }
+    let step = CELL + gap;
+    let layout: Vec<String> = tiles
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("{}_{}", (i as u32 % across) * step, (i as u32 / across) * step))
+        .collect();
+    let mut a = args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error"];
+    for tile in &tiles {
+        a.extend(args!["-i", tile]);
+    }
+    let graph = format!("xstack=inputs={}:layout={}:fill=white", tiles.len(), layout.join("|"));
+    a.extend(args!["-filter_complex", graph, "-frames:v", "1", "-q:v", "3", out]);
+    s.push(run(Tool::Ffmpeg, a));
+    Ok(())
 }
 
 // ---------- audio / video ----------
@@ -2398,6 +2500,7 @@ mod tests {
                 duration: d,
                 has_video: true,
                 has_audio: true,
+                has_subs: false,
                 width: 640,
                 height: 360,
                 fps: 25.0,
@@ -2489,9 +2592,32 @@ mod tests {
         assert!(argv(&p)[0].1.contains("scale='min(iw,800)'"));
 
         let sized = Ctx { vips: false, image: Some(ImageInfo { width: 400, height: 300, bands: 3 }), ..Ctx::default() };
-        let p = plan_of("crop", &[("box", "0,0,100,100")], &["/in/a.png"], sized).unwrap();
+        let p = plan_of("crop", &[("box", "0,0,100,100")], &["/in/a.png"], sized.clone()).unwrap();
         assert_eq!(argv(&p)[0].0, Tool::Ffmpeg);
         assert!(argv(&p)[0].1.contains("crop=100:100:0:0"));
+
+        let p = plan_of("crop", &[("ratio", "1:1")], &["/in/a.png"], sized.clone()).unwrap();
+        assert_eq!(argv(&p)[0].0, Tool::Ffmpeg);
+        assert!(argv(&p)[0].1.contains("crop=300:300"));
+
+        let p = plan_of("background", &[("color", "#ffffff"), ("padding", "8")], &["/in/a.png"], sized).unwrap();
+        assert_eq!(argv(&p)[0].0, Tool::Ffmpeg);
+        assert!(argv(&p)[0].1.contains("pad=w=iw+16:h=ih+16:x=8:y=8"));
+
+        let p = plan_of("collage", &[("across", "2"), ("gap", "16")], &["/in/a.png", "/in/b.png"], no_vips.clone())
+            .unwrap();
+        let cmds = argv(&p);
+        assert_eq!(cmds[0].0, Tool::Ffmpeg);
+        assert!(cmds.iter().any(|(_, a)| a.contains("xstack=inputs=2:layout=0_0|816_0")), "{cmds:?}");
+
+        let dims = Ctx { vips: false, dims: Some((2000, 1000)), ..Ctx::default() };
+        let p = plan_of("web-set", &[], &["/in/a.png"], dims).unwrap();
+        assert!(argv(&p).iter().all(|(t, _)| *t == Tool::Ffmpeg));
+        assert!(argv(&p).iter().any(|(_, a)| a.contains("scale=1600:-2")), "{:?}", argv(&p));
+
+        let p = plan_of("strip", &[], &["/in/a.jpg"], no_vips.clone()).unwrap();
+        assert_eq!(argv(&p)[0].0, Tool::Ffmpeg);
+        assert!(argv(&p)[0].1.contains("-map_metadata -1"));
 
         // Formats only libvips can write stay a clear error instead of a broken encode.
         let err = plan_of("to:heic", &[], &["/in/a.png"], no_vips).unwrap_err();
@@ -2500,6 +2626,42 @@ mod tests {
         // And with libvips present the preferred chain is unchanged.
         let p = plan_of("to:jpg", &[], &["/in/a.png"], Ctx::default()).unwrap();
         assert_eq!(argv(&p)[0].0, Tool::Vips);
+    }
+
+    /// A missing track is a clear error, not an FFmpeg exit code shown to the user.
+    #[test]
+    fn missing_tracks_are_named() {
+        let silent = Ctx {
+            media: Some(MediaInfo {
+                duration: 2.0,
+                has_video: true,
+                has_audio: false,
+                has_subs: false,
+                width: 320,
+                height: 240,
+                fps: 25.0,
+            }),
+            ..Ctx::default()
+        };
+        let err = plan_of("extract-audio", &[], &["/in/a.mp4"], silent.clone()).unwrap_err();
+        assert!(err.to_string().contains("no audio track"), "{err}");
+        let err = plan_of("extract-subs", &[], &["/in/a.mp4"], silent).unwrap_err();
+        assert!(err.to_string().contains("no subtitle track"), "{err}");
+
+        let with_subs = Ctx {
+            media: Some(MediaInfo {
+                duration: 2.0,
+                has_video: true,
+                has_audio: true,
+                has_subs: true,
+                width: 320,
+                height: 240,
+                fps: 25.0,
+            }),
+            ..Ctx::default()
+        };
+        let p = plan_of("extract-subs", &[], &["/in/a.mp4"], with_subs).unwrap();
+        assert!(argv(&p)[0].1.contains("-map 0:s:0"), "{:?}", argv(&p));
     }
 
     #[test]
@@ -2544,8 +2706,24 @@ mod tests {
         assert_eq!(p.name, "a-redacted.png");
 
         let clips = vec![
-            MediaInfo { duration: 2.0, has_video: true, has_audio: true, width: 1280, height: 720, fps: 30.0 },
-            MediaInfo { duration: 3.0, has_video: true, has_audio: false, width: 640, height: 480, fps: 25.0 },
+            MediaInfo {
+                duration: 2.0,
+                has_video: true,
+                has_audio: true,
+                has_subs: false,
+                width: 1280,
+                height: 720,
+                fps: 30.0,
+            },
+            MediaInfo {
+                duration: 3.0,
+                has_video: true,
+                has_audio: false,
+                has_subs: false,
+                width: 640,
+                height: 480,
+                fps: 25.0,
+            },
         ];
         let g = join_graph(&clips, true);
         assert!(g.contains("[1:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720"));
