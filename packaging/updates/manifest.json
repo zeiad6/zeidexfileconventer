@@ -5,7 +5,7 @@
   "official_website": "https://zeidexsoft.com",
   "developer_portal": "https://zeidexlink.zeidexsoft.com/zeidex",
   "manifest_version": 1,
-  "updated_at": "2026-11-16T21:26:42Z",
+  "updated_at": "2026-11-16T21:41:09Z",
   "packages": [
     {
       "id": "com.zeidex.convert",
@@ -17,7 +17,7 @@
       "release_date": "2026-11-16",
       "url": "https://github.com/zeiad6/zeidex-convert-android/releases/download/v1.3.0/zeidex-convert-v1.3.0.apk",
       "mirror_url": "https://zeidexsoft.com/downloads/zeidex-convert-v1.3.0.apk",
-      "sha256": "3e394fc8a47dd5cd2679460bbb86e4e012871a68cf5c573826ea8c480dc51448",
+      "sha256": "25620bd727d8db9506083a6de356357e1eedea1db79d45b62d6db1dc0c3cbfbc",
       "signing_key_id": "zeidex-release-key-2026",
       "signing_cert_sha256": "d24bf9dfb3f1b9acb0f48fb1940b3eacc3875cdb19e7869f4b1281fdecb9366e",
       "signature": "d24bf9dfb3f1b9acb0f48fb1940b3eacc3875cdb19e7869f4b1281fdecb9366e",
