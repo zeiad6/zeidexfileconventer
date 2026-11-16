@@ -142,7 +142,7 @@ export const COPY = {
   noFaces: ['No faces found.', 'لم يُعثر على وجوه.'],
   about: ['About', 'حول البرنامج'],
   aboutTitle: ['About Zeidex Convert', 'حول برنامج Zeidex Convert'],
-  developedBy: ['Developed by ZeidexSoft', 'تم تطويرة بواسطة ZeidexSoft'],
+  developedBy: ['Developed by ZeidexSoft', 'تم تطويره بواسطة ZeidexSoft'],
   developerLink: ['Developer Link', 'رابط المطور'],
   devWebsite: ['https://zeidexlink.zeidexsoft.com/zeidex', 'https://zeidexlink.zeidexsoft.com/zeidex'],
   officialSite: ['Official Website: zeidexsoft.com', 'الموقع الرسمي: zeidexsoft.com'],
@@ -150,7 +150,7 @@ export const COPY = {
     'A fast, fully offline file conversion and media processing powerhouse. Your files never leave your computer.',
     'منظومة سريعة وشاملة لتحويل ومعالجة الملفات والوسائط محلياً دون أي اتصال بالإنترنت، مع الحفاظ التام على سرية وخصوصية بياناتك.',
   ],
-  version: ['Version 0.1.0', 'الإصدار 0.1.0'],
+  version: ['Version', 'الإصدار'],
   visitDev: ['Visit Developer Profile', 'زيارة صفحة المطور (ZeidexLink)'],
   visitSite: ['Visit Website', 'زيارة الموقع الرسمي'],
   donate: ['Donate', 'تبرع'],
@@ -175,6 +175,17 @@ export const COPY = {
   copy: ['Copy', 'نسخ'],
   copied: ['Copied!', 'تم النسخ!'],
   close: ['Close', 'إغلاق'],
+  minimize: ['Minimize', 'تصغير'],
+  maximize: ['Maximize', 'تكبير'],
+  // rdev reports the same failure on macOS, where the cause is a missing permission, not Wayland.
+  hookOffMac: [
+    'Global keys need permission: System Settings → Privacy & Security → Accessibility, then enable Zeidex Convert and reopen it. Until then, drag files onto the orange orb.',
+    'المفاتيح العامة تحتاج إذناً: إعدادات النظام ← الخصوصية والأمان ← إمكانية الوصول، ثم فعّل Zeidex Convert وأعد فتحه. إلى ذلك الحين اسحب الملفات إلى الدائرة البرتقالية.',
+  ],
+  payRegion: ['Yemen / Regional', 'اليمن / إقليمي'],
+  payInstant: ['Instant Stars', 'نجوم فورية'],
+  payChain: ['Crypto / Blockchain', 'عملات رقمية / بلوكتشين'],
+  tonLabel: ['TON wallet:', 'محفظة TON:'],
   langSwitch: ['العربية', 'English'],
 } satisfies Record<string, Pair>;
 

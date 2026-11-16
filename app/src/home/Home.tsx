@@ -58,6 +58,8 @@ const RESIZE_STRIPS = ['North', 'South', 'East', 'West', 'NorthEast', 'NorthWest
 
 const base = (p: string) => p.split(/[\\/]/).pop() ?? p;
 
+const IS_MAC = /Mac/i.test(navigator.platform || navigator.userAgent);
+
 export function Home() {
   const { t, zl, toggle } = useI18n();
   const [paths, setPaths] = useState<string[]>([]);
@@ -231,16 +233,16 @@ export function Home() {
     <div className="studio">
       <header className="topbar" data-tauri-drag-region="">
         <div className="lights">
-          <button type="button" className="light close" id="winClose" aria-label="Close" title="Close" onClick={() => control('close')} />
-          <button type="button" className="light min" id="winMin" aria-label="Minimize" title="Minimize" onClick={() => control('minimize')} />
-          <button type="button" className="light max" id="winMax" aria-label="Maximize" title="Maximize" onClick={() => control('toggleMaximize')} />
+          <button type="button" className="light close" id="winClose" aria-label={t('close')} title={t('close')} onClick={() => control('close')} />
+          <button type="button" className="light min" id="winMin" aria-label={t('minimize')} title={t('minimize')} onClick={() => control('minimize')} />
+          <button type="button" className="light max" id="winMax" aria-label={t('maximize')} title={t('maximize')} onClick={() => control('toggleMaximize')} />
         </div>
         <div className="topbar-lead" data-tauri-drag-region="">
           <span className="topbar-title" id="viewTitle">
             {t(VIEW_TITLES[view])}
           </span>
           <span className="hint" id="hook">
-            {hookKey ? t(hookKey) : ''}
+            {hookKey ? t(hookKey === 'hookOff' && IS_MAC ? 'hookOffMac' : hookKey) : ''}
           </span>
         </div>
         <div className="header-actions">

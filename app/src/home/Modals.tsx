@@ -1,7 +1,8 @@
 /** About and Donate dialogs. Both are plain dialogs with their own backdrop so they behave the
  *  same in a transparent window as in a browser preview. */
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { version as APP_VERSION } from '../../package.json';
 import { copyText, openExternal } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 
@@ -12,6 +13,15 @@ const USDT = 'TPLD2d7H8eXjYVqK7mNbZp8eW9aC24Zeix';
 const TON = 'EQB_zeidexsoft_donation_ton_wallet_v4r2';
 
 function Shell({ id, wide, onClose, children }: { id: string; wide?: boolean; onClose: () => void; children: ReactNode }) {
+  // The dialog is not opened with showModal() (it must sit inside its own backdrop), so the
+  // browser's built-in Escape handling does not apply.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return (
     <div
       className="fixed inset-0 z-40 grid place-items-center bg-black/60 p-4 backdrop-blur-sm"
@@ -68,7 +78,7 @@ export function AboutModal({ open, onClose, onDonate }: { open: boolean; onClose
           <div>
             <h2 className="m-0 text-lg font-bold">{t('aboutTitle')}</h2>
             <div className="badge mt-1 inline-block rounded-xl border border-line bg-bg px-2 py-0.5 text-[11px] font-semibold text-accent">
-              {t('version')}
+              {t('version')} {APP_VERSION}
             </div>
           </div>
         </div>
@@ -137,7 +147,7 @@ export function DonateModal({ open, onClose }: { open: boolean; onClose: () => v
               <span className="text-2xl">🏦</span>
               <div>
                 <h3 className="m-0 text-sm font-bold">{t('kuraimi')}</h3>
-                <span className="text-[11px] text-muted">Yemen / Regional</span>
+                <span className="text-[11px] text-muted">{t('payRegion')}</span>
               </div>
             </div>
             <p className="m-0 text-xs leading-snug text-muted">{t('kuraimiDesc')}</p>
@@ -149,7 +159,7 @@ export function DonateModal({ open, onClose }: { open: boolean; onClose: () => v
               <span className="text-2xl">⭐</span>
               <div>
                 <h3 className="m-0 text-sm font-bold">{t('stars')}</h3>
-                <span className="text-[11px] text-muted">Instant Stars</span>
+                <span className="text-[11px] text-muted">{t('payInstant')}</span>
               </div>
             </div>
             <p className="m-0 text-xs leading-snug text-muted">{t('starsDesc')}</p>
@@ -168,13 +178,13 @@ export function DonateModal({ open, onClose }: { open: boolean; onClose: () => v
               <span className="text-2xl">🪙</span>
               <div>
                 <h3 className="m-0 text-sm font-bold">{t('crypto')}</h3>
-                <span className="text-[11px] text-muted">Crypto / Blockchain</span>
+                <span className="text-[11px] text-muted">{t('payChain')}</span>
               </div>
             </div>
             <p className="m-0 text-xs leading-snug text-muted">{t('cryptoDesc')}</p>
             <div className="flex flex-col gap-2">
               <CopyBox label="USDT (TRC-20):" value={USDT} />
-              <CopyBox label="TON Wallet:" value={TON} />
+              <CopyBox label={t('tonLabel')} value={TON} />
             </div>
           </div>
 

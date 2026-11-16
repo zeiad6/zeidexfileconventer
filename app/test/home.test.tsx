@@ -6,6 +6,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, waitFor } from '@testing-library/react';
+import { version } from '../package.json';
 import { Home } from '../src/home/Home';
 import { firstCall, flush, installTauri, lastCall, mount, type Harness } from './harness';
 
@@ -109,7 +110,13 @@ describe('home', () => {
     expect((need<HTMLDialogElement>('aboutModal')).open).toBe(true);
     await h.click(need('devProfileBtn'));
     expect(firstCall(h.calls, 'open_url')?.args.url).toBe('https://zeidexlink.zeidexsoft.com/zeidex');
+    // The version shown is the package's own, not a string that goes stale.
+    expect(need('aboutModal').textContent).toContain(`Version ${version}`);
     await h.click(need('closeAboutBtn'));
+    expect(byId('aboutModal')).toBeNull();
+
+    await h.click(need('aboutBtn'));
+    await h.key('Escape');
     expect(byId('aboutModal')).toBeNull();
 
     await h.click(need('donateBtn'));
