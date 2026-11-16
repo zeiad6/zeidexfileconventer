@@ -10,17 +10,9 @@ $ProgressPreference = "SilentlyContinue"
 $dst = Join-Path $PSScriptRoot "..\app\src-tauri\engines"
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "zeidex-engines"
 New-Item -ItemType Directory -Force $dst, $tmp | Out-Null
+# No Authorization header: every download is a public, checksummed file, and a token sent
+# here would also reach conda.anaconda.org.
 $headers = @{ "User-Agent" = "zeidex-ci" }
-if ($env:GITHUB_TOKEN) { $headers.Authorization = "Bearer $env:GITHUB_TOKEN" }
-
-function Get-Asset($repo, $pattern) {
-  $rel = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers $headers
-  $asset = $rel.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
-  if (-not $asset) { throw "no asset matching $pattern in $repo" }
-  $file = Join-Path $tmp $asset.name
-  Invoke-WebRequest $asset.browser_download_url -OutFile $file -Headers $headers
-  return $file
-}
 
 function Get-Pinned($url, $sha256, $name) {
   $file = Join-Path $tmp $name
@@ -32,13 +24,20 @@ function Get-Pinned($url, $sha256, $name) {
   return $file
 }
 
-# FFmpeg + FFprobe (BtbN static builds: no DLL folder to carry).
-$zip = Get-Asset "BtbN/FFmpeg-Builds" '^ffmpeg-master-latest-win64-gpl\.zip$'
+# FFmpeg + FFprobe (BtbN static build: no DLL folder to carry). Pinned to the same n9.0.2
+# snapshot as the Linux packages; "latest" would ship an unverified nightly of master.
+$zip = Get-Pinned `
+  "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-9.0.zip" `
+  "A0E45723C72141975F51D8666302E614711745F3102B704CA3F82C897A58D278" `
+  "ffmpeg-n9.0.2-win64-gpl.zip"
 Expand-Archive $zip (Join-Path $tmp "ffmpeg") -Force
 Get-ChildItem (Join-Path $tmp "ffmpeg") -Recurse -Include ffmpeg.exe, ffprobe.exe | Copy-Item -Destination $dst
 
 # libvips: keep its bin/ folder intact, vips.exe needs the DLLs beside it.
-$zip = Get-Asset "libvips/build-win64-mxe" '^vips-dev-x64-all-[\d.]+\.zip$'
+$zip = Get-Pinned `
+  "https://github.com/libvips/build-win64-mxe/releases/download/v8.18.7/vips-dev-x64-all-8.18.7.zip" `
+  "78E56BA30C267BA32FF965200534BD5721364CADBEAD8C4D595E44B58DFEFF15" `
+  "vips-dev-x64-all-8.18.7.zip"
 Expand-Archive $zip (Join-Path $tmp "vips") -Force
 $bin = Get-ChildItem (Join-Path $tmp "vips") -Recurse -Directory -Filter bin | Select-Object -First 1
 New-Item -ItemType Directory -Force (Join-Path $dst "vips") | Out-Null

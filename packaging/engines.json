@@ -59,9 +59,16 @@
     },
     "ffmpeg": {
       "version": "9.0.2",
-      "url": "https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-full_build-shared.zip",
-      "sha256": "8D31E162F1616E37AAB3FA2DB991B97E1B8DBEB1C8465FD81A81BE16FF91B328",
-      "size": 99899672,
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-9.0.zip",
+      "sha256": "A0E45723C72141975F51D8666302E614711745F3102B704CA3F82C897A58D278",
+      "size": 194034585,
+      "kind": "zip"
+    },
+    "libvips": {
+      "version": "8.18.7",
+      "url": "https://github.com/libvips/build-win64-mxe/releases/download/v8.18.7/vips-dev-x64-all-8.18.7.zip",
+      "sha256": "78E56BA30C267BA32FF965200534BD5721364CADBEAD8C4D595E44B58DFEFF15",
+      "size": 19734071,
       "kind": "zip"
     },
     "calibre": {
