@@ -7,8 +7,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only by default; only the packaging jobs that publish a release ask for write.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   core:
