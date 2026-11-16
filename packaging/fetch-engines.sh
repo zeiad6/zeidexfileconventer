@@ -7,11 +7,11 @@
 # Every desktop package carries FFmpeg, FFprobe, 7-Zip, rhwp, Pandoc, qpdf and Ghostscript.
 # qpdf handles PDF merge/split/pages/protection; Ghostscript renders PDF pages and compresses PDFs.
 # The two are the difference between "the tool is listed" and "the tool runs" on a clean machine,
-# so they are no longer left to the distribution. LibreOffice, Calibre, Tesseract and the AI models
+# so they are no longer left to the distribution. LibreOffice, Calibre and the AI models
 # stay optional: bundling them would add several hundred megabytes for features not every user opens,
 # and the Engines panel prints the one-line install command for each.
 #
-# Linux:  FFmpeg + FFprobe, 7-Zip, rhwp, Pandoc, qpdf, Ghostscript
+# Linux:  FFmpeg + FFprobe, 7-Zip, rhwp, Pandoc, qpdf, Ghostscript, libvips, Tesseract, qrencode
 # macOS:  the same (FFmpeg is bundled here too; Homebrew is no longer assumed)
 set -euo pipefail
 
@@ -38,7 +38,8 @@ else
 fi
 
 case "$plat" in
-  linux-*) components="ffmpeg 7zip rhwp pandoc qpdf" ;;
+  # Linux also carries libvips, Tesseract and qrencode ("extras"); macOS and Windows do not yet.
+  linux-*) components="ffmpeg 7zip rhwp pandoc qpdf extras" ;;
   # macOS gets single-binary FFmpeg/FFprobe builds (eugeneware/ffmpeg-static), so they are
   # downloaded raw rather than unpacked from an archive.
   osx-*) components="ffmpeg ffprobe 7zip rhwp pandoc qpdf" ;;
@@ -150,14 +151,16 @@ fetch_tree() { # component, destination, subdirectories...
   done
 }
 
-add_ghostscript() {
-  local mm conda_plat sha url gs_version
+# Leaves a verified micromamba at $tmp/$mm and sets $conda_plat.
+get_micromamba() {
+  local sha
   case "$plat" in
-    linux-x64) mm=micromamba-linux-64; conda_plat=linux-64; gs_version=10.08.0 ;;
-    linux-arm64) mm=micromamba-linux-aarch64; conda_plat=linux-aarch64; gs_version=10.08.0 ;;
-    osx-x64) mm=micromamba-osx-64; conda_plat=osx-64; gs_version=10.03.1 ;;
-    osx-arm64) mm=micromamba-osx-arm64; conda_plat=osx-arm64; gs_version=10.03.1 ;;
+    linux-x64) mm=micromamba-linux-64; conda_plat=linux-64 ;;
+    linux-arm64) mm=micromamba-linux-aarch64; conda_plat=linux-aarch64 ;;
+    osx-x64) mm=micromamba-osx-64; conda_plat=osx-64 ;;
+    osx-arm64) mm=micromamba-osx-arm64; conda_plat=osx-arm64 ;;
   esac
+  [ -x "$tmp/$mm" ] && return
   # Digests are the ones published next to each micromamba release asset.
   case "$mm" in
     micromamba-linux-64) sha=701f39c06f8e6a670a0e186c8479b9e5c0502a2f0cda6cef65d83bdd2875e8bd ;;
@@ -165,11 +168,19 @@ add_ghostscript() {
     micromamba-osx-64) sha=8421462a1ef1df9f7acd114f9e2a24c1332ce4f4e29f44465b4acb44e2755172 ;;
     micromamba-osx-arm64) sha=c547639f5caf742236641c362746abb4a3505774753ecd08fe341643670c4c01 ;;
   esac
-  url="https://github.com/mamba-org/micromamba-releases/releases/download/${MM_VERSION}/${mm}"
-  echo "==> ghostscript $gs_version via $mm"
-  curl -fsSL "$url" -o "$tmp/$mm"
+  curl -fsSL "https://github.com/mamba-org/micromamba-releases/releases/download/${MM_VERSION}/${mm}" -o "$tmp/$mm"
   verify "$mm" "$tmp/$mm" "$sha"
   chmod +x "$tmp/$mm"
+}
+
+add_ghostscript() {
+  local gs_version
+  case "$plat" in
+    linux-*) gs_version=10.08.0 ;;
+    osx-*) gs_version=10.03.1 ;;
+  esac
+  get_micromamba
+  echo "==> ghostscript $gs_version via $mm"
   rm -rf "$tmp/gs"
   MAMBA_ROOT_PREFIX="$tmp/mamba" "$tmp/$mm" create -y -q -p "$tmp/gs" \
     -c conda-forge --platform "$conda_plat" "ghostscript==$gs_version"
@@ -178,6 +189,25 @@ add_ghostscript() {
   cp "$tmp/gs/bin/gs" "$dst/gs/bin/gs"
   cp -R "$tmp/gs/share/ghostscript" "$dst/gs/share/"
   chmod +x "$dst/gs/bin/gs"
+}
+
+# libvips, Tesseract (English, Arabic and orientation data) and qrencode, built by conda-forge.
+# Tesseract's configs/ and pdf.ttf travel too: without them `tsv` and `pdf` output fail.
+# The environment weighs over a gigabyte; slim-conda.py keeps the four programs, the HEIC/AVIF
+# and JPEG XL modules and only the libraries they load. The runner points each program at its
+# moved data (tools::bundled_env), so the tree must keep the bin/ lib/ share/ layout.
+add_extras() {
+  get_micromamba
+  echo "==> libvips, tesseract, qrencode via $mm"
+  rm -rf "$tmp/extras"
+  MAMBA_ROOT_PREFIX="$tmp/mamba" "$tmp/$mm" create -y -q -p "$tmp/extras" \
+    -c conda-forge --platform "$conda_plat" "libvips==8.18.7" "tesseract==5.5.4" "libqrencode==4.1.1"
+  rm -rf "${dst:?}/extras"
+  python3 "$root/packaging/slim-conda.py" "$tmp/extras" "$dst/extras" \
+    vips vipsheader tesseract qrencode \
+    lib/vips-modules-8.18/vips-heif.so lib/vips-modules-8.18/vips-jxl.so \
+    share/tessdata/eng.traineddata share/tessdata/ara.traineddata share/tessdata/osd.traineddata \
+    share/tessdata/configs share/tessdata/tessconfigs share/tessdata/pdf.ttf
 }
 
 verify() { # label, archive, expected sha
@@ -207,8 +237,18 @@ for component in $components; do
     7zip) fetch 7zip 7zz ;;
     rhwp) fetch rhwp rhwp ;;
     pandoc) fetch pandoc pandoc ;;
-    qpdf) fetch_tree qpdf qpdf bin lib ;;
+    qpdf)
+      fetch_tree qpdf qpdf bin lib
+      # qpdf's Linux archive links libgmp (through GnuTLS) but does not carry it, and a minimal
+      # desktop may not have it. Taken from the build host, so only when fetching for the host.
+      if [ "${plat%%-*}" = linux ] && [ -z "${ZEIDEX_ENGINE_PLATFORM:-}" ]; then
+        gmp="$(PATH="$PATH:/sbin:/usr/sbin" ldconfig -p | awk '/libgmp\.so\.10 /{p=$NF} END{print p}')"
+        [ -n "$gmp" ] || { echo "libgmp.so.10 was not found on this host" >&2; exit 1; }
+        cp -L "$gmp" "$dst/qpdf/lib/libgmp.so.10"
+      fi
+      ;;
     ghostscript) add_ghostscript ;;
+    extras) add_extras ;;
   esac
 done
 

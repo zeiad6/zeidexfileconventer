@@ -18,6 +18,17 @@ use zeidex_core::tools::{self, Tool};
 /// Engines every desktop package carries; the rest are optional by design.
 const BUNDLED: [Tool; 6] = [Tool::Ffmpeg, Tool::Ffprobe, Tool::SevenZip, Tool::Ghostscript, Tool::Qpdf, Tool::Pandoc];
 
+/// What only some packages carry so far: libvips on Windows and Linux, OCR and QR on Linux.
+fn platform_extras() -> &'static [Tool] {
+    if cfg!(target_os = "linux") {
+        &[Tool::Vips, Tool::VipsHeader, Tool::Tesseract, Tool::Qrencode]
+    } else if cfg!(windows) {
+        &[Tool::Vips, Tool::VipsHeader]
+    } else {
+        &[]
+    }
+}
+
 fn resource_dir() -> Option<PathBuf> {
     let dir = PathBuf::from(std::env::var_os("ZEIDEX_BUNDLE_DIR")?);
     assert!(dir.is_dir(), "not a directory: {}", dir.display());
@@ -35,7 +46,7 @@ fn shipped_package_resolves_its_engines() {
     };
 
     let mut wrong = Vec::new();
-    for tool in BUNDLED {
+    for tool in BUNDLED.into_iter().chain(platform_extras().iter().copied()) {
         match tools::locate(tool) {
             Some(path) if path.starts_with(&resource_dir) && path.is_file() => {}
             Some(path) => wrong.push(format!("{} -> {} (outside the package)", tool.label(), path.display())),
@@ -43,6 +54,19 @@ fn shipped_package_resolves_its_engines() {
         }
     }
     assert!(wrong.is_empty(), "engines not shipped in {}: {}", resource_dir.display(), wrong.join("; "));
+}
+
+/// The conda-built Tesseract and libvips only work when their data tree travels beside them:
+/// the runner points each one at it, and has nothing to point at if packaging dropped it.
+#[test]
+fn shipped_conda_engines_carry_their_data() {
+    if !cfg!(target_os = "linux") || resource_dir().is_none() {
+        return;
+    }
+    for tool in [Tool::Tesseract, Tool::Vips] {
+        let bin = tools::locate(tool).unwrap_or_else(|| panic!("{} -> not found", tool.label()));
+        assert!(tools::bundled_env(&bin).is_some(), "{} has no data tree beside {}", tool.label(), bin.display());
+    }
 }
 
 /// The HWP/HWPX engine travels in every package and appears in the notices, so its presence is

@@ -17,8 +17,10 @@ modules:
     buildsystem: simple
     build-commands:
       - install -Dm755 zeidex-app /app/bin/zeidex-app
-      - install -d /app/lib/zeidex-convert/engines
-      - cp -r engines/* /app/lib/zeidex-convert/engines/ 2>/dev/null || true
+      # Beside the binary: the app looks for <exe dir>/engines, and Tauri's resource dir
+      # (/usr/lib/<name>) does not exist inside a Flatpak, so /app/lib was never searched.
+      - install -d /app/bin/engines
+      - cp -r engines/. /app/bin/engines/
       - install -Dm644 com.zeidexsoft.convert.desktop /app/share/applications/com.zeidexsoft.convert.desktop
       - install -Dm644 com.zeidexsoft.convert.metainfo.xml /app/share/metainfo/com.zeidexsoft.convert.metainfo.xml
       - install -Dm644 icon.png /app/share/icons/hicolor/128x128/apps/com.zeidexsoft.convert.png

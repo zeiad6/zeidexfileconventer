@@ -281,6 +281,25 @@ fn with_engine_bins(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
     all
 }
 
+/// The variable a bundled engine needs once its tree has left the prefix it was built under.
+/// conda builds compile that prefix in, so inside a package Tesseract cannot find its language
+/// data and libvips cannot find its HEIC/AVIF/JPEG XL modules. Engines outside the package keep
+/// their own environment, as does anything the user already set.
+pub fn bundled_env(bin: &Path) -> Option<(&'static str, PathBuf)> {
+    relocated_env(bin).filter(|(key, _)| env::var_os(key).is_none() && bundle_dirs().iter().any(|d| bin.starts_with(d)))
+}
+
+fn relocated_env(bin: &Path) -> Option<(&'static str, PathBuf)> {
+    let root = bin.parent()?.parent()?;
+    let (key, dir) = match bin.file_stem()?.to_str()? {
+        "tesseract" => ("TESSDATA_PREFIX", root.join("share").join("tessdata")),
+        // `lib`, not the tree root: a relocated conda libvips looks for `$VIPSHOME/vips-modules-*`.
+        "vips" | "vipsheader" => ("VIPSHOME", root.join("lib")),
+        _ => return None,
+    };
+    dir.is_dir().then_some((key, dir))
+}
+
 pub fn which(name: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     env::split_paths(&path).map(|d| d.join(name)).find(|p| p.is_file())
@@ -364,6 +383,28 @@ mod tests {
         assert!(dirs.contains(&root.join("gs").join("Library").join("bin")));
         assert!(dirs.contains(&root.join("qpdf").join("bin")));
         assert_eq!(dirs.last(), Some(&root), "the flat dir is searched last");
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A conda-built Tesseract or libvips only works inside a package when it is told where its
+    /// data moved to; engines that carry no such tree get nothing.
+    #[test]
+    fn relocated_engines_are_pointed_at_their_data() {
+        let root = env::temp_dir().join(format!("zeidex-reloc-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::create_dir_all(root.join("lib")).unwrap();
+        fs::create_dir_all(root.join("share").join("tessdata")).unwrap();
+
+        assert_eq!(
+            relocated_env(&root.join("bin").join("tesseract")),
+            Some(("TESSDATA_PREFIX", root.join("share").join("tessdata")))
+        );
+        assert_eq!(relocated_env(&root.join("bin").join("vips")), Some(("VIPSHOME", root.join("lib"))));
+        assert_eq!(relocated_env(&root.join("bin").join("ffmpeg")), None);
+        fs::remove_dir_all(root.join("share")).unwrap();
+        assert_eq!(relocated_env(&root.join("bin").join("tesseract")), None, "no data tree, no variable");
 
         fs::remove_dir_all(&root).unwrap();
     }

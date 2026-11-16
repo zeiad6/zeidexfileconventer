@@ -337,6 +337,9 @@ fn command(bin: &Path) -> Command {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    if let Some((key, dir)) = tools::bundled_env(bin) {
+        cmd.env(key, dir);
+    }
     cmd
 }
 

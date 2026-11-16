@@ -31,13 +31,24 @@ Bundled desktop packages (Windows setup, Linux AppImage, macOS DMG) include:
     Ghostscript is an independent program invoked as a separate process for PDF
     rendering. Its complete corresponding source is published at the URL above.
 
-  libvips (Windows)   — LGPL-2.1-or-later
+  libvips (Windows, Linux) — LGPL-2.1-or-later
     https://www.libvips.org/
+    The Linux build comes from conda-forge together with the libraries it loads,
+    among them libheif (LGPL-3.0), libjxl (BSD-3-Clause), x265 (GPL-2.0-or-later),
+    libde265 (LGPL-3.0), aom (BSD-2-Clause), GLib (LGPL-2.1) and ICU (Unicode-3.0).
+    Recipes and sources: https://github.com/conda-forge
+
+  Tesseract OCR (Linux) — Apache-2.0
+    https://github.com/tesseract-ocr/tesseract
+    Language data (eng, ara, osd): https://github.com/tesseract-ocr/tessdata — Apache-2.0
+
+  qrencode (Linux)    — LGPL-2.1-or-later
+    https://fukuchi.org/works/qrencode/
 
 Optional engines the app can use when the user installs them (not bundled):
-LibreOffice (MPL-2.0), Calibre (GPL-3.0), Tesseract (Apache-2.0),
-whisper.cpp (MIT), ExifTool (Artistic-2.0), ZBar (LGPL-2.1), qrencode (LGPL-2.1),
-Real-ESRGAN (BSD-3-Clause), rembg (MIT).
+LibreOffice (MPL-2.0), Calibre (GPL-3.0), whisper.cpp (MIT), ExifTool (Artistic-2.0),
+ZBar (LGPL-2.1), Real-ESRGAN (BSD-3-Clause), rembg (MIT); on Windows and macOS also
+Tesseract (Apache-2.0) and qrencode (LGPL-2.1).
 
 The Rust and JavaScript dependencies keep their own licences; `cargo deny`/`cargo
 about` and `npm ls` report them for the exact versions in Cargo.lock and
