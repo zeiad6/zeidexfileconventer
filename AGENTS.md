@@ -74,6 +74,10 @@ entry in `packaging/engines.json` with a verified SHA-256 and a block in both fe
   `program/` + `share/` layout); Unix leaves them optional because their archives are 300–400 MB
   and are not relocatable. `rembg` is never bundled (needs a Python runtime); only its `u2net`
   model ships.
+- The Windows fetch script packs the staged tree into `engines/engines.7z` when
+  `ZEIDEX_PACK_ENGINES=1` (CI sets it; a plain run stays loose for `tauri dev`). NSIS cannot map
+  a data block past 2 GB, and `app/src-tauri/windows/hooks.nsh` unpacks the archive during setup.
+  Keep `7z.exe` and `7z.dll` out of the archive: the hook needs them.
 - The app never downloads anything at run time. An engine that is absent is either bundled or
   installed by the user through the Engines panel's `install_engine` command.
 

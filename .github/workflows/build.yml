@@ -256,6 +256,8 @@ jobs:
           npm run build
       - name: Fetch engines (Windows)
         shell: pwsh
+        env:
+          ZEIDEX_PACK_ENGINES: "1"
         run: ./packaging/fetch-engines.ps1
       - name: Build MSI and NSIS setup
         working-directory: app
@@ -273,6 +275,9 @@ jobs:
           # The bundle's own 7z.exe unpacks the installer, so the check assumes nothing about
           # what the runner has installed.
           app/src-tauri/engines/7z.exe x -y app/src-tauri/target/release/bundle/nsis/*-setup.exe -onsis_out >/dev/null
+          # The setup carries engines.7z (NSIS stops at 2 GB) and the install hook unpacks it;
+          # do the same here so the test sees the tree the installed app will see.
+          nsis_out/engines/7z.exe x -y nsis_out/engines/engines.7z -onsis_out/engines >/dev/null
           # cygpath: rustc is a native Windows program and needs a D:\ path, not /d/... from bash.
           ZEIDEX_BUNDLE_DIR="$(cygpath -w "$PWD/nsis_out")" cargo test -p zeidex-core --test bundle
           rm -rf nsis_out

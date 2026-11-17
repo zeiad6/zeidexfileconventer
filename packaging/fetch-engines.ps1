@@ -361,4 +361,26 @@ $u2 = Get-Pinned `
   "u2net.onnx"
 Copy-Item $u2 (Join-Path $modelDir "u2net.onnx") -Force
 
-Get-ChildItem $dst -Recurse -Include *.exe | ForEach-Object { $_.FullName }
+# NSIS builds one data block and its compiler cannot map beyond 2 GB, so a 2.7 GB resource
+# tree fails with "error mmapping datablock". Ship the engines as one solid archive instead:
+# the installer copies 7z.exe + engines.7z, and the install hook below unpacks it in place.
+# 7z.exe and 7z.dll stay outside the archive, because they are what performs the extraction.
+# Packaging only: a plain run keeps the tree loose so `tauri dev` still finds every engine.
+if ($env:ZEIDEX_PACK_ENGINES -eq "1") {
+$sevenBundled = Join-Path $dst "7z.exe"
+if (-not (Test-Path $sevenBundled)) { throw "the bundled 7-Zip was not staged" }
+$pack = Join-Path $dst "engines.7z"
+Remove-Item $pack -Force -ErrorAction SilentlyContinue
+Push-Location $dst
+& $seven a -t7z -mx=9 -ms=on "-mmt=on" $pack "*" "-x!7z.exe" "-x!7z.dll" "-x!engines.7z" | Out-Null
+$packCode = $LASTEXITCODE
+Pop-Location
+if ($packCode -ne 0) { throw "7-Zip failed to pack the engines ($packCode)" }
+Get-ChildItem $dst -Force |
+  Where-Object { $_.Name -notin @("7z.exe", "7z.dll", "engines.7z") } |
+  Remove-Item -Recurse -Force
+Write-Host "Engines packed: $([math]::Round((Get-Item $pack).Length / 1MB)) MB"
+Write-Host "7z.exe deps: $((Get-ChildItem $dst -File | Measure-Object).Count) files beside the archive"
+} else {
+  Write-Host "Engines staged loose (set ZEIDEX_PACK_ENGINES=1 for a bundle build)"
+}

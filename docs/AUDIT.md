@@ -191,8 +191,10 @@ Not done, on purpose:
   `program/` + `share/` tree `soffice.exe` needs — then trimmed of help pages, icon themes and
   all but the English and Arabic dictionaries. The installer's `Fonts/` folder is re-homed to
   `share/fonts/truetype`, because an administrative install never registers fonts system-wide
-  and Caladea/Carlito are what keep Calibri/Cambria page breaks in place. Nothing is downloaded
-  while the app runs.
+  and Caladea/Carlito are what keep Calibri/Cambria page breaks in place. NSIS refuses to
+  compile a data block past 2 GB, so the staged engines ship as one solid `engines.7z` beside
+  the bundled `7z.exe`; the `NSIS_HOOK_POSTINSTALL` hook unpacks it into `engines/` during
+  setup and aborts the install if 7-Zip fails. Nothing is downloaded while the app runs.
 - **Windows WebView2** is the one component the setup does not carry. Windows 11 and updated
   Windows 10 ship the Evergreen runtime; when it is absent the installer runs Microsoft's
   bootstrapper, which needs the network. The 127 MB offline installer was left out on purpose:
