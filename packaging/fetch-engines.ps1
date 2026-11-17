@@ -63,7 +63,8 @@ function Get-CondaTree($url, $sha256, $name) {
 
 # Copies the tree that holds $exe into engines\$dest, so the executable sees its own resources.
 # Installers wrap the real tree in PFiles/, Calibre2/ or program/; that wrapper is what ships.
-function Copy-EngineTree($source, $exe, $dest) {  $found = Get-ChildItem $source -Recurse -Filter $exe | Select-Object -First 1
+function Copy-EngineTree($source, $exe, $dest) {
+  $found = Get-ChildItem $source -Recurse -Filter $exe | Select-Object -First 1
   if (-not $found) { throw "$exe was not found after unpacking" }
   $dir = $found.Directory
   # Climb out of program/ (LibreOffice) so share/ travels with the binaries.
@@ -259,15 +260,28 @@ if (Test-Path $seven) {
     "https://conda.anaconda.org/conda-forge/win-64/tesseract-5.5.4-h8c7c6a5_0.conda" `
     "67AF4D943866603827AA4029EC0F2442644B3ABE58C2313E89CFCC8BE9E06897" `
     "tesseract-5.5.4-h8c7c6a5_0.conda"
+  # The package splits tessdata over two trees: the languages sit in `share/tessdata` (conda's
+  # prefix-level share) while `configs/` and `tessconfigs/` live under `Library/share/tessdata`.
+  # Find the tree that actually holds the traineddata instead of assuming one layout.
+  $tesTrees = @(Get-ChildItem $tes -Recurse -Directory -Filter "tessdata")
+  $tesData = $tesTrees | Where-Object { Test-Path (Join-Path $_.FullName "eng.traineddata") } |
+    Select-Object -First 1
+  if (-not $tesData) { throw "eng.traineddata was not found in the Tesseract package" }
   $tedst = Join-Path $dst "tesseract\Library"
+  $tedata = Join-Path $tedst "share\tessdata"
   Remove-Item (Join-Path $dst "tesseract") -Recurse -Force -ErrorAction SilentlyContinue
-  New-Item -ItemType Directory -Force (Join-Path $tedst "bin"), (Join-Path $tedst "share\tessdata") | Out-Null
+  New-Item -ItemType Directory -Force (Join-Path $tedst "bin"), $tedata | Out-Null
   Copy-Item (Join-Path $tes "Library\bin\*") (Join-Path $tedst "bin") -Force
   foreach ($lang in "eng", "ara", "osd") {
-    Copy-Item (Join-Path $tes "Library\share\tessdata\$lang.traineddata") (Join-Path $tedst "share\tessdata") -Force
+    Copy-Item (Join-Path $tesData.FullName "$lang.traineddata") $tedata -Force
   }
-  Copy-Item (Join-Path $tes "Library\share\tessdata\configs") (Join-Path $tedst "share\tessdata") -Recurse -Force
-  Copy-Item (Join-Path $tes "Library\share\tessdata\pdf.ttf") (Join-Path $tedst "share\tessdata") -Force
+  # `configs` (tsv/pdf/hocr output) and `tessconfigs` (language aliases) may sit in either tree;
+  # pdf.ttf is not published in 5.5.4, so it is copied only when a future package carries it.
+  foreach ($extra in "configs", "tessconfigs", "pdf.ttf") {
+    $src = $tesTrees | ForEach-Object { Join-Path $_.FullName $extra } |
+      Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($src) { Copy-Item $src $tedata -Recurse -Force }
+  }
 }
 
 # qrencode: the "Make QR code" tool.
