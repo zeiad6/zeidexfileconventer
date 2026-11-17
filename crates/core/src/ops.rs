@@ -1,6 +1,7 @@
 //! Operations a user can run, the tool catalog shown in the wheel, and option parsing.
 
 use crate::format::Category::{self, *};
+use crate::tools::{self, Tool};
 use crate::{Error, Result};
 use std::collections::HashMap;
 
@@ -247,6 +248,11 @@ pub enum Op {
     },
     /// Decode QR codes / barcodes in an image (ZBar).
     QrRead,
+    /// Encode text, or the input's own path, as a QR code image (qrencode).
+    MakeQr {
+        text: Option<String>,
+        scale: u32,
+    },
     /// Fit into a social format (9:16, 1:1, 4:5, 16:9) over a blurred copy of itself.
     Social {
         ratio: (u32, u32),
@@ -614,6 +620,19 @@ impl Op {
                 Op::Exif { tags, gps, remove_gps }
             }
             "qr-read" => Op::QrRead,
+            "make-qr" => {
+                // An empty field means "encode the file's path", which is the useful default
+                // when the wheel is opened on a file and no keyboard is handy.
+                let text = get("text").map(str::to_string);
+                if text.as_ref().is_some_and(|t| t.chars().count() > 2000) {
+                    return Err(bad("text", "too long for one QR code (2000 characters)"));
+                }
+                let scale = int("scale", 8)?;
+                if !(1..=20).contains(&scale) {
+                    return Err(bad("scale", "use 1-20"));
+                }
+                Op::MakeQr { text, scale }
+            }
             "social" => {
                 let ratio = parse_ratio(get("ratio").unwrap_or("9:16"))?;
                 if ![(9, 16), (1, 1), (4, 5), (16, 9)].contains(&ratio) {
@@ -1285,6 +1304,17 @@ pub const TOOLS: &[ToolDef] = &[
         params: &[],
     },
     ToolDef {
+        id: "make-qr",
+        label: "Make QR code",
+        label_ar: "إنشاء رمز QR",
+        cats: ANY,
+        multi: false,
+        params: &[
+            p("text", "Text or URL (empty = file path)", "نص أو رابط (فارغ = مسار الملف)", ""),
+            p("scale", "Module size (1-20)", "حجم الوحدة (1-20)", "8"),
+        ],
+    },
+    ToolDef {
         id: "social",
         label: "Social format",
         label_ar: "مقاس التواصل الاجتماعي",
@@ -1426,12 +1456,128 @@ pub fn tools_for_paths<P: AsRef<std::path::Path>>(paths: &[P]) -> Vec<&'static T
     tools
 }
 
+/// The engine a tool cannot run without. `None` means the tool only needs FFmpeg (which every
+/// package carries) or is pure Rust. The entries here are the ones that used to be listed in
+/// the wheel and then failed with `MissingTool` the moment the user picked them.
+pub fn engine_for(id: &str) -> Option<Tool> {
+    Some(match id {
+        "ocr" => Tool::Tesseract,
+        "exif" => Tool::ExifTool,
+        "qr-read" => Tool::Zbar,
+        "make-qr" => Tool::Qrencode,
+        "transcribe" => Tool::Whisper,
+        "upscale" => Tool::RealEsrgan,
+        "remove-bg" => Tool::Rembg,
+        "archive" | "extract" => Tool::SevenZip,
+        "protect" | "unlock" | "merge-pdf" | "split-pdf" | "pages" => Tool::Qpdf,
+        _ => return None,
+    })
+}
+
+/// Whether this machine can actually run `tool`: the engine is installed and, for the AI tools,
+/// its model is on disk too. FFmpeg-only tools are always ready.
+pub fn ready(tool: &ToolDef) -> bool {
+    let Some(engine) = engine_for(tool.id) else { return true };
+    if tools::locate(engine).is_none() {
+        return false;
+    }
+    match engine {
+        Tool::Whisper => tools::whisper_model().is_some(),
+        Tool::RealEsrgan => tools::esrgan_models().is_some(),
+        Tool::Rembg => tools::rembg_model().is_some(),
+        _ => true,
+    }
+}
+
+/// Drop the tools this machine cannot run, keeping the registry order.
+pub fn available<'a>(tools: impl IntoIterator<Item = &'a ToolDef>) -> Vec<&'a ToolDef> {
+    tools.into_iter().filter(|t| ready(t)).collect()
+}
+
+/// Whether a conversion to `to` can actually run on this machine. The office and ebook routes
+/// are the ones that depend on something the user may not have: a `.docx` offers PDF because
+/// LibreOffice can make one, but on a machine without LibreOffice the segment used to appear
+/// anyway and the job died with "LibreOffice not found" after the drop.
+pub fn convert_ready(src: &std::path::Path, to: &str) -> bool {
+    let Some(from) = crate::format::ext_of(src) else { return false };
+    let Some(cat) = crate::format::category_of_ext(&from) else { return false };
+    let have = |t: Tool| tools::locate(t).is_some();
+    match cat {
+        Category::Document => match to {
+            "pdf" => have(Tool::LibreOffice),
+            "docx" | "odt" | "rtf" | "txt" => have(Tool::LibreOffice),
+            // Markdown-family sources go straight through Pandoc; the rest take a docx hop.
+            "md" | "html" | "epub" => have(Tool::Pandoc) || have(Tool::LibreOffice),
+            _ => have(Tool::LibreOffice),
+        },
+        Category::Slides | Category::Spreadsheet => have(Tool::LibreOffice),
+        Category::Ebook => match to {
+            "md" | "html" => have(Tool::Pandoc) || have(Tool::Calibre),
+            _ => have(Tool::Calibre),
+        },
+        Category::Pdf => match to {
+            "docx" | "pptx" | "xlsx" => have(Tool::LibreOffice),
+            "epub" | "md" => have(Tool::Calibre),
+            _ => true,
+        },
+        Category::Archive => have(Tool::SevenZip),
+        // Image, video, audio and subtitle routes only need FFmpeg, libvips or the pure-Rust
+        // writers, and every image target has an FFmpeg fallback when libvips is absent.
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn opts(kv: &[(&str, &str)]) -> HashMap<String, String> {
         kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn every_engine_backed_tool_names_its_engine() {
+        // The wheel hides a tool when its engine is missing, so the mapping has to cover every
+        // tool that shells out to something optional. A tool that maps to `None` is one that
+        // only needs FFmpeg or pure Rust.
+        assert_eq!(engine_for("ocr"), Some(Tool::Tesseract));
+        assert_eq!(engine_for("exif"), Some(Tool::ExifTool));
+        assert_eq!(engine_for("qr-read"), Some(Tool::Zbar));
+        assert_eq!(engine_for("make-qr"), Some(Tool::Qrencode));
+        assert_eq!(engine_for("transcribe"), Some(Tool::Whisper));
+        assert_eq!(engine_for("upscale"), Some(Tool::RealEsrgan));
+        assert_eq!(engine_for("remove-bg"), Some(Tool::Rembg));
+        assert_eq!(engine_for("merge-pdf"), Some(Tool::Qpdf));
+        assert_eq!(engine_for("archive"), Some(Tool::SevenZip));
+        assert_eq!(engine_for("resize"), None);
+        assert_eq!(engine_for("checksum"), None);
+
+        // Every mapped id names a tool that actually exists in the registry.
+        for id in [
+            "ocr",
+            "exif",
+            "qr-read",
+            "make-qr",
+            "transcribe",
+            "upscale",
+            "remove-bg",
+            "archive",
+            "extract",
+            "protect",
+            "unlock",
+            "merge-pdf",
+            "split-pdf",
+            "pages",
+        ] {
+            assert!(TOOLS.iter().any(|t| t.id == id), "engine_for names an unknown tool: {id}");
+        }
+    }
+
+    #[test]
+    fn conversions_without_an_engine_are_not_offered() {
+        let png = std::path::Path::new("/in/a.png");
+        assert!(convert_ready(png, "jpg"), "images only need FFmpeg or libvips");
+        assert!(convert_ready(png, "pdf"), "images to PDF is pure Rust");
+        assert!(!convert_ready(std::path::Path::new("/in/a.weird"), "jpg"));
     }
 
     #[test]
@@ -1580,7 +1726,7 @@ mod tests {
         assert!(!one.contains(&"merge-pdf") && two.contains(&"merge-pdf"));
         assert_eq!(
             tools_for(None, 3).iter().map(|t| t.id).collect::<Vec<_>>(),
-            vec!["checksum", "rename", "recipe", "archive", "duplicates"]
+            vec!["checksum", "rename", "recipe", "archive", "make-qr", "duplicates"]
         );
     }
 }

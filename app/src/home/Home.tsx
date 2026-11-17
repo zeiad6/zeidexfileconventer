@@ -13,6 +13,7 @@ import {
   appWindow,
   describe as describePaths,
   doctor,
+  installEngine,
   downloadDraggedUrl,
   floatAdd,
   floatClear,
@@ -476,11 +477,29 @@ export function Home() {
               <table className="engines">
                 <tbody id="engines">
                   {engines.map((engine) => (
-                    <tr key={engine.name}>
+                    <tr key={engine.id}>
                       <td className={engine.path ? 'ok' : 'bad'}>{engine.path ? '✓' : '✗'}</td>
                       <td>{engine.name}</td>
                       <td>
-                        <code>{engine.path || engine.hint}</code>
+                        {engine.path ? <code>{engine.path}</code> : <code>{engine.hint}</code>}
+                      </td>
+                      <td>
+                        {engine.path ? null : (
+                          <button
+                            type="button"
+                            className="install"
+                            data-engine={engine.id}
+                            onClick={async () => {
+                              try {
+                                await installEngine(engine.id);
+                              } catch (err) {
+                                setIntegrated(String(err));
+                              }
+                            }}
+                          >
+                            {t('install')}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}

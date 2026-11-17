@@ -33,6 +33,17 @@ describe('home', () => {
     expect(need('view-convert').hidden).toBe(false);
   });
 
+  it('offers an install button only for the engines that are missing', async () => {
+    const h = await open();
+    const row = (id: string) => need('engines').querySelector(`[data-engine="${id}"]`);
+    expect(row('vips')).not.toBeNull();
+
+    await (row('vips') as HTMLButtonElement).click();
+    expect(firstCall(h.calls, 'install_engine')?.args.id).toBe('vips');
+    // FFmpeg was found, so it has no dead-end button.
+    expect(row('ffmpeg')).toBeNull();
+  });
+
   it('keeps every automation id the previous build exposed', async () => {
     await open();
     const ids = [

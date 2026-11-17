@@ -1140,6 +1140,17 @@ pub fn plan(op: &Op, inputs: &[PathBuf], ctx: &Ctx, tmp: &Path) -> Result<Plan> 
             s.push(Step::Ico { pngs, dst: out.clone() });
             (out, named(&stem, "", "ico"))
         }
+        Op::MakeQr { text, scale } => {
+            let out = tmp.join("qr.png");
+            let payload = text.clone().unwrap_or_else(|| src.to_string_lossy().into_owned());
+            // `-s` is the module size and `-m` the quiet zone, in modules: both are what make
+            // the code scannable at a chosen print size instead of a fixed 21×21 block.
+            s.push(run(
+                Tool::Qrencode,
+                args!["-o", &out, "-s", scale.to_string(), "-m", "4", "--", payload],
+            ));
+            (out, named(&stem, "qr", "png"))
+        }
         Op::Checksum | Op::Rename { .. } | Op::Recipe(_) => {
             return Err(Error::Unsupported("handled by the runner".into()))
         }
@@ -2439,6 +2450,26 @@ mod tests {
         }
         walk(&p.steps, &mut out);
         out
+    }
+
+    #[test]
+    fn qr_codes_encode_text_or_the_path() {
+        let p = plan_of(
+            "make-qr",
+            &[("text", "https://zeidexsoft.com"), ("scale", "6")],
+            &["/in/note.pdf"],
+            Ctx::default(),
+        )
+        .unwrap();
+        assert_eq!(p.name, "note-qr.png");
+        let a = argv(&p);
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0], (Tool::Qrencode, "-o /t/qr.png -s 6 -m 4 -- https://zeidexsoft.com".into()));
+
+        // An empty field encodes the file's own path, which is the default the wheel offers.
+        let p = plan_of("make-qr", &[], &["/in/photo.jpg"], Ctx::default()).unwrap();
+        assert!(argv(&p)[0].1.ends_with("-- /in/photo.jpg"));
+        assert!(Op::parse("make-qr", &[("scale".to_string(), "99".to_string())].into()).is_err());
     }
 
     #[test]

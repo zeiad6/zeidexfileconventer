@@ -1,5 +1,5 @@
 {
-  "_comment": "Pinned conversion-engine archives: URL + SHA-256 + size. packaging/fetch-engines.sh reads the per-platform entries below; packaging/fetch-engines.ps1 pins the same Windows builds inline because it also has to drive the MSI/conda extractors. Nothing is downloaded at run time. Bumping a version = change url, sha256 and size together. minimumMacOS names the oldest macOS the binary runs on; the macOS packages target macOS 11 and newer.",
+  "_comment": "Pinned conversion-engine archives: URL + SHA-256 + size. packaging/fetch-engines.sh reads the per-platform entries below; packaging/fetch-engines.ps1 pins the same Windows builds inline because it also has to drive the MSI/conda extractors. Nothing is downloaded at run time. Bumping a version = change url, sha256 and size together. minimumMacOS names the oldest macOS the binary runs on; the macOS packages target macOS 11 and newer. ZBar, ExifTool, whisper.cpp and Real-ESRGAN are pinned per platform; the two model files (whisper tiny, rembg u2net) live under \"models\" because they are the same everywhere.",
   "components": {
     "rhwp": {
       "version": "0.8.7",
@@ -30,10 +30,10 @@
       "kind": "zip"
     },
     "libreoffice": {
-      "version": "26.2.6",
-      "url": "https://download.documentfoundation.org/libreoffice/stable/26.2.6/win/x86_64/LibreOffice_26.2.6_Win_x86-64.msi",
-      "sha256": "F9877032FD908BEB9C0DDF06DF4AF5C2E85F419C42E14876C4CCE5AAE5FB2660",
-      "size": 373252096,
+      "version": "26.2.7",
+      "url": "https://download.documentfoundation.org/libreoffice/stable/26.2.7/win/x86_64/LibreOffice_26.2.7_Win_x86-64.msi",
+      "sha256": "480FECF759FC6393BD614FBF43753EB95A8198FC1A065D41B727E3B664CD1E59",
+      "size": 373121024,
       "kind": "msi"
     },
     "h2orestart": {
@@ -72,10 +72,10 @@
       "kind": "zip"
     },
     "calibre": {
-      "version": "9.15.0",
-      "url": "https://download.calibre-ebook.com/9.15.0/calibre-64bit-9.15.0.msi",
-      "sha256": "0F96AE06165C2419607C1C66726C091A78E89E08EA69F077CF3E2C884E800853",
-      "size": 226549760,
+      "version": "9.18.0",
+      "url": "https://download.calibre-ebook.com/9.18.0/calibre-64bit-9.18.0.msi",
+      "sha256": "05C0F2223866F8082E05B2D4BC9C57B31A833DE8355A1191FD79C260C2636D38",
+      "size": 291291136,
       "kind": "msi"
     },
     "qpdf": {
@@ -130,6 +130,28 @@
           "sha256": "DB367D897829F22C4198CE1094143C9D467BD6EE7DFABC44BA6F02056B24F8B1",
           "size": 4040257,
           "kind": "zip"
+        },
+        "exiftool": {
+          "version": "13.64",
+          "url": "https://sourceforge.net/projects/exiftool/files/Image-ExifTool-13.64.tar.gz/download",
+          "sha256": "DCB9F6BE1F6705EE826A92D1522E3FEC1D0B3749CDC061B03C46873D5FE204FC",
+          "size": 7967796,
+          "kind": "tar.gz",
+          "_note": "Official tarball: bin/exiftool plus lib/Image/ExifTool.pm, so the script finds its own library and needs no system ExifTool."
+        },
+        "whisper": {
+          "version": "b5454",
+          "url": "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-ubuntu-x64.tar.gz",
+          "sha256": "A72BECF15D7917F990F6313867A52638B82B7F9EF237FB0C980DAC56A135781C",
+          "size": 10364195,
+          "kind": "tar.gz"
+        },
+        "realesrgan": {
+          "version": "20220424",
+          "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip",
+          "sha256": "E5AA6EB131234B87C0C51F82B89390F5E3E642B7B70F2B9BBE95B6A285A40C96",
+          "size": 46931474,
+          "kind": "zip"
         }
       }
     },
@@ -176,6 +198,21 @@
           "sha256": "8FD9D009EB0838398180A603F2CF76531E5C68A4ECC8847598E0A1CCB1D3B600",
           "size": 3872113,
           "kind": "zip"
+        },
+        "exiftool": {
+          "version": "13.64",
+          "url": "https://sourceforge.net/projects/exiftool/files/Image-ExifTool-13.64.tar.gz/download",
+          "sha256": "DCB9F6BE1F6705EE826A92D1522E3FEC1D0B3749CDC061B03C46873D5FE204FC",
+          "size": 7967796,
+          "kind": "tar.gz",
+          "_note": "Official tarball: bin/exiftool plus lib/Image/ExifTool.pm, so the script finds its own library and needs no system ExifTool."
+        },
+        "whisper": {
+          "version": "b5454",
+          "url": "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-ubuntu-arm64.tar.gz",
+          "sha256": "6B95EBFC60447DF48E70EF00A73BDC3F41679ED2D01EF465827206A2FF325149",
+          "size": 4608377,
+          "kind": "tar.gz"
         }
       }
     },
@@ -239,6 +276,28 @@
           "size": 25239438,
           "kind": "raw.gz",
           "minimumMacOS": "11.0"
+        },
+        "exiftool": {
+          "version": "13.64",
+          "url": "https://sourceforge.net/projects/exiftool/files/Image-ExifTool-13.64.tar.gz/download",
+          "sha256": "DCB9F6BE1F6705EE826A92D1522E3FEC1D0B3749CDC061B03C46873D5FE204FC",
+          "size": 7967796,
+          "kind": "tar.gz",
+          "_note": "Official tarball: bin/exiftool plus lib/Image/ExifTool.pm, so the script finds its own library and needs no system ExifTool."
+        },
+        "zbar": {
+          "version": "0.23.95",
+          "url": "https://github.com/mchehab/zbar/releases/download/0.23.95/zbar-macos.tar.gz",
+          "sha256": "FCF18EAACCAAB8D53F2195DEE63AB6B53E65A261B83267AE19EC1C018D8EACC4",
+          "size": 577973,
+          "kind": "tar.gz"
+        },
+        "realesrgan": {
+          "version": "20220424",
+          "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-macos.zip",
+          "sha256": "E0AD05580ABFEB25F8D8FB55AAF7BEDF552C375B5B4D9BD3C8D59764D2CC333A",
+          "size": 51817124,
+          "kind": "zip"
         }
       }
     },
@@ -302,8 +361,46 @@
           "size": 19207077,
           "kind": "raw.gz",
           "minimumMacOS": "11.0"
+        },
+        "exiftool": {
+          "version": "13.64",
+          "url": "https://sourceforge.net/projects/exiftool/files/Image-ExifTool-13.64.tar.gz/download",
+          "sha256": "DCB9F6BE1F6705EE826A92D1522E3FEC1D0B3749CDC061B03C46873D5FE204FC",
+          "size": 7967796,
+          "kind": "tar.gz",
+          "_note": "Official tarball: bin/exiftool plus lib/Image/ExifTool.pm, so the script finds its own library and needs no system ExifTool."
+        },
+        "zbar": {
+          "version": "0.23.95",
+          "url": "https://github.com/mchehab/zbar/releases/download/0.23.95/zbar-macos.tar.gz",
+          "sha256": "FCF18EAACCAAB8D53F2195DEE63AB6B53E65A261B83267AE19EC1C018D8EACC4",
+          "size": 577973,
+          "kind": "tar.gz"
+        },
+        "realesrgan": {
+          "version": "20220424",
+          "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-macos.zip",
+          "sha256": "E0AD05580ABFEB25F8D8FB55AAF7BEDF552C375B5B4D9BD3C8D59764D2CC333A",
+          "size": 51817124,
+          "kind": "zip"
         }
       }
+    }
+  },
+  "models": {
+    "whisper-tiny": {
+      "version": "tiny",
+      "name": "ggml-tiny.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+      "sha256": "BE07E048E1E599AD46341C8D2A135645097A538221678B7ACDD1B1919C6E1B21",
+      "size": 77691713
+    },
+    "u2net": {
+      "version": "u2net",
+      "name": "u2net.onnx",
+      "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx",
+      "sha256": "8D10D2F3BB75AE3B6D527C77944FC5E7DCD94B29809D47A739A7A728A912B491",
+      "size": 175997641
     }
   }
 }

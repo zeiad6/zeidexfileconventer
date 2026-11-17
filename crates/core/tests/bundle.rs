@@ -15,17 +15,42 @@ use std::path::PathBuf;
 
 use zeidex_core::tools::{self, Tool};
 
-/// Engines every desktop package carries; the rest are optional by design.
+/// Engines every desktop package carries; the rest depend on the platform.
 const BUNDLED: [Tool; 6] = [Tool::Ffmpeg, Tool::Ffprobe, Tool::SevenZip, Tool::Ghostscript, Tool::Qpdf, Tool::Pandoc];
 
-/// What only some packages carry so far: libvips on Windows and Linux, OCR and QR on Linux.
+/// What each package stages on top of `BUNDLED`. Every entry here is something the app used to
+/// answer with "install this yourself": the test is what keeps that promise honest.
 fn platform_extras() -> &'static [Tool] {
-    if cfg!(target_os = "linux") {
-        &[Tool::Vips, Tool::VipsHeader, Tool::Tesseract, Tool::Qrencode]
-    } else if cfg!(windows) {
-        &[Tool::Vips, Tool::VipsHeader]
+    if cfg!(windows) {
+        // LibreOffice and Calibre are the Windows-only additions: that is where the reported
+        // "LibreOffice not found" came from, and both MSIs are unpacked by fetch-engines.ps1.
+        &[
+            Tool::Vips,
+            Tool::VipsHeader,
+            Tool::Tesseract,
+            Tool::Qrencode,
+            Tool::ExifTool,
+            Tool::Zbar,
+            Tool::Whisper,
+            Tool::RealEsrgan,
+            Tool::LibreOffice,
+            Tool::Calibre,
+        ]
+    } else if cfg!(target_os = "macos") {
+        &[Tool::Vips, Tool::VipsHeader, Tool::Tesseract, Tool::Qrencode, Tool::ExifTool, Tool::Zbar, Tool::RealEsrgan]
+    } else if cfg!(target_arch = "aarch64") {
+        // Real-ESRGAN has no Linux arm64 build; whisper.cpp and ExifTool do.
+        &[Tool::Vips, Tool::VipsHeader, Tool::Tesseract, Tool::Qrencode, Tool::ExifTool, Tool::Whisper]
     } else {
-        &[]
+        &[
+            Tool::Vips,
+            Tool::VipsHeader,
+            Tool::Tesseract,
+            Tool::Qrencode,
+            Tool::ExifTool,
+            Tool::Whisper,
+            Tool::RealEsrgan,
+        ]
     }
 }
 

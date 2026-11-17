@@ -139,6 +139,34 @@ impl Tool {
         }
     }
 
+    /// Stable id for the UI and the CLI: never translated, never containing spaces, so the
+    /// Engines panel can name a tool in a command without matching a display label.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Tool::Ffmpeg => "ffmpeg",
+            Tool::Ffprobe => "ffprobe",
+            Tool::Vips => "vips",
+            Tool::VipsHeader => "vipsheader",
+            Tool::Ghostscript => "ghostscript",
+            Tool::Qpdf => "qpdf",
+            Tool::SevenZip => "7zip",
+            Tool::LibreOffice => "libreoffice",
+            Tool::Pandoc => "pandoc",
+            Tool::Calibre => "calibre",
+            Tool::Tesseract => "tesseract",
+            Tool::Whisper => "whisper",
+            Tool::ExifTool => "exiftool",
+            Tool::Zbar => "zbar",
+            Tool::Qrencode => "qrencode",
+            Tool::RealEsrgan => "realesrgan",
+            Tool::Rembg => "rembg",
+        }
+    }
+
+    pub fn by_slug(slug: &str) -> Option<Tool> {
+        Tool::ALL.into_iter().find(|t| t.slug() == slug)
+    }
+
     pub fn install_hint(self) -> &'static str {
         if cfg!(windows) {
             match self {
@@ -203,30 +231,74 @@ impl Tool {
 
     fn known_dirs(self) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
+
         if cfg!(windows) {
-            let roots: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+            // Installers disagree on where a per-user install lands: the machine-wide
+            // Program Files, the 32-bit view, LocalAppData and LocalAppData\Programs are all
+            // used by at least one of the tools below. `ProgramW6432` matters in a 32-bit
+            // process, where `ProgramFiles` points at Program Files (x86).
+            let roots: Vec<PathBuf> = ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)", "LOCALAPPDATA", "APPDATA"]
                 .iter()
                 .filter_map(|k| env::var_os(k).map(PathBuf::from))
+                .chain(env::var_os("LOCALAPPDATA").map(PathBuf::from).map(|p| p.join("Programs")))
                 .collect();
             for root in &roots {
                 match self {
                     Tool::LibreOffice => dirs.push(root.join("LibreOffice").join("program")),
-                    Tool::Calibre => dirs.push(root.join("Calibre2")),
+                    Tool::Calibre => {
+                        dirs.push(root.join("Calibre2"));
+                        dirs.push(root.join("Calibre"));
+                    }
                     Tool::Tesseract => dirs.push(root.join("Tesseract-OCR")),
                     Tool::SevenZip => dirs.push(root.join("7-Zip")),
                     Tool::Pandoc => dirs.push(root.join("Pandoc")),
                     Tool::Ghostscript => dirs.extend(versioned_bins(&root.join("gs"), "")),
                     Tool::Qpdf => dirs.extend(versioned_bins(root, "qpdf")),
+                    Tool::ExifTool => dirs.push(root.join("exiftool")),
+                    Tool::Zbar => {
+                        dirs.push(root.join("ZBar").join("bin"));
+                        dirs.push(root.join("zbar").join("bin"));
+                    }
+                    Tool::Whisper => dirs.push(root.join("whisper.cpp")),
+                    Tool::RealEsrgan => dirs.push(root.join("realesrgan")),
+                    Tool::Rembg => dirs.push(root.join("rembg")),
+                    Tool::Qrencode => dirs.push(root.join("qrencode")),
                     _ => {}
                 }
             }
+        } else if cfg!(target_os = "macos") {
+            // A .app bundle is not on PATH; its executable lives under Contents/MacOS.
+            let mut apps = vec![PathBuf::from("/Applications")];
+            if let Some(home) = env::var_os("HOME") {
+                apps.push(PathBuf::from(home).join("Applications"));
+            }
+            for app in &apps {
+                match self {
+                    Tool::LibreOffice => dirs.push(app.join("LibreOffice.app").join("Contents").join("MacOS")),
+                    Tool::Calibre => dirs.push(app.join("calibre.app").join("Contents").join("MacOS")),
+                    Tool::ExifTool => dirs.push(app.join("ExifTool").join("bin")),
+                    _ => {}
+                }
+            }
+            // Homebrew and MacPorts put their links here; Intel and Apple Silicon differ.
+            dirs.push("/opt/homebrew/bin".into());
+            dirs.push("/usr/local/bin".into());
+            dirs.push("/opt/local/bin".into());
         } else {
             match self {
-                Tool::LibreOffice => dirs.push("/usr/lib/libreoffice/program".into()),
+                Tool::LibreOffice => {
+                    dirs.push("/usr/lib/libreoffice/program".into());
+                    dirs.push("/usr/lib64/libreoffice/program".into());
+                    dirs.extend(versioned_programs(Path::new("/opt"), "libreoffice"));
+                    dirs.push("/opt/libreoffice/program".into());
+                }
                 Tool::Calibre => dirs.push("/opt/calibre".into()),
+                Tool::RealEsrgan => dirs.push("/usr/local/realesrgan".into()),
+                Tool::Whisper => dirs.push("/usr/local/whisper.cpp".into()),
                 _ => {}
             }
             dirs.push("/snap/bin".into());
+            dirs.push("/var/lib/flatpak/exports/bin".into());
         }
         dirs
     }
@@ -249,6 +321,19 @@ fn versioned_bins(root: &Path, prefix: &str) -> Vec<PathBuf> {
     out
 }
 
+/// `<root>/<prefix>*/program` for LibreOffice tarballs unpacked under `/opt`.
+fn versioned_programs(root: &Path, prefix: &str) -> Vec<PathBuf> {
+    let Ok(rd) = root.read_dir() else { return vec![] };
+    let mut out: Vec<PathBuf> = rd
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().to_ascii_lowercase().starts_with(prefix))
+        .map(|e| e.path().join("program"))
+        .collect();
+    out.sort();
+    out.reverse();
+    out
+}
+
 static BUNDLE_DIRS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 
 /// Register directories holding bundled engines (the app's resource dir). Call once at startup.
@@ -264,16 +349,36 @@ fn bundle_dirs() -> Vec<PathBuf> {
     with_engine_bins(dirs)
 }
 
-/// Each registered dir, then its children's `bin` and `Library/bin`: two archive layouts travel —
-/// `<engine>/bin` (most releases) and `<engine>/Library/bin` (conda-built Ghostscript on Windows).
+/// Each registered dir, then the layouts its engines unpack into:
+///
+///   `<engine>/bin`             most release archives (ffmpeg, pandoc, qpdf)
+///   `<engine>/Library/bin`     conda trees on Windows (Ghostscript, Tesseract)
+///   `<engine>/Scripts`         conda Python environments (rembg)
+///   `<engine>/program`         LibreOffice, on every OS
+///   `<engine>/Contents/MacOS`  a bare .app bundle
+///   `<engine>/*.app/Contents/MacOS`  a .app beside other files
+///   `<engine>`                 a single binary or a flat extract
+///
 /// The flat dir goes last so a tool unpacked straight into it still wins over nothing.
 fn with_engine_bins(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut all = Vec::new();
     for d in dirs {
         if let Ok(rd) = d.read_dir() {
             for e in rd.flatten() {
-                all.push(e.path().join("bin"));
-                all.push(e.path().join("Library").join("bin"));
+                let p = e.path();
+                all.push(p.join("bin"));
+                all.push(p.join("Library").join("bin"));
+                all.push(p.join("Scripts"));
+                all.push(p.join("program"));
+                all.push(p.join("Contents").join("MacOS"));
+                if let Ok(inner) = p.read_dir() {
+                    for app in inner.flatten() {
+                        if app.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("app")) {
+                            all.push(app.path().join("Contents").join("MacOS"));
+                        }
+                    }
+                }
+                all.push(p);
             }
         }
         all.push(d);
@@ -291,13 +396,19 @@ pub fn bundled_env(bin: &Path) -> Option<(&'static str, PathBuf)> {
 
 fn relocated_env(bin: &Path) -> Option<(&'static str, PathBuf)> {
     let root = bin.parent()?.parent()?;
+    // Unix conda trees put data under `share/` and `lib/`; Windows trees add a `Library/`
+    // level. Accept either, so one extraction rule works on all three platforms.
+    let first_dir = |candidates: &[PathBuf]| candidates.iter().find(|p| p.is_dir()).cloned();
     let (key, dir) = match bin.file_stem()?.to_str()? {
-        "tesseract" => ("TESSDATA_PREFIX", root.join("share").join("tessdata")),
+        "tesseract" => (
+            "TESSDATA_PREFIX",
+            first_dir(&[root.join("share").join("tessdata"), root.join("Library").join("share").join("tessdata")])?,
+        ),
         // `lib`, not the tree root: a relocated conda libvips looks for `$VIPSHOME/vips-modules-*`.
-        "vips" | "vipsheader" => ("VIPSHOME", root.join("lib")),
+        "vips" | "vipsheader" => ("VIPSHOME", first_dir(&[root.join("lib"), root.join("Library").join("lib")])?),
         _ => return None,
     };
-    dir.is_dir().then_some((key, dir))
+    Some((key, dir))
 }
 
 pub fn which(name: &str) -> Option<PathBuf> {
@@ -385,6 +496,41 @@ mod tests {
         assert_eq!(dirs.last(), Some(&root), "the flat dir is searched last");
 
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A bundled LibreOffice keeps `program/` (Linux and Windows), a macOS `.app` keeps
+    /// `Contents/MacOS`, and a conda Python environment keeps console scripts in `Scripts`.
+    /// Missing any of these is exactly how a bundled engine turns into "not found".
+    #[test]
+    fn engine_bins_cover_office_app_and_script_layouts() {
+        let root = env::temp_dir().join(format!("zeidex-layouts-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("libreoffice").join("program")).unwrap();
+        fs::create_dir_all(root.join("calibre").join("calibre.app").join("Contents").join("MacOS")).unwrap();
+        fs::create_dir_all(root.join("rembg").join("Scripts")).unwrap();
+
+        let dirs = with_engine_bins(vec![root.clone()]);
+
+        assert!(dirs.contains(&root.join("libreoffice").join("program")));
+        assert!(dirs.contains(&root.join("calibre").join("calibre.app").join("Contents").join("MacOS")));
+        assert!(dirs.contains(&root.join("rembg").join("Scripts")));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// LibreOffice has a fixed home on every OS; a `.app` is not on PATH and a per-user
+    /// Windows install is not under Program Files.
+    #[test]
+    fn libreoffice_known_dirs_are_complete() {
+        let dirs = Tool::LibreOffice.known_dirs();
+        if cfg!(windows) {
+            let local: Vec<_> = dirs.iter().filter(|p| p.ends_with(Path::new("LibreOffice").join("program"))).collect();
+            assert!(!local.is_empty(), "no LibreOffice/program candidate: {dirs:?}");
+        } else if cfg!(target_os = "macos") {
+            assert!(dirs.iter().any(|p| p.ends_with("LibreOffice.app/Contents/MacOS")));
+        } else {
+            assert!(dirs.contains(&PathBuf::from("/usr/lib/libreoffice/program")));
+        }
     }
 
     /// A conda-built Tesseract or libvips only works inside a package when it is told where its

@@ -129,10 +129,12 @@ export const runJob = (paths: string[], kind: string, id: string, opts: Record<s
   invoke<void>('run_job', { paths, kind, id, opts });
 export const keepWheel = () => invoke<void>('keep_wheel');
 export const hideWheel = () => invoke<void>('hide_wheel');
-export const wheelAtShelf = () => invoke<void>('wheel_at_shelf');
+export const wheelAtShelf = (paths: string[] = []) => invoke<void>('wheel_at_shelf', { paths });
 export const openEditor = (paths: string[], tool: string) => invoke<void>('open_editor', { paths, tool });
 export const takePending = () => invoke<string[]>('take_pending');
 export const doctor = () => invoke<Engine[]>('doctor');
+/** Opens a terminal running the engine's install command (winget / brew / apt). */
+export const installEngine = (id: string) => invoke<void>('install_engine', { id });
 export const hookOk = () => invoke<boolean>('hook_ok');
 export const integrateShell = () => invoke<string[]>('integrate_shell');
 export const pickFiles = () => invoke<string[]>('pick_files');

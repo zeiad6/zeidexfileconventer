@@ -45,6 +45,24 @@ describe('wheel', () => {
     expect(document.querySelector('[data-seg="mode-tools"]')!.classList.contains('current')).toBe(false);
   });
 
+  it('loads the rings from the paths the orb or the drag hook discovered', async () => {
+    mount(<Wheel />);
+    await h.emit('wheel-files', CLIP);
+
+    expect(segs()).toHaveLength(13);
+    expect(document.querySelector('[data-seg="item-mp4"]')).not.toBeNull();
+  });
+
+  it('hides itself when nobody touches the wheel it opened', async () => {
+    mount(<Wheel />);
+    await h.emit('wheel-files', CLIP);
+    expect(h.calls.some((c) => c.cmd === 'hide_wheel')).toBe(false);
+
+    // IDLE_MS is 3200: the wheel must not sit on top of every other window forever.
+    await h.wait(3400);
+    expect(h.calls.some((c) => c.cmd === 'hide_wheel')).toBe(true);
+  });
+
   it('opens the nested ring after a dwell and applies the value it was dropped on', async () => {
     mount(<Wheel />);
     await h.drag({ type: 'enter', paths: CLIP, position: at(0, 10, 150) });

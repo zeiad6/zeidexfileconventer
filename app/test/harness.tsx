@@ -156,8 +156,8 @@ export function defaultResponses(): Record<string, unknown> {
   return {
     describe: videoDesc(),
     doctor: [
-      { name: 'FFmpeg', path: '/usr/bin/ffmpeg', hint: '' },
-      { name: 'libvips', path: null, hint: 'apt' },
+      { id: 'ffmpeg', name: 'FFmpeg', path: '/usr/bin/ffmpeg', hint: '' },
+      { id: 'vips', name: 'libvips', path: null, hint: 'apt' },
     ],
     hook_ok: true,
     take_pending: ['/home/u/clip.mp4'],

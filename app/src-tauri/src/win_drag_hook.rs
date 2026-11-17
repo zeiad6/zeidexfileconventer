@@ -26,7 +26,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SWP_NOMOVE, SWP_NOSIZE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
 };
 
-use crate::hook::{center, hide, keep, mode_for, set_visible, visible, Trigger, KEYS};
+use crate::hook::{center, hide, mode_for, set_visible, visible, Trigger, KEYS};
 
 /// Pointer travel (px) before a held left button counts as a drag.
 const DRAG_THRESHOLD: f64 = 12.0;
@@ -125,6 +125,7 @@ pub fn start(app: AppHandle, on_hotkey: fn(&AppHandle)) {
         let mut mods = (false, false, false, false);
         let mut shown = false;
         let mut was_space = false;
+        let mut beats = 0u8;
 
         loop {
             let down = key_down(VK_LBUTTON);
@@ -134,6 +135,7 @@ pub fn start(app: AppHandle, on_hotkey: fn(&AppHandle)) {
                 origin = p;
                 active = false;
                 mods = (false, false, false, false);
+                beats = 0;
                 if shown {
                     // A second press while the wheel is open is a cancel, not a new drag.
                     hide(&app);
@@ -169,6 +171,14 @@ pub fn start(app: AppHandle, on_hotkey: fn(&AppHandle)) {
             }
             was_space = space;
 
+            // A slow drag must not let the UI's idle timer hide the wheel mid-gesture.
+            if active && shown {
+                beats = beats.wrapping_add(1);
+                if beats % 30 == 0 {
+                    let _ = app.emit("wheel-alive", ());
+                }
+            }
+
             if active {
                 let now = (
                     key_down(VK_SHIFT),
@@ -201,10 +211,11 @@ fn show(app: &AppHandle, mode: &'static str, at: (i32, i32)) {
             let _ = w.show();
         }
         set_visible(true);
-        keep(); // survive the button release while the pointer is over the wheel
         let files = dragged_paths();
         if !files.is_empty() {
-            let _ = app.emit("wheel-open", files);
+            // This is a native drag: load the file types, but do not put the wheel in
+            // click/keyboard mode. OLE keeps sending drag events to the window.
+            let _ = app.emit("wheel-files", files);
         }
     }
     let _ = app.emit("wheel-mode", mode);

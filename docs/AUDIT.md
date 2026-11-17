@@ -183,8 +183,16 @@ Not done, on purpose:
   Ghostscript renders PDF pages and compresses PDFs, so those tools run on a clean machine.
   When libvips is absent, image conversion, resize, crop, rotate, grayscale, background framing,
   collage, web-set and images-to-PDF fall back to that FFmpeg build; HEIC, JXL and JP2 output
-  still name libvips in a clear error because FFmpeg cannot encode them. LibreOffice, Calibre,
-  Tesseract, whisper.cpp and the AI models stay optional and are never downloaded by the app.
+  still name libvips in a clear error because FFmpeg cannot encode them. The Windows setup also
+  carries LibreOffice, Calibre, Tesseract, qrencode, ExifTool, ZBar, whisper.cpp and
+  Real-ESRGAN; the Unix packages carry all of those except LibreOffice and Calibre (and whisper
+  on macOS), whose tools the Engines panel installs with one click. Both Windows MSIs are
+  unpacked with `msiexec /a` — their cabinets store every file flat, so 7-Zip cannot rebuild the
+  `program/` + `share/` tree `soffice.exe` needs — then trimmed of help pages, icon themes and
+  all but the English and Arabic dictionaries. The installer's `Fonts/` folder is re-homed to
+  `share/fonts/truetype`, because an administrative install never registers fonts system-wide
+  and Caladea/Carlito are what keep Calibri/Cambria page breaks in place. Nothing is downloaded
+  while the app runs.
 - **Windows WebView2** is the one component the setup does not carry. Windows 11 and updated
   Windows 10 ship the Evergreen runtime; when it is absent the installer runs Microsoft's
   bootstrapper, which needs the network. The 127 MB offline installer was left out on purpose:

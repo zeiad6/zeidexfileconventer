@@ -86,7 +86,7 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
             let cat = common_category(&files);
             println!("category: {}", cat.map_or("mixed", |c| c.name()));
             println!("convert:  {}", common_targets(&files).join(" "));
-            let ids: Vec<&str> = tools_for_paths(&files).iter().map(|t| t.id).collect();
+            let ids: Vec<&str> = zeidex_core::ops::available(tools_for_paths(&files)).iter().map(|t| t.id).collect();
             println!("tools:    {}", ids.join(" "));
             Ok(true)
         }
@@ -151,11 +151,12 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
                 let cats: Vec<&str> = t.cats.iter().map(|c| c.name()).collect();
                 let params: Vec<String> = t.params.iter().map(|p| format!("--{} {:?}", p.key, p.default)).collect();
                 println!(
-                    "{:<14} {:<22} [{}]{} {}",
+                    "{:<14} {:<22} [{}]{}{} {}",
                     t.id,
                     t.label,
                     cats.join(","),
                     if t.multi { " (2+ files)" } else { "" },
+                    if zeidex_core::ops::ready(t) { "" } else { " (engine missing)" },
                     params.join(" ")
                 );
             }

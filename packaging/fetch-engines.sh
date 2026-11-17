@@ -7,12 +7,18 @@
 # Every desktop package carries FFmpeg, FFprobe, 7-Zip, rhwp, Pandoc, qpdf and Ghostscript.
 # qpdf handles PDF merge/split/pages/protection; Ghostscript renders PDF pages and compresses PDFs.
 # The two are the difference between "the tool is listed" and "the tool runs" on a clean machine,
-# so they are no longer left to the distribution. LibreOffice, Calibre and the AI models
-# stay optional: bundling them would add several hundred megabytes for features not every user opens,
-# and the Engines panel prints the one-line install command for each.
+# so they are no longer left to the distribution.
 #
-# Linux:  FFmpeg + FFprobe, 7-Zip, rhwp, Pandoc, qpdf, Ghostscript, libvips, Tesseract, qrencode
-# macOS:  the same (FFmpeg is bundled here too; Homebrew is no longer assumed)
+# Also bundled: libvips, Tesseract (eng+ara+osd), qrencode, ExifTool, ZBar (macOS), whisper.cpp
+# (Linux) and Real-ESRGAN where an archive exists, plus the whisper-tiny and u2net models.
+# LibreOffice and Calibre stay optional on Unix: the distro package is one command and the
+# Engines panel runs it, while their archives are 300-400 MB each and are not relocatable
+# without an install. On Windows both are bundled, because that is where the app used to die
+# with "LibreOffice not found".
+#
+# Linux:  FFmpeg + FFprobe, 7-Zip, rhwp, Pandoc, qpdf, Ghostscript, libvips, Tesseract, qrencode,
+#         ExifTool, whisper.cpp, Real-ESRGAN (x64), models
+# macOS:  the same, with ZBar and without whisper.cpp (upstream publishes no macOS binary)
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -41,8 +47,9 @@ case "$plat" in
   # Linux also carries libvips, Tesseract and qrencode ("extras"); macOS and Windows do not yet.
   linux-*) components="ffmpeg 7zip rhwp pandoc qpdf extras" ;;
   # macOS gets single-binary FFmpeg/FFprobe builds (eugeneware/ffmpeg-static), so they are
-  # downloaded raw rather than unpacked from an archive.
-  osx-*) components="ffmpeg ffprobe 7zip rhwp pandoc qpdf" ;;
+  # downloaded raw rather than unpacked from an archive. The conda extras (libvips, Tesseract
+  # with eng+ara, qrencode) travel here too: OCR and QR used to be Linux-only by accident.
+  osx-*) components="ffmpeg ffprobe 7zip rhwp pandoc qpdf extras" ;;
   *)
     echo "unsupported engine platform: $plat" >&2
     exit 1
@@ -52,7 +59,15 @@ esac
 # A local run can fetch a subset (useful when only one engine changed):
 #   ZEIDEX_ENGINE_COMPONENTS="qpdf" bash packaging/fetch-engines.sh
 # Ghostscript is part of the list too; ask for it by name when narrowing the set.
-components="${ZEIDEX_ENGINE_COMPONENTS:-$components ghostscript}"
+components="${ZEIDEX_ENGINE_COMPONENTS:-$components ghostscript exiftool models}"
+
+# Optional per platform: whisper.cpp has no macOS binary in its releases and Real-ESRGAN has no
+# Linux arm64 build, so each is listed only where a verified archive exists.
+case "$plat" in
+  linux-x64) components="$components whisper realesrgan" ;;
+  linux-arm64) components="$components whisper" ;;
+  osx-*) components="$components zbar realesrgan" ;;
+esac
 
 # Ghostscript, built by conda-forge. The Linux and macOS `gs` binaries are static, so only the
 # executable and its Resource tree travel; no shared-object closure to maintain. macOS stays on
@@ -210,6 +225,115 @@ add_extras() {
     share/tessdata/configs share/tessdata/tessconfigs share/tessdata/pdf.ttf
 }
 
+# ExifTool: its script adds `<its own dir>/lib` to @INC, so the official tarball's `lib/` is
+# what makes it self-contained. A conda build ships only the wrapper and then quietly loads
+# whatever Image::ExifTool the host happens to have — a different version, or none.
+add_exiftool() {
+  local url sha archive
+  url="$(field exiftool url)"
+  sha="$(field exiftool sha256 | tr 'A-F' 'a-f')"
+  archive="$tmp/exiftool.tar.gz"
+  echo "==> exiftool: $url"
+  curl -fsSL "$url" -o "$archive"
+  verify exiftool "$archive" "$sha"
+  rm -rf "$tmp/exiftool" "${dst:?}/exiftool"
+  mkdir -p "$tmp/exiftool" "$dst/exiftool/bin"
+  tar -xf "$archive" -C "$tmp/exiftool" --strip-components=1
+  cp "$tmp/exiftool/exiftool" "$dst/exiftool/bin/exiftool"
+  cp -R "$tmp/exiftool/lib" "$dst/exiftool/bin/lib"
+  chmod +x "$dst/exiftool/bin/exiftool"
+}
+
+# whisper.cpp: the CLI plus the shared ggml/whisper libraries it loads through $ORIGIN.
+add_whisper() {
+  local url sha archive sub
+  url="$(field whisper url)"
+  sha="$(field whisper sha256 | tr 'A-F' 'a-f')"
+  archive="$tmp/whisper.archive"
+  echo "==> whisper: $url"
+  curl -fsSL "$url" -o "$archive"
+  verify whisper "$archive" "$sha"
+  rm -rf "$tmp/whisper" "${dst:?}/whisper"
+  mkdir -p "$tmp/whisper" "$dst/whisper/bin"
+  tar -xf "$archive" -C "$tmp/whisper"
+  sub="$(find "$tmp/whisper" -type f -name whisper-cli | head -n 1)"
+  [ -n "$sub" ] || { echo "whisper-cli was not found inside the archive" >&2; exit 1; }
+  # The libraries sit beside the binary and the rpath is $ORIGIN, so the whole directory ships.
+  cp -R "$(dirname "$sub")/." "$dst/whisper/bin/"
+  chmod +x "$dst/whisper/bin/whisper-cli"
+}
+
+# Real-ESRGAN ncnn/Vulkan build: the executable and its models/ folder, which the runner reads
+# from beside the engine (tools::esrgan_models).
+add_realesrgan() {
+  local url sha archive
+  url="$(field realesrgan url)"
+  sha="$(field realesrgan sha256 | tr 'A-F' 'a-f')"
+  archive="$tmp/realesrgan.zip"
+  echo "==> realesrgan: $url"
+  curl -fsSL "$url" -o "$archive"
+  verify realesrgan "$archive" "$sha"
+  rm -rf "$tmp/realesrgan" "${dst:?}/realesrgan"
+  mkdir -p "$tmp/realesrgan"
+  unzip -q "$archive" -d "$tmp/realesrgan"
+  # Strip the release's sample images; the app only needs the binary and the networks.
+  find "$tmp/realesrgan" -maxdepth 2 -type f \( -name '*.jpg' -o -name '*.png' \) -delete
+  cp -R "$tmp/realesrgan" "$dst/realesrgan"
+  find "$dst/realesrgan" -type f -name 'realesrgan-ncnn-vulkan' -exec chmod +x {} +
+}
+
+# ZBar on macOS: the release binary looks for /usr/local/lib/libzbar.0.dylib by absolute path,
+# which no package would have. Point it at the copy that travels beside it.
+add_zbar() {
+  local url sha archive
+  url="$(field zbar url)"
+  sha="$(field zbar sha256 | tr 'A-F' 'a-f')"
+  archive="$tmp/zbar.tar.gz"
+  echo "==> zbar: $url"
+  curl -fsSL "$url" -o "$archive"
+  verify zbar "$archive" "$sha"
+  rm -rf "$tmp/zbar" "${dst:?}/zbar"
+  mkdir -p "$tmp/zbar" "$dst/zbar/bin" "$dst/zbar/lib"
+  tar -xf "$archive" -C "$tmp/zbar"
+  cp "$tmp/zbar/usr/local/bin/zbarimg" "$dst/zbar/bin/zbarimg"
+  cp "$tmp/zbar/usr/local/lib/libzbar.0.dylib" "$dst/zbar/lib/"
+  chmod +x "$dst/zbar/bin/zbarimg"
+  if command -v install_name_tool >/dev/null 2>&1; then
+    install_name_tool -change /usr/local/lib/libzbar.0.dylib @loader_path/../lib/libzbar.0.dylib \
+      "$dst/zbar/bin/zbarimg"
+  else
+    echo "install_name_tool is missing; zbarimg will not find its library" >&2
+  fi
+}
+
+# The two model files that every platform shares: whisper's tiny network and rembg's U²-Net.
+add_models() {
+  local key name url sha archive
+  for key in whisper-tiny u2net; do
+    name="$(python3 - "$json" "$key" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))["models"][sys.argv[2]]["name"])
+PY
+)"
+    url="$(python3 - "$json" "$key" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))["models"][sys.argv[2]]["url"])
+PY
+)"
+    sha="$(python3 - "$json" "$key" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))["models"][sys.argv[2]]["sha256"].lower())
+PY
+)"
+    archive="$tmp/$name"
+    echo "==> model $name: $url"
+    curl -fsSL "$url" -o "$archive"
+    verify "$name" "$archive" "$sha"
+    mkdir -p "$dst/models"
+    cp "$archive" "$dst/models/$name"
+  done
+}
+
 verify() { # label, archive, expected sha
   local actual
   if command -v sha256sum >/dev/null 2>&1; then
@@ -249,6 +373,11 @@ for component in $components; do
       ;;
     ghostscript) add_ghostscript ;;
     extras) add_extras ;;
+    exiftool) add_exiftool ;;
+    whisper) add_whisper ;;
+    realesrgan) add_realesrgan ;;
+    zbar) add_zbar ;;
+    models) add_models ;;
   esac
 done
 

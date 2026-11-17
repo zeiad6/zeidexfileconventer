@@ -20,6 +20,7 @@ export const COPY = {
   run: ['Run', 'تشغيل'],
   cancel: ['Cancel', 'إلغاء'],
   engines: ['Engines', 'المحرّكات'],
+  install: ['Install', 'تثبيت'],
   integrate: ['Add “Open with Zeidex” to the file manager', 'إضافة «فتح بـ Zeidex» إلى مدير الملفات'],
   added: ['Added:', 'أُضيف:'],
   hookOn: [

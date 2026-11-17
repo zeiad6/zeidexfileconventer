@@ -165,6 +165,9 @@ export function Wheel() {
   const setMode = useCallback((mode: WheelMode) => {
     const s = latest.current;
     if (mode === s.mode) return;
+    // Never morph into an empty ring: an archive has no format targets, a mixed selection has
+    // no tools. The old wheel did, and the user saw a blank ring with no way back.
+    if (s.desc && s.desc[mode].length === 0) return;
     dispatch({ type: 'mode', mode });
   }, []);
 
@@ -238,7 +241,7 @@ export function Wheel() {
       if (chip !== s.chip) {
         window.clearTimeout(chipTimer.current);
         dispatch({ type: 'chip', index: chip });
-        if (chip >= 0 && MODES[chip] !== s.mode) {
+        if (chip >= 0 && MODES[chip] !== s.mode && (!s.desc || s.desc[MODES[chip]].length)) {
           chipTimer.current = window.setTimeout(() => setMode(MODES[chip]), DWELL_MS);
         }
       }
@@ -294,7 +297,15 @@ export function Wheel() {
         if (latest.current.form) return;
         if (p.type === 'enter') {
           window.clearTimeout(hideTimer.current);
-          await load(p.paths);
+          bumpIdle();
+          try {
+            await load(p.paths);
+          } catch (e) {
+            // A description that fails must not leave a blank ring on screen forever.
+            fail(e);
+            hideTimer.current = window.setTimeout(() => void hideWheel(), IDLE_MS);
+            return;
+          }
           over(p.position);
         } else if (p.type === 'over') {
           over(p.position);
@@ -306,7 +317,7 @@ export function Wheel() {
           hideTimer.current = window.setTimeout(() => void hideWheel(), LEAVE_MS);
         }
       }),
-    [drop, load, over],
+    [bumpIdle, drop, fail, load, over],
   );
 
   // Click/keyboard mode (Ctrl+Shift+Space on a selection): no drag, so mouse moves, clicks,
@@ -319,10 +330,33 @@ export function Wheel() {
         dispatch({ type: 'reset' });
         // A fresh selection must be re-described even when the paths repeat the previous drag.
         latest.current = INITIAL;
-        const { desc } = await load(paths);
-        const list = desc[latest.current.mode];
-        if (list.length) dispatch({ type: 'hover', index: 0, closeOpen: true });
+        try {
+          const { desc } = await load(paths);
+          const list = desc[latest.current.mode];
+          if (list.length) dispatch({ type: 'hover', index: 0, closeOpen: true });
+        } catch (e) {
+          fail(e);
+          hideTimer.current = window.setTimeout(() => void hideWheel(), IDLE_MS);
+        }
         bumpIdle();
+      }),
+    );
+
+    offs.push(safeListen<void>('wheel-alive', () => bumpIdle()));
+
+    // The orb and the Windows drag poller know the file list before the wheel window does.
+    // Load it without switching to click mode: the drag is still native and OLE owns it.
+    offs.push(
+      safeListen<string[]>('wheel-files', async (paths) => {
+        if (latest.current.form) return;
+        window.clearTimeout(hideTimer.current);
+        bumpIdle();
+        try {
+          await load(paths);
+        } catch (e) {
+          fail(e);
+          hideTimer.current = window.setTimeout(() => void hideWheel(), IDLE_MS);
+        }
       }),
     );
 
@@ -419,7 +453,7 @@ export function Wheel() {
       document.removeEventListener('keydown', onKey);
       window.removeEventListener('blur', onBlur);
     };
-  }, [bumpIdle, choose, chooseSub, drop, load, over, setMode]);
+  }, [bumpIdle, choose, chooseSub, drop, fail, load, over, setMode]);
 
   useEffect(() => stopTimers, []);
 

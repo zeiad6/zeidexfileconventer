@@ -34,7 +34,7 @@ export function Shelf() {
       onDragDrop(async (p) => {
         if (p.type === 'enter' || p.type === 'over') setOver(true);
         else if (p.type === 'leave') setOver(false);
-        if (p.type === 'enter') void wheelAtShelf();
+        if (p.type === 'enter') void wheelAtShelf(p.paths);
         if (p.type === 'drop') {
           setOver(false);
           await floatAdd(p.paths);

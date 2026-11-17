@@ -164,6 +164,7 @@ enum JobEvent {
 
 #[derive(Serialize)]
 struct ToolStatus {
+    id: &'static str,
     name: &'static str,
     path: Option<String>,
     hint: &'static str,
@@ -178,7 +179,13 @@ static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 fn describe(app: AppHandle, paths: Vec<String>) -> Described {
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     let cat = format::common_category(&paths);
-    let common = format::common_targets(&paths);
+    // Hide the targets this machine has no engine for, so a segment never promises a job that
+    // is guaranteed to fail after the drop.
+    let first = paths.first();
+    let common: Vec<&str> = format::common_targets(&paths)
+        .into_iter()
+        .filter(|t| first.is_some_and(|p| ops::convert_ready(p, t)))
+        .collect();
     let mixed = common.is_empty() && paths.len() > 1;
     let total = paths.len();
     // A heterogeneous drag has no shared target; offer every output at least one file can
@@ -186,6 +193,7 @@ fn describe(app: AppHandle, paths: Vec<String>) -> Described {
     let convert: Vec<Choice> = if common.is_empty() && mixed {
         format::mixed_targets(&paths)
             .into_iter()
+            .filter(|(t, _)| paths.iter().any(|p| ops::convert_ready(p, t)))
             .map(|(t, n)| {
                 let children = children_for("convert", t, &[]);
                 Choice {
@@ -216,7 +224,7 @@ fn describe(app: AppHandle, paths: Vec<String>) -> Described {
             .collect()
     };
     let recipes: Vec<Recipe> = get_settings(app).recipes.into_iter().take(WHEEL_RECIPES).collect();
-    let all: Vec<&ops::ToolDef> = ops::tools_for_paths(&paths).into_iter().filter(|t| t.id != "recipe").collect();
+    let all: Vec<&ops::ToolDef> = ops::available(ops::tools_for_paths(&paths).into_iter().filter(|t| t.id != "recipe"));
     let (shown, more) = ops::wheel_tools(&all, recipes.len());
     let saved = recipes.into_iter().map(|r| Choice {
         kind: "tool",
@@ -954,14 +962,22 @@ fn keep_wheel(app: AppHandle) {
 }
 
 /// Files dragged onto the orb: open the wheel around it so the drag can continue onto a segment.
+///
+/// The orb's drag-enter carries the file list, but the wheel window appears under the pointer
+/// afterwards and Windows sends nothing to a target that did not exist when the drag crossed
+/// it. Handing the paths over here is what makes the rings show the real formats and tools
+/// before the pointer moves again.
 #[tauri::command]
-fn wheel_at_shelf(app: AppHandle) {
+fn wheel_at_shelf(app: AppHandle, paths: Vec<String>) {
     let Some(shelf) = app.get_webview_window("shelf") else { return };
     let (Ok(pos), Ok(size)) = (shelf.outer_position(), shelf.outer_size()) else { return };
     let (cx, cy) = (pos.x + size.width as i32 / 2, pos.y + size.height as i32 / 2);
     hook::show_at(&app, "convert", (cx, cy));
     if let Some(w) = app.get_webview_window("wheel") {
         hook::center(&w, cx, cy);
+    }
+    if !paths.is_empty() {
+        let _ = app.emit("wheel-files", paths);
     }
 }
 
@@ -975,11 +991,48 @@ fn doctor() -> Vec<ToolStatus> {
     tools::Tool::ALL
         .iter()
         .map(|t| ToolStatus {
+            id: t.slug(),
             name: t.label(),
             path: tools::locate(*t).map(|p| p.to_string_lossy().into_owned()),
             hint: t.install_hint(),
         })
         .collect()
+}
+
+/// Runs the platform install command for one engine in a visible terminal. The Engines panel
+/// shows the command first; this is the "just do it" button beside it. Nothing is downloaded or
+/// executed silently: the user sees the package manager, agrees to it, and can close the window.
+#[tauri::command]
+fn install_engine(id: String) -> Result<(), String> {
+    let tool = tools::Tool::by_slug(&id).ok_or_else(|| format!("unknown engine `{id}`"))?;
+    let hint = tool.install_hint();
+    // Only a real package-manager line is executed. A hint that explains a manual step
+    // ("put it on PATH", "build from source") is printed in the terminal instead of being
+    // run as if it were a command; guessing wrong there would run nonsense in a shell.
+    let runnable = hint.starts_with("winget ")
+        || hint.starts_with("scoop ")
+        || hint.starts_with("choco ")
+        || hint.starts_with("brew ")
+        || hint.starts_with("sudo ")
+        || hint.starts_with("apt ")
+        || hint.starts_with("dnf ")
+        || hint.starts_with("pacman ")
+        || hint.starts_with("pipx ");
+    // A trailing parenthetical is advice for the reader ("or use the bundled build"), not part
+    // of the command; feeding it to the shell would make the package manager choke.
+    let command = hint.split(" (").next().unwrap_or(hint).trim_end();
+    if !runnable {
+        let note =
+            format!("echo {} && echo && echo '{}'", shell_quote(hint), "Run this by hand: it needs a manual step.");
+        return actions::run_in_terminal(&note).map_err(|e| e.to_string());
+    }
+    actions::run_in_terminal(command).map_err(|e| e.to_string())
+}
+
+/// Single-quote for `sh -c`; Windows `cmd` does not expand single quotes, but the hints are
+/// static strings that never contain one.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 #[tauri::command]
@@ -1130,6 +1183,7 @@ pub fn run() {
             wheel_at_shelf,
             reveal,
             doctor,
+            install_engine,
             hook_ok,
             integrate_shell,
             pick_files,

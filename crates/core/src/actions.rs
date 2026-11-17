@@ -192,10 +192,63 @@ pub fn open_terminal(path: &Path) -> Result<()> {
     }
 }
 
+/// Runs a shell command in a visible terminal window, so package-manager prompts (a sudo
+/// password, a winget agreement, brew's progress) stay reachable instead of running hidden.
+///
+/// The command comes from `Tool::install_hint()`, which is a static string per platform; nothing
+/// here is user input, and the terminal is what the user would have opened themselves.
+pub fn run_in_terminal(command: &str) -> Result<()> {
+    #[cfg(windows)]
+    {
+        // `start` needs the empty title argument before the program name, or a quoted command
+        // becomes the window title. `cmd /k` keeps the window open after it finishes.
+        Command::new("cmd")
+            .args(["/c", "start", "", "cmd", "/k", command])
+            .spawn()
+            .map_err(|e| Error::Failed { tool: "cmd".into(), detail: e.to_string() })?;
+        Ok(())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let escaped = command.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!("tell application \"Terminal\" to do script \"{escaped}\"");
+        Command::new("osascript")
+            .args(["-e", &script, "-e", "tell application \"Terminal\" to activate"])
+            .spawn()
+            .map_err(|e| Error::Failed { tool: "osascript".into(), detail: e.to_string() })?;
+        Ok(())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // Keep the window up after the command ends: the last lines of a failure are the part
+        // worth reading, and a console that vanishes takes them with it.
+        let script = format!("{command}; echo; printf 'Press Enter to close…'; read -r _");
+        let candidates: [(&str, &[&str]); 7] = [
+            ("x-terminal-emulator", &["-e", "sh", "-c"]),
+            ("gnome-terminal", &["--", "sh", "-c"]),
+            ("konsole", &["-e", "sh", "-c"]),
+            ("xfce4-terminal", &["-x", "sh", "-c"]),
+            ("kitty", &["-e", "sh", "-c"]),
+            ("alacritty", &["-e", "sh", "-c"]),
+            ("xterm", &["-e", "sh", "-c"]),
+        ];
+        for (bin, args) in candidates {
+            if which(bin).is_some() {
+                Command::new(bin)
+                    .args(args)
+                    .arg(&script)
+                    .spawn()
+                    .map_err(|e| Error::Failed { tool: bin.into(), detail: e.to_string() })?;
+                return Ok(());
+            }
+        }
+        Err(Error::Unsupported("no terminal emulator found to run the installer".into()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn shred_overwrites_then_deletes() {
         let d = std::env::temp_dir().join(format!("zeidex-shred-{}", std::process::id()));

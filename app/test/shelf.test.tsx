@@ -63,4 +63,14 @@ describe('orb', () => {
     await h.drag({ type: 'drop', paths: ['/u/new.png'], position: { x: 10, y: 10 } });
     expect(firstCall(h.calls, 'float_add')?.args.paths).toEqual(['/u/new.png']);
   });
+
+  it('hands the dragged paths to the wheel that opens around the orb', async () => {
+    const h = installTauri();
+    mount(<Shelf />);
+    await flush();
+
+    await h.drag({ type: 'enter', paths: ['/u/a.pdf', '/u/b.pdf'], position: { x: 10, y: 10 } });
+    const open = firstCall(h.calls, 'wheel_at_shelf');
+    expect(open?.args.paths).toEqual(['/u/a.pdf', '/u/b.pdf']);
+  });
 });

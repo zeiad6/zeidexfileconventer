@@ -37,6 +37,7 @@ export interface Desc {
 }
 
 export interface Engine {
+  id: string;
   name: string;
   path: string | null;
   hint: string;
