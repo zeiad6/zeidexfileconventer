@@ -5,7 +5,7 @@
   "official_website": "https://zeidexsoft.com",
   "developer_portal": "https://zeidexlink.zeidexsoft.com/zeidex",
   "manifest_version": 1,
-  "updated_at": "2026-11-17T04:10:00Z",
+  "updated_at": "2026-11-17T05:25:00Z",
   "packages": [
     {
       "id": "com.zeidex.convert",
@@ -35,7 +35,7 @@
       "release_date": "2026-11-17",
       "url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.3.4/Zeidex.Convert_0.3.4_aarch64.AppImage",
       "mirror_url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.3.4/Zeidex.Convert_0.3.4_aarch64.AppImage",
-      "sha256": "5e0afe316656bee2834bd39ad66dab200454d2fe46c6756889b4335a5ae1605f",
+      "sha256": "6962a2becb1039ae3516e5c87980fa75f2c472be4a9413160f9f1e152ad64911",
       "changelog_ar": "إصدار 0.3.4: ويندوز يحمل LibreOffice 26.2.7 وCalibre 9.18.0 داخل حزمة التثبيت، فلا مزيد من «LibreOffice not found»؛ يُفكّان بـmsiexec /a ويُقلَّمان من صفحات المساعدة والقاموسات (يبقى الإنجليزي والعربي) مع الحفاظ على خطوط Caladea وCarlito وAmiri. العجلة المنبثقة تعرض الأدوات فعلاً عند السحب وتُغلق بعد خمول، والأدوات بلا محرّك تُخفى بدل أن تُعرض ثم تفشل، ولكل محرّك ناقص زر «تثبيت» في لوحة Engines، وأداة إنشاء QR تعمل. البحث عن المحرّكات صار يغطي مسارات التثبيت الشائعة على أنظمة ويندوز وmacOS ولينكس.",
       "changelog_en": "0.3.4: the Windows setup now carries LibreOffice 26.2.7 and Calibre 9.18.0, so \"LibreOffice not found\" is gone; both MSIs are unpacked with msiexec /a and trimmed of help pages and 56 spelling dictionaries (English and Arabic stay) while Caladea, Carlito and Amiri fonts are kept. The drag wheel shows the real tools and closes when idle, tools with no engine are hidden instead of failing after the drop, every missing engine has an Install button in the Engines panel, and QR generation runs on the bundled qrencode. Engine lookup now covers the usual install paths on Windows, macOS and Linux.",
       "mandatory": false
@@ -50,7 +50,7 @@
       "release_date": "2026-11-17",
       "url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.3.4/Zeidex.Convert_0.3.4_aarch64.dmg",
       "mirror_url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.3.4/Zeidex.Convert_0.3.4_aarch64.dmg",
-      "sha256": "7be27270cde523680c3dfce7ca08f52b02cebd088b1be3b42f274558ff23449b",
+      "sha256": "2e19eb787f07cafc18b3987532a3942bd172d8dd057515f7b0217f9a4695116f",
       "changelog_ar": "إصدار 0.3.4: ويندوز يحمل LibreOffice 26.2.7 وCalibre 9.18.0 داخل حزمة التثبيت، فلا مزيد من «LibreOffice not found»؛ يُفكّان بـmsiexec /a ويُقلَّمان من صفحات المساعدة والقاموسات (يبقى الإنجليزي والعربي) مع الحفاظ على خطوط Caladea وCarlito وAmiri. العجلة المنبثقة تعرض الأدوات فعلاً عند السحب وتُغلق بعد خمول، والأدوات بلا محرّك تُخفى بدل أن تُعرض ثم تفشل، ولكل محرّك ناقص زر «تثبيت» في لوحة Engines، وأداة إنشاء QR تعمل. البحث عن المحرّكات صار يغطي مسارات التثبيت الشائعة على أنظمة ويندوز وmacOS ولينكس.",
       "changelog_en": "0.3.4: the Windows setup now carries LibreOffice 26.2.7 and Calibre 9.18.0, so \"LibreOffice not found\" is gone; both MSIs are unpacked with msiexec /a and trimmed of help pages and 56 spelling dictionaries (English and Arabic stay) while Caladea, Carlito and Amiri fonts are kept. The drag wheel shows the real tools and closes when idle, tools with no engine are hidden instead of failing after the drop, every missing engine has an Install button in the Engines panel, and QR generation runs on the bundled qrencode. Engine lookup now covers the usual install paths on Windows, macOS and Linux.",
       "mandatory": false
@@ -65,7 +65,7 @@
       "release_date": "2026-11-17",
       "url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.3.4/Zeidex.Convert_0.3.4_amd64.AppImage",
       "mirror_url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.3.4/Zeidex.Convert_0.3.4_amd64.AppImage",
-      "sha256": "635d92e115350f3200c5708b0eca843c294c3baeb26ba0406df52339808210a4",
+      "sha256": "8e135cbd6731ba5c8e779343412b81491e178d7bbb81bdbcc4ddc9a6268a3985",
       "changelog_ar": "إصدار 0.3.4: ويندوز يحمل LibreOffice 26.2.7 وCalibre 9.18.0 داخل حزمة التثبيت، فلا مزيد من «LibreOffice not found»؛ يُفكّان بـmsiexec /a ويُقلَّمان من صفحات المساعدة والقاموسات (يبقى الإنجليزي والعربي) مع الحفاظ على خطوط Caladea وCarlito وAmiri. العجلة المنبثقة تعرض الأدوات فعلاً عند السحب وتُغلق بعد خمول، والأدوات بلا محرّك تُخفى بدل أن تُعرض ثم تفشل، ولكل محرّك ناقص زر «تثبيت» في لوحة Engines، وأداة إنشاء QR تعمل. البحث عن المحرّكات صار يغطي مسارات التثبيت الشائعة على أنظمة ويندوز وmacOS ولينكس.",
       "changelog_en": "0.3.4: the Windows setup now carries LibreOffice 26.2.7 and Calibre 9.18.0, so \"LibreOffice not found\" is gone; both MSIs are unpacked with msiexec /a and trimmed of help pages and 56 spelling dictionaries (English and Arabic stay) while Caladea, Carlito and Amiri fonts are kept. The drag wheel shows the real tools and closes when idle, tools with no engine are hidden instead of failing after the drop, every missing engine has an Install button in the Engines panel, and QR generation runs on the bundled qrencode. Engine lookup now covers the usual install paths on Windows, macOS and Linux.",
       "mandatory": false
@@ -80,7 +80,7 @@
       "release_date": "2026-11-17",
       "url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.3.4/Zeidex.Convert_0.3.4_x64-setup.exe",
       "mirror_url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.3.4/Zeidex.Convert_0.3.4_x64-setup.exe",
-      "sha256": "c87f73f0aecc78db3d4f1aae33cc88435e8cea9cb01439a66f84dd1937277c8f",
+      "sha256": "817e136d20d8f276d044ca62c4e73f45566ed40b76242ad684fc26756bf50327",
       "changelog_ar": "إصدار 0.3.4: ويندوز يحمل LibreOffice 26.2.7 وCalibre 9.18.0 داخل حزمة التثبيت، فلا مزيد من «LibreOffice not found»؛ يُفكّان بـmsiexec /a ويُقلَّمان من صفحات المساعدة والقاموسات (يبقى الإنجليزي والعربي) مع الحفاظ على خطوط Caladea وCarlito وAmiri. العجلة المنبثقة تعرض الأدوات فعلاً عند السحب وتُغلق بعد خمول، والأدوات بلا محرّك تُخفى بدل أن تُعرض ثم تفشل، ولكل محرّك ناقص زر «تثبيت» في لوحة Engines، وأداة إنشاء QR تعمل. البحث عن المحرّكات صار يغطي مسارات التثبيت الشائعة على أنظمة ويندوز وmacOS ولينكس.",
       "changelog_en": "0.3.4: the Windows setup now carries LibreOffice 26.2.7 and Calibre 9.18.0, so \"LibreOffice not found\" is gone; both MSIs are unpacked with msiexec /a and trimmed of help pages and 56 spelling dictionaries (English and Arabic stay) while Caladea, Carlito and Amiri fonts are kept. The drag wheel shows the real tools and closes when idle, tools with no engine are hidden instead of failing after the drop, every missing engine has an Install button in the Engines panel, and QR generation runs on the bundled qrencode. Engine lookup now covers the usual install paths on Windows, macOS and Linux.",
       "mandatory": false
@@ -95,7 +95,7 @@
       "release_date": "2026-11-17",
       "url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.3.4/Zeidex.Convert_0.3.4_x64.dmg",
       "mirror_url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v0.3.4/Zeidex.Convert_0.3.4_x64.dmg",
-      "sha256": "49a2fae196005ffb7b13ccfc58edbf0fda0d1bbbd168f51595225510c198524c",
+      "sha256": "90ac8cb698b8da4f1ec322704db147a347354f2fe77103a4e7b5a6030b13414d",
       "changelog_ar": "إصدار 0.3.4: ويندوز يحمل LibreOffice 26.2.7 وCalibre 9.18.0 داخل حزمة التثبيت، فلا مزيد من «LibreOffice not found»؛ يُفكّان بـmsiexec /a ويُقلَّمان من صفحات المساعدة والقاموسات (يبقى الإنجليزي والعربي) مع الحفاظ على خطوط Caladea وCarlito وAmiri. العجلة المنبثقة تعرض الأدوات فعلاً عند السحب وتُغلق بعد خمول، والأدوات بلا محرّك تُخفى بدل أن تُعرض ثم تفشل، ولكل محرّك ناقص زر «تثبيت» في لوحة Engines، وأداة إنشاء QR تعمل. البحث عن المحرّكات صار يغطي مسارات التثبيت الشائعة على أنظمة ويندوز وmacOS ولينكس.",
       "changelog_en": "0.3.4: the Windows setup now carries LibreOffice 26.2.7 and Calibre 9.18.0, so \"LibreOffice not found\" is gone; both MSIs are unpacked with msiexec /a and trimmed of help pages and 56 spelling dictionaries (English and Arabic stay) while Caladea, Carlito and Amiri fonts are kept. The drag wheel shows the real tools and closes when idle, tools with no engine are hidden instead of failing after the drop, every missing engine has an Install button in the Engines panel, and QR generation runs on the bundled qrencode. Engine lookup now covers the usual install paths on Windows, macOS and Linux.",
       "mandatory": false
