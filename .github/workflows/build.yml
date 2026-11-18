@@ -58,13 +58,6 @@ jobs:
           bash packaging/checksums.sh "$tmp/Zeidex Convert_9.9.9_x64.dmg" > "$tmp/sums.txt"
           grep -qx '[0-9a-f]\{64\}  Zeidex\.Convert_9\.9\.9_x64\.dmg' "$tmp/sums.txt" \
             || { cat "$tmp/sums.txt"; exit 1; }
-      - name: Tauri backend (fmt, clippy, unit tests)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libxtst-dev libx11-dev
-          cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings
-          cargo test --manifest-path app/src-tauri/Cargo.toml
       - name: UI tests (React + jsdom)
         working-directory: app
         run: |
@@ -73,6 +66,13 @@ jobs:
       - name: UI build (TypeScript + Vite)
         working-directory: app
         run: npm run build
+      - name: Tauri backend (fmt, clippy, unit tests)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libxtst-dev libx11-dev
+          cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path app/src-tauri/Cargo.toml
       - name: engine smoke test (real conversions)
         if: runner.os == 'Linux'
         run: |
