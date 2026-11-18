@@ -28,6 +28,24 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$dst"
 
+profile="${ZEIDEX_BUILD_PROFILE:-full}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --profile)
+      profile="${2:-}"
+      shift 2
+      ;;
+    --profile=*)
+      profile="${1#*=}"
+      shift
+      ;;
+    *)
+      echo "unknown option: $1 (expected --profile lite|full)" >&2
+      exit 1
+      ;;
+  esac
+done
+
 if [ -n "${ZEIDEX_ENGINE_PLATFORM:-}" ]; then
   plat="$ZEIDEX_ENGINE_PLATFORM"
 else
@@ -43,31 +61,52 @@ else
   esac
 fi
 
-case "$plat" in
-  # Linux also carries libvips, Tesseract and qrencode ("extras"); macOS and Windows do not yet.
-  linux-*) components="ffmpeg 7zip rhwp pandoc qpdf extras" ;;
-  # macOS gets single-binary FFmpeg/FFprobe builds (eugeneware/ffmpeg-static), so they are
-  # downloaded raw rather than unpacked from an archive. The conda extras (libvips, Tesseract
-  # with eng+ara, qrencode) travel here too: OCR and QR used to be Linux-only by accident.
-  osx-*) components="ffmpeg ffprobe 7zip rhwp pandoc qpdf extras" ;;
+case "$profile" in
+  lite)
+    case "$plat" in
+      linux-*) components="ffmpeg 7zip vips-lite" ;;
+      osx-*) components="ffmpeg ffprobe 7zip vips-lite" ;;
+      *)
+        echo "unsupported engine platform: $plat" >&2
+        exit 1
+        ;;
+    esac
+    components="${ZEIDEX_ENGINE_COMPONENTS:-$components}"
+    ;;
+  full)
+    case "$plat" in
+      # Linux also carries libvips, Tesseract and qrencode ("extras"); macOS and Windows do not yet.
+      linux-*) components="ffmpeg 7zip rhwp pandoc qpdf extras" ;;
+      # macOS gets single-binary FFmpeg/FFprobe builds (eugeneware/ffmpeg-static), so they are
+      # downloaded raw rather than unpacked from an archive. The conda extras (libvips, Tesseract
+      # with eng+ara, qrencode) travel here too: OCR and QR used to be Linux-only by accident.
+      osx-*) components="ffmpeg ffprobe 7zip rhwp pandoc qpdf extras" ;;
+      *)
+        echo "unsupported engine platform: $plat" >&2
+        exit 1
+        ;;
+    esac
+
+    # A local run can fetch a subset (useful when only one engine changed):
+    #   ZEIDEX_ENGINE_COMPONENTS="qpdf" bash packaging/fetch-engines.sh
+    # Ghostscript is part of the list too; ask for it by name when narrowing the set.
+    components="${ZEIDEX_ENGINE_COMPONENTS:-$components ghostscript exiftool models}"
+
+    # Optional per platform: whisper.cpp has no macOS binary in its releases and Real-ESRGAN has no
+    # Linux arm64 build, so each is listed only where a verified archive exists.
+    case "$plat" in
+      linux-x64) components="$components whisper realesrgan" ;;
+      linux-arm64) components="$components whisper" ;;
+      osx-*) components="$components zbar realesrgan" ;;
+    esac
+    ;;
   *)
-    echo "unsupported engine platform: $plat" >&2
+    echo "unsupported profile '$profile' (expected lite or full)" >&2
     exit 1
     ;;
 esac
 
-# A local run can fetch a subset (useful when only one engine changed):
-#   ZEIDEX_ENGINE_COMPONENTS="qpdf" bash packaging/fetch-engines.sh
-# Ghostscript is part of the list too; ask for it by name when narrowing the set.
-components="${ZEIDEX_ENGINE_COMPONENTS:-$components ghostscript exiftool models}"
-
-# Optional per platform: whisper.cpp has no macOS binary in its releases and Real-ESRGAN has no
-# Linux arm64 build, so each is listed only where a verified archive exists.
-case "$plat" in
-  linux-x64) components="$components whisper realesrgan" ;;
-  linux-arm64) components="$components whisper" ;;
-  osx-*) components="$components zbar realesrgan" ;;
-esac
+echo "==> engine profile: $profile ($plat)"
 
 # Ghostscript, built by conda-forge. The Linux and macOS `gs` binaries are static, so only the
 # executable and its Resource tree travel; no shared-object closure to maintain. macOS stays on
@@ -223,6 +262,25 @@ add_extras() {
     lib/vips-modules-8.18/vips-heif.so lib/vips-modules-8.18/vips-jxl.so \
     share/tessdata/eng.traineddata share/tessdata/ara.traineddata share/tessdata/osd.traineddata \
     share/tessdata/configs share/tessdata/tessconfigs share/tessdata/pdf.ttf
+  # Gate: a loader failure (a library the closure missed) has to stop the build here, not the
+  # user's first OCR. The Windows script runs the same check for the same reason.
+  TESSDATA_PREFIX="$dst/extras/share/tessdata" "$dst/extras/bin/tesseract" --version >/dev/null ||
+    { echo "the staged tesseract does not start" >&2; exit 1; }
+  TESSDATA_PREFIX="$dst/extras/share/tessdata" "$dst/extras/bin/tesseract" --tessdata-dir "$dst/extras/share/tessdata" --list-langs |
+    grep -qx "ara" || { echo "staged tesseract is missing ara.traineddata" >&2; exit 1; }
+}
+
+# Lite mode: slim libvips only (no Tesseract or qrencode).
+add_vips_lite() {
+  get_micromamba
+  echo "==> libvips (lite) via $mm"
+  rm -rf "$tmp/vips-lite"
+  MAMBA_ROOT_PREFIX="$tmp/mamba" "$tmp/$mm" create -y -q -p "$tmp/vips-lite" \
+    -c conda-forge --platform "$conda_plat" "libvips==8.18.7"
+  rm -rf "${dst:?}/extras"
+  python3 "$root/packaging/slim-conda.py" "$tmp/vips-lite" "$dst/extras" \
+    vips vipsheader \
+    lib/vips-modules-8.18/vips-heif.so lib/vips-modules-8.18/vips-jxl.so
 }
 
 # ExifTool: its script adds `<its own dir>/lib` to @INC, so the official tarball's `lib/` is
@@ -373,6 +431,7 @@ for component in $components; do
       ;;
     ghostscript) add_ghostscript ;;
     extras) add_extras ;;
+    vips-lite) add_vips_lite ;;
     exiftool) add_exiftool ;;
     whisper) add_whisper ;;
     realesrgan) add_realesrgan ;;

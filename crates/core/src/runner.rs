@@ -10,8 +10,8 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 /// Progress of one unit (`index`) of a job. Units can run in parallel, so events of
@@ -24,10 +24,69 @@ pub enum Event {
     Failed { index: usize, file: String, error: String },
 }
 
+/// Runtime pause / resume / cancel handle shared between a batch job and its worker pool.
+#[derive(Default)]
+pub struct JobControl {
+    paused: Mutex<bool>,
+    cv: Condvar,
+    cancelled: AtomicBool,
+}
+
+impl JobControl {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn pause(&self) {
+        *self.paused.lock().unwrap_or_else(|e| e.into_inner()) = true;
+    }
+
+    pub fn resume(&self) {
+        *self.paused.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        self.cv.notify_all();
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        *self.paused.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        self.cv.notify_all();
+    }
+
+    pub fn is_paused(&self) -> bool {
+        *self.paused.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Blocks while paused; returns `false` if cancelled.
+    pub fn wait_gate(&self) -> bool {
+        let mut paused = self.paused.lock().unwrap_or_else(|e| e.into_inner());
+        while *paused && !self.cancelled.load(Ordering::SeqCst) {
+            paused = self.cv.wait(paused).unwrap_or_else(|e| e.into_inner());
+        }
+        !self.cancelled.load(Ordering::SeqCst)
+    }
+}
+
+static MAX_PARALLEL: AtomicUsize = AtomicUsize::new(0);
+
+/// Sets the global worker pool cap (`0` = automatic based on CPU cores).
+pub fn set_max_parallel(n: usize) {
+    MAX_PARALLEL.store(n, Ordering::Relaxed);
+}
+
 /// Default number of files processed at once. Engines are multithreaded themselves, so a
 /// few parallel units are enough to keep every core busy on batches of small files.
 pub fn default_parallelism() -> usize {
-    std::thread::available_parallelism().map_or(1, |n| n.get()).div_ceil(2).clamp(1, 4)
+    let custom = MAX_PARALLEL.load(Ordering::Relaxed);
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    if custom > 0 {
+        custom.clamp(1, cores.max(1))
+    } else {
+        cores.div_ceil(2).clamp(1, 4)
+    }
 }
 
 /// Runs `op` on `inputs`: one output per file, or one for the whole selection for multi ops.
@@ -37,7 +96,26 @@ pub fn run(op: &Op, inputs: &[PathBuf], on: impl FnMut(Event) + Send) -> Vec<Res
 
 /// `run` with an explicit number of files processed at the same time.
 pub fn run_with(op: &Op, inputs: &[PathBuf], parallel: usize, on: impl FnMut(Event) + Send) -> Vec<Result<PathBuf>> {
-    let inputs: Vec<PathBuf> = inputs.iter().map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone())).collect();
+    run_with_control(op, inputs, parallel, Arc::new(JobControl::new()), on)
+}
+
+/// Runs `op` on `inputs` with explicit concurrency and pause/resume/cancel control.
+pub fn run_with_control(
+    op: &Op,
+    inputs: &[PathBuf],
+    parallel: usize,
+    control: Arc<JobControl>,
+    on: impl FnMut(Event) + Send,
+) -> Vec<Result<PathBuf>> {
+    let raw_inputs: Vec<PathBuf> = if matches!(op, Op::Archive { .. } | Op::Duplicates { .. }) {
+        inputs.to_vec()
+    } else {
+        crate::format::expand_dropped_paths(inputs)
+    };
+    let inputs: Vec<PathBuf> = raw_inputs
+        .iter()
+        .map(|p| tools::normalize_engine_path(&std::path::absolute(p).unwrap_or_else(|_| p.clone())))
+        .collect();
     let mut dirs: Vec<&Path> = inputs.iter().filter_map(|p| p.parent()).collect();
     dirs.sort();
     dirs.dedup();
@@ -52,11 +130,20 @@ pub fn run_with(op: &Op, inputs: &[PathBuf], parallel: usize, on: impl FnMut(Eve
     std::thread::scope(|scope| {
         for _ in 0..parallel.clamp(1, total.max(1)) {
             scope.spawn(|| loop {
+                if !control.wait_gate() {
+                    break;
+                }
                 let index = next.fetch_add(1, Ordering::Relaxed);
                 let Some(unit) = units.get(index) else { break };
                 let file = unit[0].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 emit(Event::Start { index, total, file: file.clone() });
-                let r = run_unit(op, unit, &mut |fraction| emit(Event::Progress { index, fraction }));
+                let r = if control.is_cancelled() {
+                    Err(Error::Unsupported("cancelled".into()))
+                } else {
+                    run_unit_controlled(op, unit, Some(&control), &mut |fraction| {
+                        emit(Event::Progress { index, fraction })
+                    })
+                };
                 match &r {
                     Ok(p) => emit(Event::Done { index, output: p.clone() }),
                     Err(e) => emit(Event::Failed { index, file, error: e.to_string() }),
@@ -70,7 +157,7 @@ pub fn run_with(op: &Op, inputs: &[PathBuf], parallel: usize, on: impl FnMut(Eve
         .map(|m| {
             m.into_inner()
                 .unwrap_or_else(|p| p.into_inner())
-                .unwrap_or_else(|| Err(Error::Unsupported("not run".into())))
+                .unwrap_or_else(|| Err(Error::Unsupported("cancelled".into())))
         })
         .collect()
 }
@@ -79,7 +166,12 @@ static JOB: AtomicUsize = AtomicUsize::new(0);
 /// Serialises "pick a free name + rename" so parallel units never claim the same name.
 static PLACE: Mutex<()> = Mutex::new(());
 
-fn run_unit(op: &Op, inputs: &[PathBuf], progress: &mut dyn FnMut(f32)) -> Result<PathBuf> {
+fn run_unit_controlled(
+    op: &Op,
+    inputs: &[PathBuf],
+    control: Option<&JobControl>,
+    progress: &mut dyn FnMut(f32),
+) -> Result<PathBuf> {
     let src = &inputs[0];
     if !src.exists() {
         return Err(Error::BadOption(format!("{} does not exist", src.display())));
@@ -105,12 +197,32 @@ fn run_unit(op: &Op, inputs: &[PathBuf], progress: &mut dyn FnMut(f32)) -> Resul
         for (k, step) in steps.iter().enumerate() {
             let stage = tmp.join(format!("stage{k}"));
             fs::create_dir_all(&stage)?;
-            let ctx = probe(step, &input);
-            let plan = plan::plan(step, &input, &ctx, &stage)?;
-            let n = (plan.steps.len().max(1) * steps.len()) as f32;
-            let base = (k * plan.steps.len().max(1)) as f32;
-            for (i, s) in plan.steps.iter().enumerate() {
-                exec(s, &mut |f| progress((base + i as f32 + f) / n))?;
+            let mut ctx = probe(step, &input);
+            let mut plan = plan::plan(step, &input, &ctx, &stage)?;
+            let run_stage = |plan: &plan::Plan, progress: &mut dyn FnMut(f32)| -> Result<()> {
+                let n = (plan.steps.len().max(1) * steps.len()) as f32;
+                let base = (k * plan.steps.len().max(1)) as f32;
+                for (i, s) in plan.steps.iter().enumerate() {
+                    if let Some(ctrl) = control {
+                        if !ctrl.wait_gate() {
+                            return Err(Error::Unsupported("cancelled".into()));
+                        }
+                    }
+                    exec_controlled(s, control, &mut |f| progress((base + i as f32 + f) / n))?;
+                }
+                Ok(())
+            };
+            if let Err(err) = run_stage(&plan, progress) {
+                if ctx.hw_encoder.is_some() && !control.is_some_and(|c| c.is_cancelled()) {
+                    // Graceful CPU fallback when a GPU encoder fails at runtime (driver/codec mismatch).
+                    let _ = fs::remove_dir_all(&stage);
+                    fs::create_dir_all(&stage)?;
+                    ctx.hw_encoder = None;
+                    plan = plan::plan(step, &input, &ctx, &stage)?;
+                    run_stage(&plan, progress)?;
+                } else {
+                    return Err(err);
+                }
             }
             if !plan.output.exists() {
                 return Err(Error::Failed { tool: "engine".into(), detail: "no output file was produced".into() });
@@ -271,9 +383,19 @@ pub fn rename(op: &Op, inputs: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>> {
     Ok(plan)
 }
 
+#[cfg(test)]
 fn exec(step: &Step, report: &mut dyn FnMut(f32)) -> Result<()> {
+    exec_controlled(step, None, report)
+}
+
+fn exec_controlled(step: &Step, control: Option<&JobControl>, report: &mut dyn FnMut(f32)) -> Result<()> {
+    if control.is_some_and(|c| c.is_cancelled()) {
+        return Err(Error::Unsupported("cancelled".into()));
+    }
     match step {
-        Step::Run { tool, args, cwd, progress_secs } => run_tool(*tool, args, cwd.as_deref(), *progress_secs, report),
+        Step::Run { tool, args, cwd, progress_secs } => {
+            run_tool_controlled(*tool, args, cwd.as_deref(), *progress_secs, control, report)
+        }
         Step::MkDir(p) => Ok(fs::create_dir_all(p)?),
         Step::Copy { src, dst } => Ok(fs::copy(src, dst).map(|_| ())?),
         Step::WriteFile { path, contents } => Ok(fs::write(path, contents)?),
@@ -306,9 +428,12 @@ fn exec(step: &Step, report: &mut dyn FnMut(f32)) -> Result<()> {
             let mut best: Option<(u64, &PathBuf)> = None;
             let mut last_err = None;
             for (steps, out) in candidates {
+                if control.is_some_and(|c| c.is_cancelled()) {
+                    return Err(Error::Unsupported("cancelled".into()));
+                }
                 // A candidate can fail on its own (an encoder option the engine lacks);
                 // try the others before giving up.
-                if let Err(e) = steps.iter().try_for_each(|st| exec(st, &mut |_| {})) {
+                if let Err(e) = steps.iter().try_for_each(|st| exec_controlled(st, control, &mut |_| {})) {
                     last_err = Some(e);
                     continue;
                 }
@@ -328,17 +453,53 @@ fn exec(step: &Step, report: &mut dyn FnMut(f32)) -> Result<()> {
     }
 }
 
+/// Strips Windows `\\?\` verbatim prefixes from an argument before passing it to an external
+/// engine (handles bare paths and `-prefix=\\?\...` flags like `-sOutputFile=\\?\...` or `-o\\?\...`).
+fn normalize_arg(arg: &OsString) -> OsString {
+    #[cfg(windows)]
+    {
+        let s = arg.to_string_lossy();
+        if let Some(pos) = s.find(r"\\?\") {
+            let (prefix, rest) = s.split_at(pos);
+            let mut out = String::with_capacity(s.len());
+            out.push_str(prefix);
+            out.push_str(&tools::normalize_windows_path_str(rest));
+            return OsString::from(out);
+        }
+    }
+    arg.clone()
+}
+
+/// Inserts `--tessdata-dir <dir>` into a Tesseract invocation so both `TESSDATA_PREFIX` and
+/// `--tessdata-dir` point cleanly at the normalized bundled `tessdata` directory.
+fn append_tessdata_dir(args: &[OsString], dir: &Path) -> Vec<OsString> {
+    if args.iter().any(|a| a == "--tessdata-dir") {
+        return args.to_vec();
+    }
+    let dir_os = tools::normalize_engine_path(dir).into_os_string();
+    let mut out = Vec::with_capacity(args.len() + 2);
+    // Tesseract expects `input outputbase [options...] [configfile...]`. Inserting right after
+    // the two positional args keeps `--tessdata-dir` before any trailing config like `pdf`/`tsv`.
+    let insert_at = args.len().min(2);
+    out.extend_from_slice(&args[..insert_at]);
+    out.push(OsString::from("--tessdata-dir"));
+    out.push(dir_os);
+    out.extend_from_slice(&args[insert_at..]);
+    out
+}
+
 fn command(bin: &Path) -> Command {
+    let bin = tools::normalize_engine_path(bin);
     #[allow(unused_mut)]
-    let mut cmd = Command::new(bin);
+    let mut cmd = Command::new(&bin);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    if let Some((key, dir)) = tools::bundled_env(bin) {
-        cmd.env(key, dir);
+    if let Some((key, dir)) = tools::bundled_env(&bin) {
+        cmd.env(key, tools::normalize_engine_path(&dir));
     }
     cmd
 }
@@ -350,12 +511,29 @@ fn run_tool(
     progress_secs: Option<f64>,
     report: &mut dyn FnMut(f32),
 ) -> Result<()> {
-    let bin = tools::require(tool)?;
+    run_tool_controlled(tool, args, cwd, progress_secs, None, report)
+}
+
+fn run_tool_controlled(
+    tool: Tool,
+    args: &[OsString],
+    cwd: Option<&Path>,
+    progress_secs: Option<f64>,
+    control: Option<&JobControl>,
+    report: &mut dyn FnMut(f32),
+) -> Result<()> {
+    let bin = tools::normalize_engine_path(&tools::require(tool)?);
+    let mut normalized_args: Vec<OsString> = args.iter().map(normalize_arg).collect();
+    if tool == Tool::Tesseract {
+        if let Some(("TESSDATA_PREFIX", dir)) = tools::bundled_env(&bin) {
+            normalized_args = append_tessdata_dir(&normalized_args, &dir);
+        }
+    }
     let mut cmd = command(&bin);
-    cmd.args(args).stdin(Stdio::null()).stderr(Stdio::piped());
+    cmd.args(&normalized_args).stdin(Stdio::null()).stderr(Stdio::piped());
     cmd.stdout(if progress_secs.is_some() { Stdio::piped() } else { Stdio::null() });
     if let Some(dir) = cwd {
-        cmd.current_dir(dir);
+        cmd.current_dir(tools::normalize_engine_path(dir));
     }
     let mut child = cmd.spawn().map_err(|e| Error::Failed { tool: tool.label().into(), detail: e.to_string() })?;
     let mut stderr = child.stderr.take().expect("piped");
@@ -364,31 +542,70 @@ fn run_tool(
         let _ = stderr.read_to_end(&mut buf);
         String::from_utf8_lossy(&buf).into_owned()
     });
-    if let (Some(total), Some(out)) = (progress_secs.filter(|t| *t > 0.0), child.stdout.take()) {
-        for line in BufReader::new(out).lines().map_while(std::result::Result::ok) {
-            let v = line.strip_prefix("out_time_us=").or_else(|| line.strip_prefix("out_time_ms="));
-            if let Some(us) = v.and_then(|v| v.trim().parse::<f64>().ok()) {
-                report((us / 1e6 / total).clamp(0.0, 1.0) as f32);
+
+    let out_reader = if let (Some(total), Some(out)) = (progress_secs.filter(|t| *t > 0.0), child.stdout.take()) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let h = thread::spawn(move || {
+            for line in BufReader::new(out).lines().map_while(std::result::Result::ok) {
+                let v = line.strip_prefix("out_time_us=").or_else(|| line.strip_prefix("out_time_ms="));
+                if let Some(us) = v.and_then(|v| v.trim().parse::<f64>().ok()) {
+                    let _ = tx.send((us / 1e6 / total).clamp(0.0, 1.0) as f32);
+                }
+            }
+        });
+        Some((h, rx))
+    } else {
+        None
+    };
+
+    let status = loop {
+        if let Some((_, ref rx)) = out_reader {
+            while let Ok(f) = rx.try_recv() {
+                report(f);
             }
         }
+        if control.is_some_and(|c| c.is_cancelled()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Some((h, _)) = out_reader {
+                let _ = h.join();
+            }
+            let _ = err_reader.join();
+            return Err(Error::Unsupported("cancelled".into()));
+        }
+        if let Some(st) = child.try_wait()? {
+            break st;
+        }
+        thread::sleep(std::time::Duration::from_millis(35));
+    };
+
+    if let Some((h, rx)) = out_reader {
+        while let Ok(f) = rx.try_recv() {
+            report(f);
+        }
+        let _ = h.join();
     }
-    let status = child.wait()?;
     let err = err_reader.join().unwrap_or_default();
     if status.success() {
         Ok(())
     } else {
-        let tail: String = err.trim().chars().rev().take(800).collect::<Vec<_>>().into_iter().rev().collect();
-        Err(Error::Failed { tool: tool.label().into(), detail: format!("exit {:?}: {tail}", status.code()) })
+        let note = format!("exit {:?}", status.code());
+        Err(Error::Failed {
+            tool: tool.label().into(),
+            detail: crate::diagnostics::format_failure(tool.label(), &note, &err),
+        })
     }
 }
 
 /// Runs a tool and returns its stdout.
 pub fn capture(tool: Tool, args: &[&str], path: &Path) -> Result<String> {
-    let out = command(&tools::require(tool)?).args(args).arg(path).stdin(Stdio::null()).output()?;
+    let path = tools::normalize_engine_path(path);
+    let out = command(&tools::require(tool)?).args(args).arg(&path).stdin(Stdio::null()).output()?;
     if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(Error::Failed {
             tool: tool.label().into(),
-            detail: String::from_utf8_lossy(&out.stderr).trim().into(),
+            detail: crate::diagnostics::format_failure(tool.label(), "", &stderr),
         });
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -440,6 +657,12 @@ fn probe(op: &Op, inputs: &[PathBuf]) -> Ctx {
     }
     if matches!(op, Op::RemoveBackground { .. }) {
         ctx.rembg_model = tools::rembg_model();
+    }
+    if crate::hwaccel::mode() != crate::hwaccel::HwAccelMode::Off
+        && category_of(src) == Some(Category::Video)
+        && matches!(op, Op::Convert { .. } | Op::Compress { .. })
+    {
+        ctx.hw_encoder = tools::locate(Tool::Ffmpeg).and_then(|bin| crate::hwaccel::detect_for_ffmpeg(&bin));
     }
     ctx
 }
@@ -587,11 +810,11 @@ pub fn preview_png(src: &Path, max: u32) -> Result<Vec<u8>> {
 }
 
 fn scratch_file(tag: &str, ext: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
+    tools::normalize_engine_path(&std::env::temp_dir().join(format!(
         "zeidex-{tag}-{}-{}.{ext}",
         std::process::id(),
         JOB.fetch_add(1, Ordering::Relaxed)
-    ))
+    )))
 }
 
 /// Text lines found by Tesseract in an image file, as boxes in that image's pixels.
@@ -604,16 +827,19 @@ pub fn detect_text_file(src: &Path, lang: &str) -> Result<Vec<Rect>> {
     if !lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '_') {
         return Err(Error::BadOption(format!("lang={lang}")));
     }
-    let out = command(&tools::require(Tool::Tesseract)?)
-        .arg(src)
-        .args(["stdout", "-l", lang, "tsv"])
-        .stdin(Stdio::null())
-        .output();
-    let out = out?;
+    let bin = tools::require(Tool::Tesseract)?;
+    let src = tools::normalize_engine_path(src);
+    let mut cmd = command(&bin);
+    cmd.arg(&src).args(["stdout", "-l", lang]);
+    if let Some(("TESSDATA_PREFIX", dir)) = tools::bundled_env(&bin) {
+        cmd.arg("--tessdata-dir").arg(dir);
+    }
+    let out = cmd.arg("tsv").stdin(Stdio::null()).output()?;
     if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(Error::Failed {
             tool: "Tesseract".into(),
-            detail: String::from_utf8_lossy(&out.stderr).trim().into(),
+            detail: crate::diagnostics::format_failure("Tesseract", "", &stderr),
         });
     }
     let tsv = String::from_utf8_lossy(&out.stdout);
@@ -631,17 +857,20 @@ pub fn detect_text_png(png: &[u8], lang: &str) -> Result<Vec<Rect>> {
     }
     let input = scratch_file("ocr", "png");
     fs::write(&input, png)?;
-    let out = command(&tools::require(Tool::Tesseract)?)
-        .arg(&input)
-        .args(["stdout", "-l", lang, "tsv"])
-        .stdin(Stdio::null())
-        .output();
+    let bin = tools::require(Tool::Tesseract)?;
+    let mut cmd = command(&bin);
+    cmd.arg(&input).args(["stdout", "-l", lang]);
+    if let Some(("TESSDATA_PREFIX", dir)) = tools::bundled_env(&bin) {
+        cmd.arg("--tessdata-dir").arg(dir);
+    }
+    let out = cmd.arg("tsv").stdin(Stdio::null()).output();
     let _ = fs::remove_file(&input);
     let out = out?;
     if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(Error::Failed {
             tool: "Tesseract".into(),
-            detail: String::from_utf8_lossy(&out.stderr).trim().into(),
+            detail: crate::diagnostics::format_failure("Tesseract", "", &stderr),
         });
     }
     let tsv = String::from_utf8_lossy(&out.stdout);
@@ -1259,5 +1488,33 @@ mod tests {
     fn missing_input_fails_cleanly() {
         let r = run(&Op::Convert { to: "vtt".into(), quality: None }, &[PathBuf::from("/nope/x.srt")], |_| {});
         assert!(r[0].is_err());
+    }
+
+    #[test]
+    fn tesseract_args_insert_tessdata_dir_with_spaces_before_config() {
+        let args = vec![
+            OsString::from("input.png"),
+            OsString::from("ocr"),
+            OsString::from("-l"),
+            OsString::from("ara+eng"),
+            OsString::from("pdf"),
+        ];
+        let dir = Path::new(r"C:\Users\ace\AppData\Local\Zeidex Convert\engines\ocr\Library\share\tessdata");
+        let got = append_tessdata_dir(&args, dir);
+        let strs: Vec<_> = got.iter().map(|s| s.to_string_lossy().into_owned()).collect();
+        assert_eq!(
+            strs,
+            vec![
+                "input.png",
+                "ocr",
+                "--tessdata-dir",
+                r"C:\Users\ace\AppData\Local\Zeidex Convert\engines\ocr\Library\share\tessdata",
+                "-l",
+                "ara+eng",
+                "pdf",
+            ]
+        );
+        // Does not duplicate if already specified.
+        assert_eq!(append_tessdata_dir(&got, dir), got);
     }
 }

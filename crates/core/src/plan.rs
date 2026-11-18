@@ -50,6 +50,8 @@ pub struct Ctx {
     pub vips: bool,
     pub image: Option<ImageInfo>,
     pub size: u64,
+    /// Optional detected hardware video encoder (NVENC, QSV, AMF, VA-API, VideoToolbox).
+    pub hw_encoder: Option<crate::hwaccel::HwEncoder>,
 }
 
 impl Default for Ctx {
@@ -68,6 +70,7 @@ impl Default for Ctx {
             vips: true,
             image: None,
             size: 0,
+            hw_encoder: None,
         }
     }
 }
@@ -1735,6 +1738,15 @@ fn ffmpeg_in(src: &Path) -> Vec<OsString> {
     args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-progress", "pipe:1", "-nostats", "-i", src]
 }
 
+fn ffmpeg_in_hw(src: &Path, hw: Option<crate::hwaccel::HwEncoder>) -> Vec<OsString> {
+    let mut a = args!["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-progress", "pipe:1", "-nostats"];
+    if hw == Some(crate::hwaccel::HwEncoder::Vaapi) {
+        a.extend(args!["-vaapi_device", "/dev/dri/renderD128"]);
+    }
+    a.extend(args!["-i", src]);
+    a
+}
+
 fn ffmpeg(args: Vec<OsString>, ctx: &Ctx) -> Step {
     Step::Run { tool: Tool::Ffmpeg, args, cwd: None, progress_secs: ctx.media.as_ref().map(|m| m.duration) }
 }
@@ -1777,6 +1789,32 @@ fn video_codec(ext: &str) -> &'static [&'static str] {
     }
 }
 
+fn video_codec_hw(ext: &str, hw: Option<crate::hwaccel::HwEncoder>, quality: Option<u8>) -> Vec<OsString> {
+    use crate::hwaccel::HwEncoder;
+    if let (Some(enc), true) = (hw, matches!(ext, "mp4" | "mov" | "mkv")) {
+        let cq = quality.map(|q| (51.0 - (q as f32 * 51.0 / 100.0)).round().clamp(1.0, 51.0) as u8).unwrap_or(23);
+        let cq_str = cq.to_string();
+        return match enc {
+            HwEncoder::Nvenc => args!["-c:v", enc.h264_codec(), "-preset", "p4", "-cq", &cq_str, "-pix_fmt", "yuv420p"],
+            HwEncoder::Qsv => args!["-c:v", enc.h264_codec(), "-global_quality", &cq_str, "-pix_fmt", "nv12"],
+            HwEncoder::Amf => args!["-c:v", enc.h264_codec(), "-quality", "balanced", "-pix_fmt", "yuv420p"],
+            HwEncoder::Vaapi => args!["-vf", "format=nv12,hwupload", "-c:v", enc.h264_codec(), "-qp", &cq_str],
+            HwEncoder::VideoToolbox => {
+                let vt_q = quality.unwrap_or(70).clamp(1, 100).to_string();
+                args!["-c:v", enc.h264_codec(), "-q:v", &vt_q, "-pix_fmt", "yuv420p"]
+            }
+        };
+    }
+    let mut a = strs(video_codec(ext));
+    if let Some(q) = quality {
+        if matches!(ext, "mp4" | "mov" | "mkv" | "webm") {
+            let crf = (51.0 - (q as f32 * 51.0 / 100.0)).round().clamp(0.0, 51.0) as u8;
+            a.extend(args!["-crf", &crf.to_string()]);
+        }
+    }
+    a
+}
+
 fn audio_codec(ext: &str) -> &'static [&'static str] {
     match ext {
         "mp3" | "avi" => &["-c:a", "libmp3lame", "-q:a", "2"],
@@ -1817,8 +1855,10 @@ fn encode_args(to: &str) -> Vec<OsString> {
 /// from `video_codec`/`audio_codec` stay as the baseline and are overridden where the encoder
 /// has a quality knob: CRF for x264/x265/VP9, `-q:a` for the VBR audio encoders. Lossless
 /// codecs (FLAC, PCM, ALAC) ignore it by design, and GIF has no quality setting at all.
-fn encode_args_at(to: &str, quality: Option<u8>) -> Vec<OsString> {
-    let Some(q) = quality else { return encode_args(to) };
+fn encode_args_at_hw(to: &str, quality: Option<u8>, hw: Option<crate::hwaccel::HwEncoder>) -> Vec<OsString> {
+    if quality.is_none() && hw.is_none() {
+        return encode_args(to);
+    }
     if to == "gif" {
         return encode_args(to);
     }
@@ -1826,17 +1866,14 @@ fn encode_args_at(to: &str, quality: Option<u8>) -> Vec<OsString> {
     if is_audio_ext(to) {
         a.push("-vn".into());
         a.extend(strs(audio_codec(to)));
-        if matches!(to, "mp3" | "ogg" | "opus") {
-            let level = ((q as f32 / 100.0) * 9.0).round() as u8;
-            a.extend(args!["-q:a", &level.to_string()]);
+        if let Some(q) = quality {
+            if matches!(to, "mp3" | "ogg" | "opus") {
+                let level = ((q as f32 / 100.0) * 9.0).round() as u8;
+                a.extend(args!["-q:a", &level.to_string()]);
+            }
         }
     } else {
-        a.extend(strs(video_codec(to)));
-        if matches!(to, "mp4" | "mov" | "mkv" | "webm") {
-            // CRF 51 is the worst quality, 0 is lossless; quality 85 maps to about CRF 8.
-            let crf = (51.0 - (q as f32 * 51.0 / 100.0)).round().clamp(0.0, 51.0) as u8;
-            a.extend(args!["-crf", &crf.to_string()]);
-        }
+        a.extend(video_codec_hw(to, hw, quality));
         a.extend(strs(audio_codec(to)));
     }
     a.extend(strs(container_flags(to)));
@@ -2035,14 +2072,30 @@ fn compress(
                 }
                 None => {
                     let crf = match level {
-                        Level::High => "23",
-                        Level::Medium => "28",
-                        Level::Low => "32",
+                        Level::High => 23,
+                        Level::Medium => 28,
+                        Level::Low => 32,
                     };
-                    head.extend(args![
-                        "-c:v", "libx264", "-preset", "medium", "-crf", crf, "-pix_fmt", "yuv420p", "-c:a", "aac",
-                        "-b:a", "128k"
-                    ]);
+                    if let Some(enc) = ctx.hw_encoder {
+                        let q = ((51 - crf) as f32 * 100.0 / 51.0).round() as u8;
+                        head.extend(video_codec_hw(to, Some(enc), Some(q)));
+                        head.extend(args!["-c:a", "aac", "-b:a", "128k"]);
+                    } else {
+                        head.extend(args![
+                            "-c:v",
+                            "libx264",
+                            "-preset",
+                            "medium",
+                            "-crf",
+                            &crf.to_string(),
+                            "-pix_fmt",
+                            "yuv420p",
+                            "-c:a",
+                            "aac",
+                            "-b:a",
+                            "128k"
+                        ]);
+                    }
                     head.extend(flags);
                     head.push(out.clone().into());
                     s.push(ffmpeg(head, ctx));
@@ -2094,6 +2147,7 @@ fn compress(
 
 /// `file:///` URL for LibreOffice's `-env:UserInstallation`.
 pub fn file_url(p: &Path) -> String {
+    let p = crate::tools::normalize_engine_path(p);
     let raw = p.to_string_lossy().replace('\\', "/");
     let mut url = String::from(if raw.starts_with('/') { "file://" } else { "file:///" });
     for b in raw.bytes() {
@@ -2271,8 +2325,10 @@ fn convert(
         }
         Category::Video | Category::Audio => {
             let out = tmp.join(format!("media.{to}"));
-            let mut a = ffmpeg_in(src);
-            a.extend(encode_args_at(to, quality));
+            let hw =
+                if matches!(cat, Category::Video) && !is_audio_ext(to) && to != "gif" { ctx.hw_encoder } else { None };
+            let mut a = ffmpeg_in_hw(src, hw);
+            a.extend(encode_args_at_hw(to, quality, hw));
             a.push(out.clone().into());
             s.push(ffmpeg(a, ctx));
             out
@@ -2949,5 +3005,37 @@ mod tests {
         assert_eq!(p.output, PathBuf::from("/t/ocr.txt"));
         assert!(plan_of("crop", &[], &["/in/a.png"], Ctx::default()).is_err(), "needs image size");
         assert!(plan_of("extract", &[], &["/in/a.png"], Ctx::default()).is_err());
+    }
+
+    #[test]
+    fn gpu_encoders_and_archive_suite_plans() {
+        use crate::hwaccel::HwEncoder;
+        let nv = Ctx { hw_encoder: Some(HwEncoder::Nvenc), ..Ctx::default() };
+        let p = plan_of("to:mp4", &[], &["/in/clip.mov"], nv).unwrap();
+        assert!(argv(&p)[0].1.contains("-c:v h264_nvenc"));
+
+        let va = Ctx { hw_encoder: Some(HwEncoder::Vaapi), ..Ctx::default() };
+        let p = plan_of("to:mp4", &[], &["/in/clip.mov"], va).unwrap();
+        assert!(argv(&p)[0].1.contains("-vaapi_device /dev/dri/renderD128"));
+        assert!(argv(&p)[0].1.contains("-c:v h264_vaapi"));
+
+        let vt = Ctx { hw_encoder: Some(HwEncoder::VideoToolbox), ..Ctx::default() };
+        let p = plan_of("to:mp4", &[], &["/in/clip.mov"], vt).unwrap();
+        assert!(argv(&p)[0].1.contains("-c:v h264_videotoolbox"));
+
+        // Archive tar.gz alias + AES-256 + multi-volume + RAR extraction
+        let tgz = plan_of("archive", &[("format", "tar.gz")], &["/in/a.txt"], Ctx::default()).unwrap();
+        assert_eq!(tgz.name, "a.tar.gz");
+        let enc = plan_of(
+            "archive",
+            &[("format", "7z"), ("password", "s3cr3t"), ("split", "10MB")],
+            &["/in/a.txt"],
+            Ctx::default(),
+        )
+        .unwrap();
+        assert!(argv(&enc)[0].1.contains("-ps3cr3t -mhe=on -v10000000b"));
+        let rar = plan_of("extract", &[("password", "pw")], &["/in/pack.rar"], Ctx::default()).unwrap();
+        assert_eq!(rar.name, "pack");
+        assert!(argv(&rar)[0].1.contains("-ppw"));
     }
 }

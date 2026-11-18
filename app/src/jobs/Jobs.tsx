@@ -3,17 +3,29 @@
  * index, so a progress event updates the row a start event created instead of appending one.
  */
 
-import { useEffect, useReducer } from 'react';
-import { localdropCancel, reveal, safeListen } from '../lib/api';
+import { useEffect, useReducer, useState } from 'react';
+import { ErrorReportModal } from '../components/ErrorReportModal';
+import {
+  cancelAllJobs,
+  cancelJob,
+  diagnosticReport,
+  localdropCancel,
+  openOutputFolder,
+  pauseJob,
+  resumeJob,
+  reveal,
+  safeListen,
+} from '../lib/api';
 import { useI18n } from '../lib/i18n';
-import type { JobEvent } from '../lib/types';
+import type { DiagnosticsReport, JobEvent } from '../lib/types';
 
 interface Row {
   key: string;
+  job: number;
   name: string;
   meta: string;
   fraction: number;
-  state: 'run' | 'done' | 'failed';
+  state: 'run' | 'paused' | 'done' | 'failed';
   output?: string;
   error?: string;
   text?: string;
@@ -35,7 +47,20 @@ function upsert(rows: Row[], key: string, patch: (row: Row) => Row, seed: Row): 
 function reduce(rows: Row[], action: Action): Row[] {
   if (action.type === 'clear') return [];
   const e = action.event;
-  const base: Row = { key: '', name: '', meta: '', fraction: 0, state: 'run' };
+  if (e.type === 'paused') {
+    return rows.map((r) => (r.job === e.job && r.state === 'run' ? { ...r, state: 'paused' } : r));
+  }
+  if (e.type === 'resumed') {
+    return rows.map((r) => (r.job === e.job && r.state === 'paused' ? { ...r, state: 'run' } : r));
+  }
+  if (e.type === 'cancelled') {
+    return rows.map((r) =>
+      r.job === e.job && (r.state === 'run' || r.state === 'paused')
+        ? { ...r, state: 'failed', fraction: 1, error: 'Cancelled' }
+        : r,
+    );
+  }
+  const base: Row = { key: '', job: e.job, name: '', meta: '', fraction: 0, state: 'run' };
   if (e.type === 'text') {
     const key = `${e.job}:${e.title}`;
     return upsert(rows, key, (r) => ({ ...r, state: 'done', text: e.text }), {
@@ -89,16 +114,50 @@ function reduce(rows: Row[], action: Action): Row[] {
 export function Jobs() {
   const { t } = useI18n();
   const [rows, dispatch] = useReducer(reduce, []);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [report, setReport] = useState<DiagnosticsReport | null>(null);
 
   useEffect(() => safeListen<JobEvent>('job', (event) => dispatch({ type: 'event', event })), []);
 
+  const failedJobs = rows
+    .filter((r) => r.state === 'failed' && r.error)
+    .map((r) => ({ name: r.name || `#${r.job}`, error: r.error! }));
+
   return (
     <main className="p-4">
-      <h1 className="m-0 mb-2 flex items-center justify-between text-[15px] font-semibold">
+      <h1 className="m-0 mb-2 flex flex-wrap items-center justify-between gap-2 text-[15px] font-semibold">
         <span>{t('jobs')}</span>
-        <button type="button" onClick={() => dispatch({ type: 'clear' })}>
-          {t('clear')}
-        </button>
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              void cancelAllJobs();
+              dispatch({ type: 'clear' });
+            }}
+          >
+            {t('clear')}
+          </button>
+          <button
+            type="button"
+            id="viewJobsReportBtn"
+            className={failedJobs.length ? 'border-bad/60 bad' : undefined}
+            onClick={async () => {
+              setReportOpen(true);
+              try {
+                setReportLoading(true);
+                const rep = await diagnosticReport(failedJobs);
+                setReport(rep);
+              } catch {
+                /* fallback handled inside modal */
+              } finally {
+                setReportLoading(false);
+              }
+            }}
+          >
+            {t('viewErrorReport')}
+          </button>
+        </div>
       </h1>
       <div id="list" aria-live="polite">
         {[...rows].reverse().map((row) => (
@@ -123,10 +182,32 @@ export function Jobs() {
                 }}
               />
             </div>
+            {!row.pair && (row.state === 'run' || row.state === 'paused') && (
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {row.state === 'run' ? (
+                  <button type="button" onClick={() => void pauseJob(row.job)}>
+                    {t('pause')}
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => void resumeJob(row.job)}>
+                    {t('resume')}
+                  </button>
+                )}
+                <button type="button" onClick={() => void cancelJob(row.job)}>
+                  {t('cancel')}
+                </button>
+                {row.state === 'paused' && <span className="self-center text-xs text-muted">{t('paused')}</span>}
+              </div>
+            )}
             {row.state === 'done' && row.output && (
-              <button type="button" onClick={() => void reveal(row.output!)}>
-                {t('show')}
-              </button>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                <button type="button" onClick={() => void reveal(row.output!)}>
+                  {t('show')}
+                </button>
+                <button type="button" onClick={() => void openOutputFolder(row.output!)}>
+                  {t('openOutputFolder')}
+                </button>
+              </div>
             )}
             {row.qr && (
               <figure className="pair m-0 my-2 flex flex-col items-center gap-1.5">
@@ -164,6 +245,13 @@ export function Jobs() {
           </div>
         ))}
       </div>
+      <ErrorReportModal
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+        report={report}
+        loading={reportLoading}
+        failedJobs={failedJobs}
+      />
     </main>
   );
 }

@@ -26,7 +26,12 @@ pub fn reveal(path: &Path) -> Result<()> {
         Command::new("explorer").raw_arg(format!("/select,\"{}\"", path.display())).spawn()?;
         Ok(())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg("-R").arg(path).spawn()?;
+        Ok(())
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         let uri = crate::plan::file_url(path);
         let shown = Command::new("dbus-send")

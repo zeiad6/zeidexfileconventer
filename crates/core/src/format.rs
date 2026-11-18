@@ -1,6 +1,6 @@
 //! Format registry: what a file is, and what it can be converted to.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Category {
@@ -183,6 +183,35 @@ pub fn common_category<P: AsRef<Path>>(paths: &[P]) -> Option<Category> {
     paths.iter().all(|p| category_of(p.as_ref()) == Some(first)).then_some(first)
 }
 
+/// Expands any dropped directories recursively into regular files (bounded depth and count,
+/// skipping hidden entries) while preserving all dropped regular files in order.
+pub fn expand_dropped_paths<P: AsRef<Path>>(paths: &[P]) -> Vec<PathBuf> {
+    const MAX_DEPTH: usize = 8;
+    const MAX_FILES: usize = 2000;
+    let mut out = Vec::new();
+    let mut stack: Vec<(PathBuf, usize)> = paths.iter().rev().map(|p| (p.as_ref().to_path_buf(), 0)).collect();
+    while let Some((p, depth)) = stack.pop() {
+        if out.len() >= MAX_FILES {
+            break;
+        }
+        if p.is_dir() {
+            if depth >= MAX_DEPTH {
+                continue;
+            }
+            let Ok(rd) = std::fs::read_dir(&p) else { continue };
+            let mut entries: Vec<PathBuf> =
+                rd.flatten().filter(|e| !e.file_name().to_string_lossy().starts_with('.')).map(|e| e.path()).collect();
+            entries.sort();
+            for child in entries.into_iter().rev() {
+                stack.push((child, depth + 1));
+            }
+        } else if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
 /// Targets for a heterogeneous selection: every output at least one file can become, with the
 /// number of files that support it, most-covered first. A drag of ten photos and one video
 /// therefore offers JPG (10/11) before MP4 (1/11), and the wheel is never empty just because
@@ -297,5 +326,43 @@ mod tests {
         assert_eq!(single.len(), 8.min(targets(Path::new("a.png")).len()));
         assert!(single.iter().any(|(t, n)| *t == "jpg" && *n == 1));
         assert!(mixed_targets::<&str>(&[]).is_empty());
+    }
+
+    #[test]
+    fn expands_dropped_directories_and_multi_file_selections() {
+        let dir = std::env::temp_dir().join(format!("zeidex-expand-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("a.mkv"), b"1").unwrap();
+        std::fs::write(dir.join("nested/b.mkv"), b"2").unwrap();
+        std::fs::write(dir.join(".hidden.mkv"), b"3").unwrap();
+        let extra = dir.join("c.mkv");
+        std::fs::write(&extra, b"4").unwrap();
+
+        let expanded = expand_dropped_paths(&[dir.join("nested"), dir.join("a.mkv"), extra.clone()]);
+        assert_eq!(expanded.len(), 3);
+        assert!(expanded.iter().any(|p| p.ends_with("b.mkv")));
+        assert!(expanded.iter().any(|p| p.ends_with("a.mkv")));
+        assert!(expanded.iter().any(|p| p.ends_with("c.mkv")));
+        assert_eq!(common_category(&expanded), Some(Category::Video));
+        let targets = common_targets(&expanded);
+        assert!(targets.contains(&"mp4") && targets.contains(&"mp3") && !targets.contains(&"mkv"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn extension_to_wedge_mapping_for_video_and_pdf() {
+        let mkv = targets(Path::new("/media/movie.mkv"));
+        assert_eq!(category_of(Path::new("/media/movie.mkv")), Some(Category::Video));
+        for expected in ["mp4", "mp3", "gif", "webm"] {
+            assert!(mkv.contains(&expected), "expected {expected} wedge for .mkv, got {mkv:?}");
+        }
+
+        let pdf = targets(Path::new("/docs/report.pdf"));
+        assert_eq!(category_of(Path::new("/docs/report.pdf")), Some(Category::Pdf));
+        for expected in ["docx", "png", "txt", "md"] {
+            assert!(pdf.contains(&expected), "expected {expected} wedge for .pdf, got {pdf:?}");
+        }
     }
 }

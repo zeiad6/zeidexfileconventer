@@ -51,7 +51,7 @@
 | 👀 | **مجلدات المراقبة**: حوّل كل ما يصل إلى مجلد تختاره تلقائياً |
 | 🪟 | **نافذة كاملة**: شريط عنوان بأزرار الإغلاق والتصغير والتكبير، وشريط جانبي ثابت لا ينزل مع التمرير، وتخطيط يتكيّف مع كل حجم نافذة |
 | 🎛️ | **عجلة أصغر** (380px) تختفي تلقائياً بعد 4 ثوانٍ من عدم التحرك، مع انتقالات سلسة |
-| 🌍 | **عربي وإنجليزي** بواجهة RTL كاملة، ووضع فاتح وداكن، وإظهار/إخفاء أيقونة الدرج من الإعدادات |
+| 🌍 | **عربي وإنجليزي** بواجهة RTL كاملة، ووضع فاتح وداكن، وأيقونة درج وكرة عائمة مخفيتان افتراضياً وتُفعَّلان من الإعدادات |
 
 ## التثبيت
 
@@ -76,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/pac
 
 للتحقّق من أي تنزيل: ضع `SHA256SUMS-<النظام>.txt` بجانب الحزمة ثم `sha256sum -c` (وعلى macOS: `shasum -a 256 -c`). الأسطر تحمل اسم الملف نفسه الذي يخدمه GitHub، فتظهر `OK` عند سلامة التنزيل.
 
-> AppImage يحتاج `libfuse2` على بعض التوزيعات، أو شغّله بـ `--appimage-extract-and-run`.
+> تستخدم حزم AppImage الآن وقت تشغيل Type-2 ثابتاً، فتعمل مباشرة على التوزيعات الحديثة (Ubuntu 22.04+ وFedora 36+) دون الحاجة إلى تثبيت `libfuse2` يدوياً.
 
 ## البناء من المصدر
 
@@ -84,16 +84,62 @@ curl -fsSL https://raw.githubusercontent.com/zeiad6/zeidexfileconventer/main/pac
 # المتطلّبات: Rust 1.80+، Node 22+، واعتماديات Tauri (webkit2gtk-4.1 على لينكس)
 git clone https://github.com/zeiad6/zeidexfileconventer.git
 cd zeidexfileconventer
-
-bash packaging/fetch-engines.sh      # لينكس وماك
-./packaging/fetch-engines.ps1        # ويندوز
-
-cd app && npm ci && npm run build && cd ..
-cargo build --release -p zeidex-cli  # سطر الأوامر
-cd app && npx tauri build            # الحزم المكتبية
 ```
 
-الاختبارات: `cargo test --workspace`، `npm test` في `app/`، و`gradle :app:testDebugUnitTest` في `android/`.
+### 1) جلب المحرّكات (الوضع الكامل أو الخفيف)
+
+```bash
+# لينكس وماك — الوضع الكامل (Full)
+bash packaging/fetch-engines.sh --profile full
+
+# لينكس وماك — الوضع الخفيف (Lite: FFmpeg + libvips + 7-Zip فقط)
+bash packaging/fetch-engines.sh --profile lite
+```
+
+```powershell
+# ويندوز — الوضع الكامل (Full)
+./packaging/fetch-engines.ps1 -Profile full
+
+# ويندوز — الوضع الخفيف (Lite)
+./packaging/fetch-engines.ps1 -Profile lite
+```
+
+### 2) بناء الواجهة والتطبيق وسطر الأوامر
+
+```bash
+# بناء واجهة React + TypeScript
+cd app
+npm ci
+npm run build
+cd ..
+
+# بناء أداة سطر الأوامر
+cargo build --release -p zeidex-cli
+
+# بناء الحزم المكتبية (Tauri)
+cd app
+npx tauri build
+```
+
+### 3) تشغيل الاختبارات
+
+```bash
+# اختبارات النواة وسطر الأوامر (Rust)
+cargo test --workspace
+
+# اختبارات حاوية Tauri
+cargo test --manifest-path app/src-tauri/Cargo.toml
+
+# اختبارات الواجهة (Vitest + TypeScript)
+cd app
+npm test
+npx tsc --noEmit
+cd ..
+
+# اختبارات تطبيق أندرويد
+cd android
+gradle :app:testDebugUnitTest
+```
 
 ## المعمار
 
@@ -163,14 +209,65 @@ To verify a download, put `SHA256SUMS-<platform>.txt` beside the installer and r
 ## Build
 
 ```bash
-bash packaging/fetch-engines.sh          # Linux/macOS engines
-./packaging/fetch-engines.ps1            # Windows
-cd app && npm ci && npm run build && cd ..
-cargo build --release -p zeidex-cli
-cd app && npx tauri build
+# Prerequisites: Rust 1.80+, Node 22+, and Tauri system deps (webkit2gtk-4.1 on Linux)
+git clone https://github.com/zeiad6/zeidexfileconventer.git
+cd zeidexfileconventer
 ```
 
-Tests: `cargo test --workspace`, `npm test` (in `app/`), `gradle :app:testDebugUnitTest` (in `android/`).
+### 1) Fetch Engines (Full or Lite profile)
+
+```bash
+# Linux / macOS — Full profile (all bundled engines)
+bash packaging/fetch-engines.sh --profile full
+
+# Linux / macOS — Lite profile (FFmpeg + libvips + 7-Zip only; optional engines downloadable in-app)
+bash packaging/fetch-engines.sh --profile lite
+```
+
+```powershell
+# Windows — Full profile
+./packaging/fetch-engines.ps1 -Profile full
+
+# Windows — Lite profile
+./packaging/fetch-engines.ps1 -Profile lite
+```
+
+### 2) Build UI, CLI, and Desktop Bundles
+
+```bash
+# Build the React + TypeScript frontend
+cd app
+npm ci
+npm run build
+cd ..
+
+# Build the headless CLI
+cargo build --release -p zeidex-cli
+
+# Build the Tauri desktop installer / AppImage / DMG
+cd app
+npx tauri build
+```
+
+### 3) Run Tests
+
+```bash
+# Core + CLI tests (zero-dependency, offline)
+cargo test --workspace
+
+# Tauri backend tests
+cargo test --manifest-path app/src-tauri/Cargo.toml
+
+# Frontend unit & typecheck suites
+cd app
+npm test
+npx tsc --noEmit
+cd ..
+
+# Android unit tests
+cd android
+gradle :app:testDebugUnitTest
+```
 
 ## Why it exists
 

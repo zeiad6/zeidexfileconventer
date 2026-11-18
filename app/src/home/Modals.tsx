@@ -82,7 +82,14 @@ export function AboutModal({ open, onClose, onDonate }: { open: boolean; onClose
             </div>
           </div>
         </div>
-        <button type="button" className="close-btn" id="closeAboutBtn" aria-label={t('close')} onClick={onClose}>
+        <button
+          type="button"
+          autoFocus
+          className="close-btn"
+          id="closeAboutBtn"
+          aria-label={t('close')}
+          onClick={onClose}
+        >
           ✕
         </button>
       </div>
@@ -134,7 +141,14 @@ export function DonateModal({ open, onClose }: { open: boolean; onClose: () => v
           <h2 className="m-0 text-lg font-bold">❤️ {t('donateTitle')}</h2>
           <div className="mt-1 text-[13px] text-muted">{t('paymentMethods')}</div>
         </div>
-        <button type="button" className="close-btn" id="closeDonateBtn" aria-label={t('close')} onClick={onClose}>
+        <button
+          type="button"
+          autoFocus
+          className="close-btn"
+          id="closeDonateBtn"
+          aria-label={t('close')}
+          onClick={onClose}
+        >
           ✕
         </button>
       </div>

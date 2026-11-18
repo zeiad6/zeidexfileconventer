@@ -5,13 +5,17 @@ import {
   HUB_R,
   ITEMS_R,
   MODES_R,
+  WHEEL_PX,
   arcPath,
   childLabelMax,
   hitTest,
   itemLabelMax,
   midAngle,
   polar,
+  polarAngleDeg,
   shortLabel,
+  sourceExtLabel,
+  wedgePopTransform,
 } from '../src/lib/geometry';
 
 /** Middle of segment `i` of `n` on the ring at radius `r`, starting at 12 o'clock. */
@@ -79,5 +83,18 @@ describe('wheel geometry', () => {
     expect(itemLabelMax(12)).toBe(10);
     expect(childLabelMax(3)).toBe(12);
     expect(childLabelMax(9)).toBe(9);
+  });
+
+  it('computes polar angles, magnetic pop transforms, and source extension labels for 380px wheel', () => {
+    expect(WHEEL_PX).toBe(380);
+    expect(polarAngleDeg({ x: C, y: C - 100 })).toBeCloseTo(0, 4);
+    expect(polarAngleDeg({ x: C + 100, y: C })).toBeCloseTo(90, 4);
+    expect(polarAngleDeg({ x: C, y: C + 100 })).toBeCloseTo(180, 4);
+    expect(polarAngleDeg({ x: C - 100, y: C })).toBeCloseTo(270, 4);
+    expect(wedgePopTransform(0, 8, false)).toBeUndefined();
+    expect(wedgePopTransform(0, 8, true)).toMatch(/^translate\(/);
+    expect(sourceExtLabel(['/v/movie.mkv'])).toBe('MKV');
+    expect(sourceExtLabel(['/v/a.mkv', '/v/b.mkv'])).toBe('MKV');
+    expect(sourceExtLabel(['/v/a.mkv', '/i/b.png'])).toBe('2');
   });
 });

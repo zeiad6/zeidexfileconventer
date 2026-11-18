@@ -26,6 +26,8 @@ export interface Choice {
   editor: boolean;
   children: Sub[];
   preset?: Record<string, string>;
+  compatible?: boolean;
+  pinned?: boolean;
 }
 
 export interface Desc {
@@ -41,6 +43,45 @@ export interface Engine {
   name: string;
   path: string | null;
   hint: string;
+  tier?: 'core' | 'optional';
+  downloadable?: boolean;
+  size_bytes?: number | null;
+  source?: 'bundled' | 'local' | 'system' | 'missing';
+  version?: string | null;
+  disk_bytes?: number | null;
+  health?: 'healthy' | 'installed' | 'missing' | 'broken';
+  health_detail?: string | null;
+  exit_code?: number | null;
+  stderr?: string | null;
+}
+
+export interface ModelStatus {
+  id: string;
+  label: string;
+  label_ar: string;
+  present: boolean;
+  path: string | null;
+  disk_bytes?: number | null;
+}
+
+export interface DiagnosticsReport {
+  os: string;
+  arch: string;
+  app_version: string;
+  profile: 'lite' | 'full';
+  engines: Engine[];
+  models: ModelStatus[];
+  report_text: string;
+}
+
+export interface EngineDownloadProgress {
+  id: string;
+  stage: 'downloading' | 'extracting' | 'done' | 'failed';
+  percent?: number | null;
+  downloaded_bytes?: number | null;
+  total_bytes?: number | null;
+  speed_bps?: number | null;
+  detail?: string | null;
 }
 
 export interface Recipe {
@@ -62,6 +103,12 @@ export interface Settings {
   reveal: boolean;
   hotkey: boolean;
   tray: boolean;
+  orb: boolean;
+  background?: boolean;
+  hwaccel?: 'auto' | 'on' | 'off';
+  favorites?: string[];
+  category_favorites?: Record<string, string[]>;
+  max_parallel?: number | null;
   recipes: Recipe[];
   watch: WatchRule[];
 }
@@ -72,6 +119,9 @@ export type JobEvent =
   | { type: 'progress'; job: number; index: number; fraction: number }
   | { type: 'done'; job: number; index: number; output: string }
   | { type: 'failed'; job: number; index: number; error: string }
+  | { type: 'paused'; job: number }
+  | { type: 'resumed'; job: number }
+  | { type: 'cancelled'; job: number }
   | { type: 'text'; job: number; title: string; text: string }
   | { type: 'pair'; job: number; title: string; file: string; svg: string; address: string }
   | { type: 'sent'; job: number; device: string; files: number; declined: boolean };

@@ -72,10 +72,20 @@ export function Shelf() {
   return (
     <div
       id="orb"
+      role="button"
+      tabIndex={0}
       className={`orb${over ? ' over' : ''}`}
       title="Zeidex Convert"
       data-tauri-drag-region={held ? undefined : ''}
       aria-label="Zeidex floating shelf"
+      onKeyDown={async (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          const files = held ? await floatList() : [];
+          if (files.length) void openInHome(files);
+          else void showHome();
+        }
+      }}
       onPointerDown={onPointerDown}
       onPointerUp={() => {
         press.current = null;

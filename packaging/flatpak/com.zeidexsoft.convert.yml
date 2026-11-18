@@ -1,6 +1,6 @@
 app-id: com.zeidexsoft.convert
 runtime: org.gnome.Platform
-runtime-version: '46'
+runtime-version: '47'
 sdk: org.gnome.Sdk
 command: zeidex-app
 finish-args:
@@ -10,7 +10,12 @@ finish-args:
   - --device=dri
   - --filesystem=host
   - --filesystem=xdg-download
+  - --filesystem=xdg-documents
+  - --filesystem=xdg-pictures
+  - --filesystem=xdg-videos
+  - --filesystem=xdg-music
   - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.freedesktop.FileManager1
 
 modules:
   - name: zeidex-convert

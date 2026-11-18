@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+PackageIdentifier: Zeidexsoft.ZeidexConvert
+PackageVersion: __VERSION__
+InstallerType: nullsoft
+Scope: user
+UpgradeBehavior: install
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/zeiad6/zeidexfileconventer/releases/download/v__VERSION__/Zeidex.Convert___VERSION___x64-setup.exe
+    InstallerSha256: __WIN_SETUP_SHA256__
+ManifestType: installer
+ManifestVersion: 1.6.0

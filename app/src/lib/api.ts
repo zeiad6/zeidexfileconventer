@@ -4,7 +4,7 @@
  * install a fake bridge before rendering and assert on the exact IPC traffic.
  */
 
-import type { Desc, DragPayload, EditorState, Engine, Settings } from './types';
+import type { Desc, DiagnosticsReport, DragPayload, EditorState, Engine, Mode, ModelStatus, Settings } from './types';
 
 export interface ResizeDirection {
   toString(): string;
@@ -126,13 +126,25 @@ export async function copyText(text: string): Promise<void> {
 
 export const describe = (paths: string[]) => invoke<Desc>('describe', { paths });
 export const runJob = (paths: string[], kind: string, id: string, opts: Record<string, string>) =>
-  invoke<void>('run_job', { paths, kind, id, opts });
+  invoke<number>('run_job', { paths, kind, id, opts });
 export const keepWheel = () => invoke<void>('keep_wheel');
 export const hideWheel = () => invoke<void>('hide_wheel');
 export const wheelAtShelf = (paths: string[] = []) => invoke<void>('wheel_at_shelf', { paths });
+export const wheelState = () => invoke<{ mode: Mode; paths: string[]; click: boolean }>('wheel_state');
 export const openEditor = (paths: string[], tool: string) => invoke<void>('open_editor', { paths, tool });
 export const takePending = () => invoke<string[]>('take_pending');
 export const doctor = () => invoke<Engine[]>('doctor');
+export const modelsStatus = () => invoke<ModelStatus[]>('models_status');
+export const testAllEngines = (failed_jobs?: { name: string; error: string }[]) =>
+  invoke<DiagnosticsReport>('test_all_engines', { failed_jobs });
+export const diagnosticReport = (failed_jobs?: { name: string; error: string }[]) =>
+  invoke<DiagnosticsReport>('diagnostic_report', { failed_jobs });
+export const saveDiagnosticReport = (report_text: string) =>
+  invoke<string | null>('save_diagnostic_report', { report_text });
+export const buildProfile = () => invoke<'lite' | 'full'>('build_profile');
+/** Downloads, SHA-256 verifies, and extracts a portable optional engine into local app data. */
+export const downloadEngine = (id: string) => invoke<string>('download_engine', { id });
+export const downloadAllMissing = () => invoke<string[]>('download_all_missing');
 /** Opens a terminal running the engine's install command (winget / brew / apt). */
 export const installEngine = (id: string) => invoke<void>('install_engine', { id });
 export const hookOk = () => invoke<boolean>('hook_ok');
@@ -148,6 +160,15 @@ export const floatList = () => invoke<string[]>('float_list');
 export const floatClear = () => invoke<void>('float_clear');
 export const dragIcon = () => invoke<string>('drag_icon');
 export const reveal = (path: string) => invoke<void>('reveal', { path });
+export const openOutputFolder = (path: string) => invoke<void>('open_output_folder', { path });
+export const pauseJob = (job: number) => invoke<void>('pause_job', { job });
+export const resumeJob = (job: number) => invoke<void>('resume_job', { job });
+export const cancelJob = (job: number) => invoke<void>('cancel_job', { job });
+export const cancelAllJobs = () => invoke<void>('cancel_all_jobs');
+export const exportRecipes = (recipes: { name: string; steps: string }[]) =>
+  invoke<string>('export_recipes', { recipes });
+export const importRecipes = (json: string) =>
+  invoke<{ name: string; steps: string }[]>('import_recipes', { json });
 export const downloadDraggedUrl = (url: string) => invoke<string | null>('download_dragged_url', { url });
 export const editorState = () => invoke<EditorState>('editor_state');
 export const saveAnnotation = (args: { src: string; data: string; width: number; height: number }) =>

@@ -44,6 +44,35 @@ describe('home', () => {
     expect(row('ffmpeg')).toBeNull();
   });
 
+  it('supports on-demand SHA-256 engine download in Lite mode', async () => {
+    const h = installTauri({
+      build_profile: 'lite',
+      doctor: [
+        { id: 'ffmpeg', name: 'FFmpeg', path: '/usr/bin/ffmpeg', hint: '', tier: 'core', source: 'bundled' },
+        {
+          id: 'whisper',
+          name: 'whisper.cpp',
+          path: null,
+          hint: 'build whisper.cpp',
+          tier: 'optional',
+          downloadable: true,
+          size_bytes: 10364195,
+          source: 'missing',
+        },
+      ],
+      download_engine: '/home/u/.local/share/zeidex/engines/whisper/whisper-cli',
+    });
+    mount(<Home />);
+    await flush();
+
+    expect(need('buildProfileBadge').textContent).toContain('Lite');
+    const dlBtn = need('engines').querySelector('[data-download-engine="whisper"]') as HTMLButtonElement;
+    expect(dlBtn).not.toBeNull();
+    await h.click(dlBtn);
+    expect(firstCall(h.calls, 'download_engine')?.args.id).toBe('whisper');
+    expect(need('integrated').textContent).toContain('SHA-256');
+  });
+
   it('keeps every automation id the previous build exposed', async () => {
     await open();
     const ids = [
@@ -96,6 +125,11 @@ describe('home', () => {
     const saved = lastCall(h.calls, 'set_settings')?.args.settings;
     expect(saved.tools).toBe('Meta');
     expect(saved.reveal).toBe(true);
+    // Both floating surfaces are opt-in: the installer must not leave a tray icon or an orb on
+    // the desktop, so the unchecked boxes have to travel as `false`.
+    expect(saved.tray).toBe(false);
+    expect(saved.orb).toBe(false);
+    expect(saved.background).toBe(true);
     expect(saved.recipes).toHaveLength(2);
     expect(saved.recipes[1]).toMatchObject({ name: 'Thumbs', steps: 'resize max=300 | strip' });
     expect(saved.watch).toHaveLength(1);
@@ -187,5 +221,113 @@ describe('home', () => {
     expect(h.calls.some((c) => c.cmd === 'winMaximize')).toBe(true);
     expect(h.calls.some((c) => c.cmd === 'winResize' && c.args === 'East')).toBe(true);
     expect(h.calls.some((c) => c.cmd === 'winClose')).toBe(true);
+  });
+
+  it('customizes wheel favorites and exports/imports recipes JSON', async () => {
+    const h = installTauri({
+      export_recipes: '{"version":1,"recipes":[{"name":"Web","steps":"strip"}]}',
+      import_recipes: [{ name: 'Imported', steps: 'compress percent=50 | strip' }],
+    });
+    mount(<Home />);
+    await flush();
+
+    await h.click(need('addFavoriteBtn'));
+    await h.click(need('exportRecipesBtn'));
+    expect(h.calls.some((c) => c.cmd === 'export_recipes')).toBe(true);
+
+    await h.click(need('importRecipesToggleBtn'));
+    const area = need<HTMLTextAreaElement>('importRecipesText');
+    area.value = '{"version":1,"recipes":[{"name":"Imported","steps":"compress percent=50 | strip"}]}';
+    await h.input(area, area.value);
+    await h.click(need('importRecipesApplyBtn'));
+    expect(h.calls.some((c) => c.cmd === 'import_recipes')).toBe(true);
+  });
+
+  it('runs deep engine health checks, lists models, downloads missing, and opens Error Report modal', async () => {
+    const h = installTauri({
+      build_profile: 'lite',
+      doctor: [
+        {
+          id: 'ffmpeg',
+          name: 'FFmpeg',
+          path: '/usr/bin/ffmpeg',
+          hint: '',
+          version: 'ffmpeg 8.0',
+          disk_bytes: 52000000,
+          source: 'system',
+          health: 'installed',
+        },
+        {
+          id: 'whisper',
+          name: 'whisper.cpp',
+          path: null,
+          hint: 'build whisper.cpp',
+          downloadable: true,
+          size_bytes: 10364195,
+          source: 'missing',
+          health: 'missing',
+        },
+      ],
+      test_all_engines: {
+        os: 'linux',
+        arch: 'x86_64',
+        app_version: '0.3.5',
+        profile: 'lite',
+        engines: [
+          {
+            id: 'ffmpeg',
+            name: 'FFmpeg',
+            path: '/usr/bin/ffmpeg',
+            hint: '',
+            version: 'ffmpeg 8.0',
+            disk_bytes: 52000000,
+            source: 'system',
+            health: 'healthy',
+            exit_code: 0,
+          },
+          {
+            id: 'whisper',
+            name: 'whisper.cpp',
+            path: '/engines/whisper/whisper-cli',
+            hint: '',
+            downloadable: true,
+            source: 'local',
+            health: 'broken',
+            exit_code: 127,
+            stderr: 'error while loading shared libraries',
+          },
+        ],
+        models: [
+          { id: 'tesseract-eng', label: 'Tesseract English (eng.traineddata)', label_ar: 'بيانات eng.traineddata', present: true, path: '/usr/share/tessdata/eng.traineddata', disk_bytes: 4000000 },
+        ],
+        report_text: 'Zeidex Convert Diagnostic & Error Report\n[BROKEN ] whisper.cpp',
+      },
+    });
+    mount(<Home />);
+    await flush();
+
+    // Auto-detected version, disk size, and model badge are rendered automatically.
+    expect(need('engines').textContent).toContain('ffmpeg 8.0');
+    expect(need('engines').textContent).toContain('52.0 MB');
+    expect(need('modelsSummary').textContent).toContain('eng.traineddata');
+
+    // Download All Missing works when at least one downloadable missing engine exists.
+    await h.click(need('downloadAllEnginesBtn'));
+    expect(h.calls.some((c) => c.cmd === 'download_all_missing')).toBe(true);
+
+    // Run Test All Engines smoke test -> marks ffmpeg Healthy and broken whisper Reinstall/Repair.
+    await h.click(need('testEnginesBtn'));
+    expect(h.calls.some((c) => c.cmd === 'test_all_engines')).toBe(true);
+    expect(need('engines').textContent).toContain('Healthy / Working');
+    expect(need('engines').textContent).toContain('Broken / Error');
+    expect(need('engines').querySelector('[data-repair-engine="whisper"]')).not.toBeNull();
+
+    // View Error Report modal displays highlighted button + dir="ltr" log + save & copy actions.
+    expect(need('viewEngineReportBtn').className).toContain('bad');
+    await h.click(need('viewEngineReportBtn'));
+    expect(need('diagnosticReportLog').getAttribute('dir')).toBe('ltr');
+    expect(need('diagnosticReportLog').textContent).toContain('[BROKEN ] whisper.cpp');
+    await h.click(need('saveErrorReportBtn'));
+    expect(h.calls.some((c) => c.cmd === 'save_diagnostic_report')).toBe(true);
   });
 });

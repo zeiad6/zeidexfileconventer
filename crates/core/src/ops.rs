@@ -337,7 +337,8 @@ impl Op {
             "strip" | "strip-exif" | "strip-metadata" => Op::StripMetadata,
             "info" => Op::Info,
             "archive" => {
-                let kind = get("format").unwrap_or("zip").to_string();
+                let raw_kind = get("format").unwrap_or("zip").to_ascii_lowercase();
+                let kind = if raw_kind == "tar.gz" { "tgz".to_string() } else { raw_kind };
                 if !["zip", "7z", "tar", "tgz"].contains(&kind.as_str()) {
                     return Err(bad("format", &kind));
                 }
@@ -1064,7 +1065,7 @@ pub const TOOLS: &[ToolDef] = &[
         cats: ANY,
         multi: false,
         params: &[
-            p("format", "zip / 7z / tar / tgz", "zip / 7z / tar / tgz", "zip"),
+            p("format", "zip / 7z / tar / tar.gz", "zip / 7z / tar / tar.gz", "zip"),
             p("password", "Password (zip/7z, AES-256)", "كلمة مرور (zip/7z، AES-256)", ""),
             p("split", "Split into parts of (e.g. 25MB)", "تقسيم إلى أجزاء بحجم (مثل 25MB)", ""),
         ],

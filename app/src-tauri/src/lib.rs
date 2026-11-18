@@ -1,5 +1,6 @@
 //! Tauri shell: windows, tray, IPC commands. All file work lives in zeidex-core.
 
+mod engine_manager;
 mod hook;
 #[cfg(windows)]
 mod win_drag_hook;
@@ -19,8 +20,9 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WindowEvent};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use zeidex_core::ops::{self, Op};
-use zeidex_core::runner::{self, Event};
-use zeidex_core::{actions, b64, format, integrate, tools};
+use zeidex_core::recipe_io::{self, RecipeSpec};
+use zeidex_core::runner::{self, Event, JobControl};
+use zeidex_core::{actions, b64, format, health, integrate, tools};
 
 #[derive(Serialize)]
 struct ParamOut {
@@ -43,6 +45,11 @@ struct Choice {
     preset: HashMap<String, String>,
     /// Outer-ring refinements: quality presets, or a tool's default options plus "Custom…".
     children: Vec<Sub>,
+    /// True when the choice applies to the current selection; false for pinned favorites dimmed
+    /// by smart context filtering.
+    compatible: bool,
+    /// True when the user pinned this target format to their custom wheel.
+    pinned: bool,
 }
 
 #[derive(Serialize)]
@@ -134,8 +141,9 @@ struct Described {
 /// Saved recipes the Tools ring shows; the studio lists every one.
 const WHEEL_RECIPES: usize = 4;
 
-const ACTIONS: [(&str, &str, &str); 11] = [
+const ACTIONS: [(&str, &str, &str); 12] = [
     ("float", "Float to shelf", "علّق في الرف العائم"),
+    ("strip", "Strip metadata", "إزالة البيانات الوصفية"),
     ("archive", "Archive to ZIP", "أرشفة إلى ZIP"),
     ("extract", "Extract here", "فك الأرشيف هنا"),
     ("rename", "Batch rename…", "إعادة تسمية دفعية…"),
@@ -155,6 +163,9 @@ enum JobEvent {
     Progress { job: u64, index: usize, fraction: f32 },
     Done { job: u64, index: usize, output: String },
     Failed { job: u64, index: usize, error: String },
+    Paused { job: u64 },
+    Resumed { job: u64 },
+    Cancelled { job: u64 },
     Text { job: u64, title: String, text: String },
     // LocalDrop is waiting: `svg` is the pairing code the phone scans.
     Pair { job: u64, title: String, file: String, svg: String, address: String },
@@ -162,22 +173,67 @@ enum JobEvent {
     Sent { job: u64, device: String, files: usize, declined: bool },
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ToolStatus {
     id: &'static str,
     name: &'static str,
     path: Option<String>,
-    hint: &'static str,
+    hint: String,
+    tier: &'static str,
+    downloadable: bool,
+    size_bytes: Option<u64>,
+    source: &'static str,
+    version: Option<String>,
+    disk_bytes: Option<u64>,
+    health: &'static str,
+    health_detail: Option<String>,
+    exit_code: Option<i32>,
+    stderr: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct ModelStatusOut {
+    id: &'static str,
+    label: &'static str,
+    label_ar: &'static str,
+    present: bool,
+    path: Option<String>,
+    disk_bytes: Option<u64>,
+}
+
+#[derive(Clone, Deserialize)]
+struct FailedJobInput {
+    name: String,
+    error: String,
+}
+
+#[derive(Clone, Serialize)]
+struct DiagnosticsOut {
+    os: &'static str,
+    arch: &'static str,
+    app_version: String,
+    profile: &'static str,
+    engines: Vec<ToolStatus>,
+    models: Vec<ModelStatusOut>,
+    report_text: String,
 }
 
 static NEXT_JOB: AtomicU64 = AtomicU64::new(1);
 static REVEAL: AtomicBool = AtomicBool::new(true);
 /// Files handed over by `--open` before the home window was ready to receive them.
 static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static ACTIVE_JOBS: Mutex<Option<HashMap<u64, Arc<JobControl>>>> = Mutex::new(None);
+
+fn job_registry() -> &'static Mutex<Option<HashMap<u64, Arc<JobControl>>>> {
+    &ACTIVE_JOBS
+}
 
 #[tauri::command]
 fn describe(app: AppHandle, paths: Vec<String>) -> Described {
-    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    let settings = get_settings(app);
+    let raw_paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    let expanded = format::expand_dropped_paths(&raw_paths);
+    let paths = if expanded.is_empty() { raw_paths } else { expanded };
     let cat = format::common_category(&paths);
     // Hide the targets this machine has no engine for, so a segment never promises a job that
     // is guaranteed to fail after the drop.
@@ -188,14 +244,24 @@ fn describe(app: AppHandle, paths: Vec<String>) -> Described {
         .collect();
     let mixed = common.is_empty() && paths.len() > 1;
     let total = paths.len();
+    let cat_favorites = cat.and_then(|c| settings.category_favorites.get(c.name())).filter(|v| !v.is_empty());
+    let favorites: Vec<String> = cat_favorites
+        .unwrap_or(&settings.favorites)
+        .iter()
+        .map(|f| f.trim().to_ascii_lowercase())
+        .filter(|f| !f.is_empty())
+        .take(12)
+        .collect();
+
     // A heterogeneous drag has no shared target; offer every output at least one file can
     // become, labelled with how many files carry it, instead of an empty ring.
-    let convert: Vec<Choice> = if common.is_empty() && mixed {
+    let mut convert: Vec<Choice> = if common.is_empty() && mixed {
         format::mixed_targets(&paths)
             .into_iter()
             .filter(|(t, _)| paths.iter().any(|p| ops::convert_ready(p, t)))
             .map(|(t, n)| {
                 let children = children_for("convert", t, &[]);
+                let pinned = favorites.iter().any(|f| f == t);
                 Choice {
                     kind: "convert",
                     editor: false,
@@ -205,25 +271,57 @@ fn describe(app: AppHandle, paths: Vec<String>) -> Described {
                     params: vec![],
                     preset: HashMap::new(),
                     children,
+                    compatible: true,
+                    pinned,
                 }
             })
             .collect()
     } else {
         common
             .into_iter()
-            .map(|t| Choice {
-                kind: "convert",
-                editor: false,
-                id: t.into(),
-                label: t.to_uppercase(),
-                label_ar: t.to_uppercase(),
-                params: vec![],
-                preset: HashMap::new(),
-                children: children_for("convert", t, &[]),
+            .map(|t| {
+                let pinned = favorites.iter().any(|f| f == t);
+                Choice {
+                    kind: "convert",
+                    editor: false,
+                    id: t.into(),
+                    label: t.to_uppercase(),
+                    label_ar: t.to_uppercase(),
+                    params: vec![],
+                    preset: HashMap::new(),
+                    children: children_for("convert", t, &[]),
+                    compatible: true,
+                    pinned,
+                }
             })
             .collect()
     };
-    let recipes: Vec<Recipe> = get_settings(app).recipes.into_iter().take(WHEEL_RECIPES).collect();
+    if !favorites.is_empty() {
+        // Order pinned favorite formats first, then remaining compatible targets.
+        convert.sort_by_key(|c| favorites.iter().position(|f| f == &c.id).unwrap_or(usize::MAX));
+        // Smart context filtering: show pinned favorites that don't apply to this file type as
+        // dimmed incompatible targets when space remains (up to 12 total segments).
+        for fav in &favorites {
+            if convert.len() >= 12 {
+                break;
+            }
+            if !convert.iter().any(|c| c.id == *fav) {
+                convert.push(Choice {
+                    kind: "convert",
+                    editor: false,
+                    id: fav.clone(),
+                    label: fav.to_uppercase(),
+                    label_ar: fav.to_uppercase(),
+                    params: vec![],
+                    preset: HashMap::new(),
+                    children: vec![],
+                    compatible: false,
+                    pinned: true,
+                });
+            }
+        }
+    }
+    let recipes: Vec<Recipe> = settings.recipes.into_iter().take(WHEEL_RECIPES).collect();
     let all: Vec<&ops::ToolDef> = ops::available(ops::tools_for_paths(&paths).into_iter().filter(|t| t.id != "recipe"));
     let (shown, more) = ops::wheel_tools(&all, recipes.len());
     let saved = recipes.into_iter().map(|r| Choice {
@@ -235,6 +333,8 @@ fn describe(app: AppHandle, paths: Vec<String>) -> Described {
         params: vec![],
         preset: HashMap::from([("steps".to_string(), r.steps)]),
         children: vec![],
+        compatible: true,
+        pinned: true,
     });
     let more = more.then(|| Choice {
         kind: "action",
@@ -245,6 +345,8 @@ fn describe(app: AppHandle, paths: Vec<String>) -> Described {
         params: vec![],
         preset: HashMap::new(),
         children: vec![],
+        compatible: true,
+        pinned: false,
     });
     let tools = shown
         .into_iter()
@@ -264,6 +366,8 @@ fn describe(app: AppHandle, paths: Vec<String>) -> Described {
                 params,
                 preset: HashMap::new(),
                 children,
+                compatible: true,
+                pinned: false,
             }
         })
         .chain(saved)
@@ -280,6 +384,8 @@ fn describe(app: AppHandle, paths: Vec<String>) -> Described {
             params: vec![],
             preset: HashMap::new(),
             children: vec![],
+            compatible: true,
+            pinned: false,
         })
         .collect();
     Described { category: cat.map(|c| c.name()), mixed, convert, tools, actions }
@@ -296,14 +402,22 @@ fn run_job(
     kind: String,
     id: String,
     opts: HashMap<String, String>,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     if paths.is_empty() {
         return Err("no files".into());
     }
+    hook::note_drop();
     if kind == "action" {
+        if id == "strip" {
+            if hook::visible() {
+                hook::keep();
+            }
+            return Ok(spawn_job(app, Op::StripMetadata, paths, "strip".into(), None));
+        }
         hook::hide(&app);
-        return action(&app, &id, paths);
+        action(&app, &id, paths)?;
+        return Ok(0);
     }
     // Validate first: on bad options the wheel stays open so the form can show the error.
     let op = if kind == "convert" {
@@ -312,8 +426,8 @@ fn run_job(
     } else {
         Op::parse(&id, &opts).map_err(|e| e.to_string())?
     };
-    hook::hide(&app);
     if runner::is_text_tool(&op) {
+        hook::hide(&app);
         // Reports (metadata, QR contents, duplicates, renames) go to the jobs window as text.
         let job = NEXT_JOB.fetch_add(1, Ordering::Relaxed);
         show(&app, "jobs");
@@ -321,22 +435,35 @@ fn run_job(
             let text = runner::text_tool(&op, &paths).unwrap_or_else(|e| e.to_string());
             let _ = app.emit("job", JobEvent::Text { job, title: id, text });
         });
-        return Ok(());
+        return Ok(job);
+    }
+    if hook::visible() {
+        hook::keep();
     }
     let title = if kind == "convert" { format!("→ {}", id.to_uppercase()) } else { id };
-    spawn_job(app, op, paths, title, None);
-    Ok(())
+    Ok(spawn_job(app, op, paths, title, None))
 }
 
 /// Runs `op` on a worker thread, streaming progress to the jobs window. `cleanup` is deleted
 /// afterwards (temporary inputs such as an annotation overlay).
-fn spawn_job(app: AppHandle, op: Op, paths: Vec<PathBuf>, title: String, cleanup: Option<PathBuf>) {
+fn spawn_job(app: AppHandle, op: Op, paths: Vec<PathBuf>, title: String, cleanup: Option<PathBuf>) -> u64 {
     let job = NEXT_JOB.fetch_add(1, Ordering::Relaxed);
+    let control = Arc::new(JobControl::new());
+    {
+        let mut reg = job_registry().lock().unwrap_or_else(|e| e.into_inner());
+        reg.get_or_insert_with(HashMap::new).insert(job, control.clone());
+    }
     show(&app, "jobs");
     std::thread::spawn(move || {
-        let results = runner::run(&op, &paths, |e| {
+        let results = runner::run_with_control(&op, &paths, runner::default_parallelism(), control, |e| {
             let _ = app.emit("job", job_event(job, &title, e));
         });
+        {
+            let mut reg = job_registry().lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(map) = reg.as_mut() {
+                map.remove(&job);
+            }
+        }
         if let Some(tmp) = cleanup {
             let _ = std::fs::remove_file(tmp);
         }
@@ -346,6 +473,93 @@ fn spawn_job(app: AppHandle, op: Op, paths: Vec<PathBuf>, title: String, cleanup
             }
         }
     });
+    job
+}
+
+#[tauri::command]
+fn pause_job(app: AppHandle, job: u64) {
+    if let Some(ctrl) =
+        job_registry().lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&job).cloned())
+    {
+        ctrl.pause();
+        let _ = app.emit("job", JobEvent::Paused { job });
+    }
+}
+
+#[tauri::command]
+fn resume_job(app: AppHandle, job: u64) {
+    if let Some(ctrl) =
+        job_registry().lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&job).cloned())
+    {
+        ctrl.resume();
+        let _ = app.emit("job", JobEvent::Resumed { job });
+    }
+}
+
+#[tauri::command]
+fn cancel_job(app: AppHandle, job: u64) {
+    if let Some(ctrl) =
+        job_registry().lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&job).cloned())
+    {
+        ctrl.cancel();
+        let _ = app.emit("job", JobEvent::Cancelled { job });
+    }
+}
+
+#[tauri::command]
+fn cancel_all_jobs(app: AppHandle) {
+    if let Some(map) = job_registry().lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        for (job, ctrl) in map {
+            ctrl.cancel();
+            let _ = app.emit("job", JobEvent::Cancelled { job: *job });
+        }
+    }
+    if let Some(flag) = DROP_CANCEL.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        flag.store(true, Ordering::Relaxed);
+    }
+}
+
+#[tauri::command]
+fn open_output_folder(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    let dir = if p.is_dir() { p } else { p.parent().unwrap_or(p) };
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer").arg(dir).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(dir).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open").arg(dir).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = dir;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn export_recipes(recipes: Vec<Recipe>) -> String {
+    let specs: Vec<RecipeSpec> = recipes
+        .into_iter()
+        .map(|r| RecipeSpec {
+            version: recipe_io::RECIPE_SCHEMA_VERSION,
+            name: r.name,
+            description: String::new(),
+            steps: r.steps,
+        })
+        .collect();
+    recipe_io::export_recipes_json(&specs)
+}
+
+#[tauri::command]
+fn import_recipes(json: String) -> Result<Vec<Recipe>, String> {
+    let specs = recipe_io::parse_and_validate_recipe_json(&json).map_err(|e| e.to_string())?;
+    Ok(specs.into_iter().map(|s| Recipe { name: s.name, steps: s.steps }).collect())
 }
 
 fn job_event(job: u64, title: &str, e: Event) -> JobEvent {
@@ -811,8 +1025,8 @@ fn yes() -> bool {
     true
 }
 
-fn tray_on() -> bool {
-    true
+fn default_hwaccel() -> String {
+    "auto".into()
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -824,10 +1038,26 @@ struct Settings {
     reveal: bool,
     /// Ctrl+Shift+Space opens the wheel on the current selection.
     hotkey: bool,
-    /// Keep a tray/menu-bar icon. Closing the window never quits the app either way; this only
-    /// controls whether the icon stays behind.
-    #[serde(default = "tray_on")]
+    /// Keep a tray/menu-bar icon. Off at install: an always-visible icon is a choice the user
+    /// makes in Settings, not something the installer puts on their screen.
     tray: bool,
+    /// Show the floating drop orb, the Wayland fallback and the drag target for the shelf.
+    orb: bool,
+    /// Keep running in the background when the studio window is closed.
+    #[serde(default = "yes")]
+    background: bool,
+    /// GPU hardware acceleration for FFmpeg (`auto`, `on`, `off`).
+    #[serde(default = "default_hwaccel")]
+    hwaccel: String,
+    /// Pinned favorite output formats for the Shift-drag wheel (8–12 formats).
+    #[serde(default)]
+    favorites: Vec<String>,
+    /// Per-category pinned wheel targets (e.g. `video -> ["mp4", "mp3", "gif"]`).
+    #[serde(default)]
+    category_favorites: HashMap<String, Vec<String>>,
+    /// Maximum concurrent files processed in a batch (`None` / `0` = auto).
+    #[serde(default)]
+    max_parallel: Option<usize>,
     recipes: Vec<Recipe>,
     watch: Vec<WatchRule>,
 }
@@ -840,7 +1070,13 @@ impl Default for Settings {
             actions: Trigger::Alt,
             reveal: true,
             hotkey: true,
-            tray: true,
+            tray: false,
+            orb: false,
+            background: true,
+            hwaccel: default_hwaccel(),
+            favorites: vec![],
+            category_favorites: HashMap::new(),
+            max_parallel: None,
             recipes: vec![Recipe {
                 name: "Web image".into(),
                 steps: "resize max=1600 | compress percent=60 | strip".into(),
@@ -848,6 +1084,12 @@ impl Default for Settings {
             watch: vec![],
         }
     }
+}
+
+/// Wayland blocks global input hooks by design, so the orb is the only way into the wheel
+/// there and is shown even when the user never turned it on.
+fn wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
 /// Bumped on every settings save; watcher threads of an older generation stop.
@@ -888,22 +1130,93 @@ fn start_watchers(app: &AppHandle, rules: &[WatchRule]) {
     }
 }
 
+/// Best-effort selection probe for an in-flight drag BEFORE native OLE `DragEnter` arrives.
+/// Strictly ignores Windows Clipboard (`CF_HDROP` / text). Prefers regular files when mixed,
+/// and falls back to folders when only directories are selected so the wheel never stays empty.
+pub(crate) fn drag_probe_paths() -> Vec<String> {
+    #[cfg(windows)]
+    let selection = {
+        let (hwnds, desktop) = win_drag_hook::probe_context();
+        zeidex_core::selection::explorer_selection_for_hwnds(&hwnds, desktop)
+    };
+    #[cfg(not(windows))]
+    let selection = zeidex_core::selection::explorer_selection();
+    let files: Vec<String> =
+        selection.iter().filter(|p| p.is_file()).map(|p| p.to_string_lossy().into_owned()).collect();
+    if !files.is_empty() {
+        return files;
+    }
+    selection.into_iter().map(|p| p.to_string_lossy().into_owned()).collect()
+}
+
+/// Selection source for the `Ctrl+Shift+Space` keyboard shortcut (Explorer selection, else
+/// explicit clipboard `Ctrl+C` files).
+pub(crate) fn drag_paths(app: &AppHandle) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        let (hwnds, desktop) = win_drag_hook::probe_context();
+        let selection = zeidex_core::selection::explorer_selection_for_hwnds(&hwnds, desktop);
+        if !selection.is_empty() {
+            return selection.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        }
+        let probe = win_drag_hook::dragged_paths();
+        if !probe.is_empty() {
+            return probe;
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let selection = zeidex_core::selection::explorer_selection();
+        if !selection.is_empty() {
+            return selection.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        }
+    }
+    app.clipboard()
+        .read_text()
+        .map(|t| zeidex_core::selection::parse_uri_list(&t))
+        .unwrap_or_default()
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect()
+}
+
 fn settings_path(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|d| d.join("settings.json"))
+}
+
+/// Writes `settings.json`, creating its folder. One writer for the settings panel and the tray.
+fn write_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
+    let path = settings_path(app).ok_or("no config directory")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
 fn apply(s: &Settings) {
     hook::set_keys([s.convert, s.tools, s.actions]);
     REVEAL.store(s.reveal, Ordering::Relaxed);
     hook::set_hotkey(s.hotkey);
+    if let Ok(mode) = zeidex_core::hwaccel::HwAccelMode::parse(&s.hwaccel) {
+        zeidex_core::hwaccel::set_mode(mode);
+    }
+    runner::set_max_parallel(s.max_parallel.unwrap_or(0));
 }
 
 #[tauri::command]
 fn get_settings(app: AppHandle) -> Settings {
-    settings_path(&app)
-        .and_then(|p| std::fs::read(p).ok())
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    let Some(bytes) = settings_path(&app).and_then(|p| std::fs::read(p).ok()) else {
+        return Settings::default();
+    };
+    let mut settings: Settings = serde_json::from_slice(&bytes).unwrap_or_default();
+    // 0.3.4 and earlier always wrote `"tray": true` and had no `orb` at all, so those values
+    // carry no intent: an existing install still gets the quiet desktop every new one gets.
+    let legacy = serde_json::from_slice::<serde_json::Value>(&bytes).ok().is_some_and(|v| v.get("orb").is_none());
+    if legacy {
+        settings.tray = false;
+        settings.orb = false;
+    }
+    settings
 }
 
 #[tauri::command]
@@ -912,6 +1225,7 @@ fn set_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     if keys[0] == keys[1] || keys[1] == keys[2] || keys[0] == keys[2] {
         return Err("each wheel needs its own key".into());
     }
+    zeidex_core::hwaccel::HwAccelMode::parse(&settings.hwaccel).map_err(|e| e.to_string())?;
     for r in &settings.recipes {
         if r.name.trim().is_empty() {
             return Err("every recipe needs a name".into());
@@ -924,15 +1238,13 @@ fn set_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
         }
         ops::parse_step(&w.steps).map_err(|e| format!("{}: {e}", w.dir))?;
     }
-    let path = settings_path(&app).ok_or("no config directory")?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&path, serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    write_settings(&app, &settings)?;
     apply(&settings);
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_visible(settings.tray);
+    }
+    if let Some(shelf) = app.get_webview_window("shelf") {
+        let _ = if settings.orb { shelf.show() } else { shelf.hide() };
     }
     start_watchers(&app, &settings.watch);
     Ok(())
@@ -952,13 +1264,35 @@ fn hide_wheel(app: AppHandle) {
     hook::hide(&app);
 }
 
-/// The dropped tool needs options: keep the wheel open and let it take keyboard focus.
+/// The dropped tool needs options or switched modes: keep the wheel open and let it take
+/// keyboard/mouse focus cleanly on every OS.
 #[tauri::command]
 fn keep_wheel(app: AppHandle) {
     hook::keep();
     if let Some(w) = app.get_webview_window("wheel") {
+        let _ = w.set_ignore_cursor_events(false);
+        #[cfg(target_os = "macos")]
+        let _ = w.set_focusable(true);
+        #[cfg(windows)]
+        if let Ok(hwnd) = w.hwnd() {
+            win_drag_hook::allow_focus(hwnd.0 as isize);
+        }
         let _ = w.set_focus();
     }
+}
+
+#[derive(Serialize)]
+struct WheelState {
+    mode: String,
+    paths: Vec<String>,
+    click: bool,
+}
+
+#[tauri::command]
+fn wheel_state() -> WheelState {
+    let native = hook::native_drag_paths();
+    let paths = if native.is_empty() { hook::wheel_files() } else { native };
+    WheelState { mode: hook::current_mode(), paths, click: hook::click_mode() }
 }
 
 /// Files dragged onto the orb: open the wheel around it so the drag can continue onto a segment.
@@ -972,12 +1306,20 @@ fn wheel_at_shelf(app: AppHandle, paths: Vec<String>) {
     let Some(shelf) = app.get_webview_window("shelf") else { return };
     let (Ok(pos), Ok(size)) = (shelf.outer_position(), shelf.outer_size()) else { return };
     let (cx, cy) = (pos.x + size.width as i32 / 2, pos.y + size.height as i32 / 2);
-    hook::show_at(&app, "convert", (cx, cy));
-    if let Some(w) = app.get_webview_window("wheel") {
-        hook::center(&w, cx, cy);
-    }
+    hook::show_at_center(&app, "convert", (cx, cy));
     if !paths.is_empty() {
+        hook::set_native_drag_path_strings(paths.clone());
+        hook::set_wheel_files(paths.clone());
         let _ = app.emit("wheel-files", paths);
+    } else {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let probed = drag_probe_paths();
+            if !probed.is_empty() && hook::visible() && hook::native_drag_paths().is_empty() {
+                hook::set_wheel_files(probed.clone());
+                let _ = app.emit("wheel-files", probed);
+            }
+        });
     }
 }
 
@@ -987,16 +1329,172 @@ fn reveal(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn doctor() -> Vec<ToolStatus> {
-    tools::Tool::ALL
+fn build_profile() -> &'static str {
+    tools::build_profile()
+}
+
+fn build_tool_status(
+    t: tools::Tool,
+    local_dir: Option<&PathBuf>,
+    broken: &[(tools::Tool, PathBuf)],
+    smoke: Option<&health::SmokeResult>,
+) -> ToolStatus {
+    let located = tools::locate(t);
+    let source = match &located {
+        Some(p) if local_dir.is_some_and(|d| p.starts_with(d)) => "local",
+        Some(p) if tools::is_bundled_path(p) => "bundled",
+        Some(_) => "system",
+        None => "missing",
+    };
+    let is_broken_bin = located.is_none() && broken.iter().any(|(b, _)| *b == t);
+    let mut hint = t.install_hint().to_string();
+    if is_broken_bin {
+        hint = format!("the bundled copy does not start (missing DLL) — reinstall Zeidex or {}", t.install_hint());
+    }
+    let spec = engine_manager::download_spec(t.slug());
+    let disk_bytes = smoke.and_then(|s| s.disk_bytes).or_else(|| located.as_deref().and_then(health::dir_or_file_size));
+    let version =
+        smoke.and_then(|s| s.version.clone()).or_else(|| located.as_deref().and_then(|p| health::detect_version(t, p)));
+    let (health_state, health_detail, exit_code, stderr, path) = if let Some(s) = smoke {
+        (
+            s.state.as_str(),
+            if s.note.is_empty() { None } else { Some(s.note.clone()) },
+            s.exit_code,
+            if s.stderr.is_empty() { None } else { Some(s.stderr.clone()) },
+            s.path.clone(),
+        )
+    } else if is_broken_bin {
+        ("broken", Some(hint.clone()), None, Some(hint.clone()), None)
+    } else if let Some(ref p) = located {
+        ("installed", None, None, None, Some(p.to_string_lossy().into_owned()))
+    } else {
+        ("missing", None, None, None, None)
+    };
+
+    ToolStatus {
+        id: t.slug(),
+        name: t.label(),
+        path,
+        hint,
+        tier: if t.is_lite_core() { "core" } else { "optional" },
+        downloadable: spec.is_some(),
+        size_bytes: spec.map(|s| s.size),
+        source,
+        version,
+        disk_bytes,
+        health: health_state,
+        health_detail,
+        exit_code,
+        stderr,
+    }
+}
+
+fn to_model_outs(models: &[health::ModelCheck]) -> Vec<ModelStatusOut> {
+    models
         .iter()
-        .map(|t| ToolStatus {
-            id: t.slug(),
-            name: t.label(),
-            path: tools::locate(*t).map(|p| p.to_string_lossy().into_owned()),
-            hint: t.install_hint(),
+        .map(|m| ModelStatusOut {
+            id: m.id,
+            label: m.label,
+            label_ar: m.label_ar,
+            present: m.present,
+            path: m.path.clone(),
+            disk_bytes: m.disk_bytes,
         })
         .collect()
+}
+
+#[tauri::command]
+async fn doctor(app: AppHandle) -> Result<Vec<ToolStatus>, String> {
+    let local_dir = engine_manager::local_engines_dir(&app).ok();
+    tauri::async_runtime::spawn_blocking(move || {
+        let broken = tools::broken_engines();
+        tools::Tool::ALL.iter().map(|t| build_tool_status(*t, local_dir.as_ref(), &broken, None)).collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn models_status() -> Vec<ModelStatusOut> {
+    to_model_outs(&health::scan_models())
+}
+
+/// Runs functional smoke tests on all 16 engines + models and builds the diagnostic report.
+#[tauri::command]
+async fn test_all_engines(app: AppHandle, failed_jobs: Option<Vec<FailedJobInput>>) -> Result<DiagnosticsOut, String> {
+    let version = app.package_info().version.to_string();
+    let local_dir = engine_manager::local_engines_dir(&app).ok();
+    tauri::async_runtime::spawn_blocking(move || {
+        tools::clear_probe_cache();
+        let summary = health::test_all_engines();
+        let broken = tools::broken_engines();
+        let engines: Vec<ToolStatus> = summary
+            .engines
+            .iter()
+            .filter_map(|s| {
+                tools::Tool::by_slug(s.id).map(|t| build_tool_status(t, local_dir.as_ref(), &broken, Some(s)))
+            })
+            .collect();
+        let jobs: Vec<health::FailedJobLog> = failed_jobs
+            .unwrap_or_default()
+            .into_iter()
+            .map(|j| health::FailedJobLog { name: j.name, error: j.error })
+            .collect();
+        let report_text = health::format_error_report(&version, &summary, &jobs);
+        Ok(DiagnosticsOut {
+            os: summary.os,
+            arch: summary.arch,
+            app_version: version,
+            profile: summary.profile,
+            engines,
+            models: to_model_outs(&summary.models),
+            report_text,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Builds a formatted error & diagnostics report for current engine states + failed jobs.
+#[tauri::command]
+async fn diagnostic_report(app: AppHandle, failed_jobs: Option<Vec<FailedJobInput>>) -> Result<DiagnosticsOut, String> {
+    test_all_engines(app, failed_jobs).await
+}
+
+/// Opens a Save dialog to write the diagnostic report to a `.txt` file.
+#[tauri::command]
+async fn save_diagnostic_report(app: AppHandle, report_text: String) -> Result<Option<String>, String> {
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("Text Report", &["txt"])
+        .set_file_name("zeidex-diagnostic-report.txt")
+        .blocking_save_file()
+        .and_then(|f| f.into_path().ok());
+    let Some(path) = picked else {
+        return Ok(None);
+    };
+    let normalized = tools::normalize_engine_path(&path);
+    std::fs::write(&normalized, report_text.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(Some(normalized.to_string_lossy().into_owned()))
+}
+
+/// Downloads and verifies (SHA-256) a portable engine archive into the local app data directory.
+/// Strictly user-initiated from the Engines panel; never called automatically.
+#[tauri::command]
+async fn download_engine(app: AppHandle, id: String) -> Result<String, String> {
+    let path = tauri::async_runtime::spawn_blocking(move || engine_manager::download_and_install(&app, &id))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Downloads every missing portable engine configured for the current platform.
+#[tauri::command]
+async fn download_all_missing(app: AppHandle) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || engine_manager::download_all_missing(&app))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Runs the platform install command for one engine in a visible terminal. The Engines panel
@@ -1006,26 +1504,14 @@ fn doctor() -> Vec<ToolStatus> {
 fn install_engine(id: String) -> Result<(), String> {
     let tool = tools::Tool::by_slug(&id).ok_or_else(|| format!("unknown engine `{id}`"))?;
     let hint = tool.install_hint();
-    // Only a real package-manager line is executed. A hint that explains a manual step
-    // ("put it on PATH", "build from source") is printed in the terminal instead of being
-    // run as if it were a command; guessing wrong there would run nonsense in a shell.
-    let runnable = hint.starts_with("winget ")
-        || hint.starts_with("scoop ")
-        || hint.starts_with("choco ")
-        || hint.starts_with("brew ")
-        || hint.starts_with("sudo ")
-        || hint.starts_with("apt ")
-        || hint.starts_with("dnf ")
-        || hint.starts_with("pacman ")
-        || hint.starts_with("pipx ");
-    // A trailing parenthetical is advice for the reader ("or use the bundled build"), not part
-    // of the command; feeding it to the shell would make the package manager choke.
-    let command = hint.split(" (").next().unwrap_or(hint).trim_end();
-    if !runnable {
+    // The command lives beside the hint in `Tool::install_command`, so the line the panel shows
+    // and the line the button runs cannot drift. `None` means the install needs a manual step
+    // ("put it on PATH", "build from source"); printing it beats running it as a command.
+    let Some(command) = tool.install_command() else {
         let note =
             format!("echo {} && echo && echo '{}'", shell_quote(hint), "Run this by hand: it needs a manual step.");
         return actions::run_in_terminal(&note).map_err(|e| e.to_string());
-    }
+    };
     actions::run_in_terminal(command).map_err(|e| e.to_string())
 }
 
@@ -1042,7 +1528,7 @@ fn hook_ok() -> bool {
 
 #[tauri::command]
 fn integrate_shell() -> Result<Vec<String>, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = tools::normalize_engine_path(&std::env::current_exe().map_err(|e| e.to_string())?);
     integrate::install(&exe)
         .map(|v| v.into_iter().map(|p| p.to_string_lossy().into_owned()).collect())
         .map_err(|e| e.to_string())
@@ -1135,22 +1621,19 @@ fn show(app: &AppHandle, label: &str) {
 /// Ctrl+Shift+Space: open the wheel for the file manager's selection (Explorer on Windows)
 /// or for files copied to the clipboard (Ctrl+C in Nautilus, Dolphin, Nemo...).
 fn open_selection(app: &AppHandle) {
-    let mut paths = zeidex_core::selection::explorer_selection();
-    if paths.is_empty() {
-        if let Ok(text) = app.clipboard().read_text() {
-            paths = zeidex_core::selection::parse_uri_list(&text);
-        }
-    }
+    let paths = drag_paths(app);
     if paths.is_empty() {
         let _ = app.emit("selection-empty", ());
         return;
     }
     hook::show_at(app, "convert", (0, 0));
     hook::keep();
+    hook::set_click_mode(true);
+    hook::set_wheel_files(paths.clone());
     if let Some(w) = app.get_webview_window("wheel") {
         let _ = w.set_focus();
     }
-    let _ = app.emit("wheel-open", paths.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>());
+    let _ = app.emit("wheel-open", paths);
 }
 
 /// Handles `--open <files...>`; relative names (Nautilus scripts pass them) resolve against `cwd`.
@@ -1181,8 +1664,23 @@ pub fn run() {
             hide_wheel,
             keep_wheel,
             wheel_at_shelf,
+            wheel_state,
             reveal,
+            pause_job,
+            resume_job,
+            cancel_job,
+            cancel_all_jobs,
+            open_output_folder,
+            export_recipes,
+            import_recipes,
+            build_profile,
             doctor,
+            models_status,
+            test_all_engines,
+            diagnostic_report,
+            save_diagnostic_report,
+            download_engine,
+            download_all_missing,
             install_engine,
             hook_ok,
             integrate_shell,
@@ -1209,15 +1707,56 @@ pub fn run() {
             localdrop_cancel
         ])
         .on_window_event(|window, event| {
-            // Closing a window keeps the app alive in the tray, like a menu-bar app.
+            if let WindowEvent::DragDrop(ev) = event {
+                if window.label() == "wheel" {
+                    match ev {
+                        tauri::DragDropEvent::Enter { paths, .. } => {
+                            let _ = window.set_ignore_cursor_events(false);
+                            if !paths.is_empty() {
+                                hook::set_native_drag_paths(paths);
+                                let list: Vec<String> =
+                                    paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+                                hook::set_wheel_files(list.clone());
+                                let _ = window.app_handle().emit("wheel-files", list);
+                            }
+                        }
+                        tauri::DragDropEvent::Over { .. } => {
+                            let _ = window.set_ignore_cursor_events(false);
+                        }
+                        tauri::DragDropEvent::Drop { paths, .. } => {
+                            if !paths.is_empty() {
+                                hook::set_native_drag_paths(paths);
+                            }
+                            hook::note_drop();
+                        }
+                        _ => {}
+                    }
+                }
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
+                // Keep running in the background when enabled (or when a floating surface is shown);
+                // otherwise closing the studio window exits cleanly.
+                if window.label() == "home" {
+                    let s = get_settings(window.app_handle().clone());
+                    if !s.background && !s.tray && !s.orb {
+                        window.app_handle().exit(0);
+                        return;
+                    }
+                }
                 api.prevent_close();
                 let _ = window.hide();
             }
         })
         .setup(|app| {
+            let mut engine_dirs = Vec::new();
+            if let Ok(local) = engine_manager::local_engines_dir(app.handle()) {
+                engine_dirs.push(local);
+            }
             if let Ok(res) = app.path().resource_dir() {
-                tools::set_bundle_dirs(vec![res.join("engines")]);
+                engine_dirs.push(tools::normalize_engine_path(&res.join("engines")));
+            }
+            if !engine_dirs.is_empty() {
+                tools::set_bundle_dirs(engine_dirs);
             }
             let handle = app.handle().clone();
             let settings = get_settings(handle.clone());
@@ -1247,8 +1786,13 @@ pub fn run() {
                             }
                         }
                         "shelf" => {
+                            // Toggle and remember: otherwise the next settings save would undo
+                            // the choice the user just made in the tray menu.
+                            let mut s = get_settings(app.clone());
+                            s.orb = !s.orb;
+                            let _ = write_settings(app, &s);
                             if let Some(w) = app.get_webview_window("shelf") {
-                                let _ = if w.is_visible().unwrap_or(false) { w.hide() } else { w.show() };
+                                let _ = if s.orb { w.show() } else { w.hide() };
                             }
                         }
                         "quit" => app.exit(0),
@@ -1259,12 +1803,15 @@ pub fn run() {
                 tray = tray.icon(icon.clone());
             }
             let tray = tray.build(app)?;
-            // The setting can start as false: the icon exists but stays hidden, so turning it on
-            // later needs no restart.
+            // Both floating surfaces start hidden unless the user asked for them. The icon is
+            // built anyway, so turning it on from Settings needs no restart.
             let _ = tray.set_visible(settings.tray);
 
             // Park the orb near the bottom-right corner of the primary screen.
             if let Some(shelf) = app.get_webview_window("shelf") {
+                if settings.orb || wayland() {
+                    let _ = shelf.show();
+                }
                 if let Ok(Some(m)) = shelf.primary_monitor() {
                     let (p, s) = (m.position(), m.size());
                     let _ = shelf

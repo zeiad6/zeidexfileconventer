@@ -81,8 +81,9 @@ ln -sf "zeidex-convert.AppImage" "$LINK"
 if [ -x "$TARGET" ]; then
   mkdir -p "$TMP/icon" && (
     cd "$TMP/icon" || exit 0
-    "$TARGET" --appimage-extract 'usr/share/icons/hicolor/512x512/apps/*.png' >/dev/null 2>&1 || \
-      "$TARGET" --appimage-extract '*.png' >/dev/null 2>&1 || true
+    APPIMAGE_EXTRACT_AND_RUN=1 "$TARGET" --appimage-extract 'usr/share/icons/hicolor/512x512/apps/*.png' >/dev/null 2>&1 || \
+      "$TARGET" --appimage-extract 'usr/share/icons/hicolor/512x512/apps/*.png' >/dev/null 2>&1 || \
+      APPIMAGE_EXTRACT_AND_RUN=1 "$TARGET" --appimage-extract '*.png' >/dev/null 2>&1 || true
   )
   found="$(find "$TMP/icon/squashfs-root" -type f -name '*.png' 2>/dev/null | head -n 1)"
   [ -n "$found" ] && cp "$found" "$ICON"

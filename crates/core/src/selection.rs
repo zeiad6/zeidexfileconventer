@@ -58,12 +58,23 @@ fn percent_decode(s: &str) -> String {
 }
 
 /// PowerShell that prints the paths selected in the foreground Explorer window.
+/// In Windows 11 tabbed Explorer, every tab shares the frame `$w.HWND`, so only break once a tab
+/// actually yields selected items instead of stopping on the first empty background tab.
 pub const EXPLORER_SELECTION_PS: &str = r#"
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 Add-Type -Namespace Zeidex -Name Win -MemberDefinition '[DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();'
 $h = [int64][Zeidex.Win]::GetForegroundWindow()
-(New-Object -ComObject Shell.Application).Windows() |
-  Where-Object { $_.HWND -eq $h } |
-  ForEach-Object { $_.Document.SelectedItems() | ForEach-Object { $_.Path } }
+if ($h -ne 0) {
+  foreach ($w in (New-Object -ComObject Shell.Application).Windows()) {
+    if ([int64]$w.HWND -eq $h -and $w.Document -and $w.Document.SelectedItems) {
+      $items = @($w.Document.SelectedItems())
+      if ($items.Count -gt 0) {
+        $items | ForEach-Object { $_.Path }
+        break
+      }
+    }
+  }
+}
 "#;
 
 /// Selection of the foreground Explorer window (Windows only; empty elsewhere or on failure).
@@ -77,16 +88,103 @@ pub fn explorer_selection() -> Vec<PathBuf> {
             .creation_flags(CREATE_NO_WINDOW)
             .output();
         if let Ok(out) = out {
-            return String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(PathBuf::from)
-                .filter(|p| p.exists())
-                .collect();
+            return parse_ps_paths(&out.stdout);
         }
     }
     Vec::new()
+}
+
+/// Fast Explorer/Desktop selection for known root window HWNDs (avoids `Add-Type` C# compilation).
+pub fn explorer_selection_for_hwnds(hwnds: &[isize], include_desktop: bool) -> Vec<PathBuf> {
+    if hwnds.iter().all(|&h| h == 0) && !include_desktop {
+        return Vec::new();
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let script = build_hwnd_selection_ps(hwnds, include_desktop);
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        if let Ok(out) = out {
+            return parse_ps_paths(&out.stdout);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (hwnds, include_desktop);
+    }
+    Vec::new()
+}
+
+#[cfg(any(windows, test))]
+fn parse_ps_paths(stdout: &[u8]) -> Vec<PathBuf> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .map(|l| l.trim().trim_start_matches('\u{FEFF}').trim())
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.exists())
+        .collect()
+}
+
+#[cfg(any(windows, test))]
+fn build_hwnd_selection_ps(hwnds: &[isize], include_desktop: bool) -> String {
+    let list: String = hwnds.iter().copied().filter(|&h| h != 0).map(|h| h.to_string()).collect::<Vec<_>>().join(",");
+    let desktop_block = if include_desktop {
+        r#"
+if (-not $found) {
+  try {
+    [int]$dh = 0
+    $desk = $null
+    try { $desk = $wins.FindWindowSW(0, $null, 8, [ref]$dh, 1) } catch {}
+    if (-not $desk) {
+      try { $desk = $wins.FindWindowSW([Type]::Missing, [Type]::Missing, 8, [ref]$dh, 1) } catch {}
+    }
+    if ($desk -and $desk.Document -and $desk.Document.SelectedItems) {
+      $items = @($desk.Document.SelectedItems())
+      if ($items.Count -gt 0) {
+        $items | ForEach-Object { $_.Path }
+      }
+    }
+  } catch {}
+}
+"#
+    } else {
+        ""
+    };
+    format!(
+        r#"
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$targets = @({list})
+$shell = New-Object -ComObject Shell.Application
+$wins = $shell.Windows()
+$found = $false
+foreach ($h in $targets) {{
+  foreach ($w in $wins) {{
+    try {{
+      if ([int64]$w.HWND -eq $h -and $w.Document -and $w.Document.SelectedItems) {{
+        $items = @($w.Document.SelectedItems())
+        if ($items.Count -gt 0) {{
+          $items | ForEach-Object {{ $_.Path }}
+          $found = $true
+          break
+        }}
+      }}
+    }} catch {{}}
+  }}
+  if ($found) {{ break }}
+}}
+{desktop_block}"#
+    )
+}
+
+/// Filters `explorer_selection` results down to regular files only for provisional drag previews
+/// so an accidentally selected folder in Explorer is never expanded into unrelated files.
+pub fn explorer_selection_files() -> Vec<PathBuf> {
+    explorer_selection().into_iter().filter(|p| p.is_file()).collect()
 }
 
 /// What may follow a Shapefile's name or companion files for primary formats.
@@ -177,5 +275,29 @@ mod tests {
         assert_eq!(windows_from_uri("/C:/Users/x"), "C:/Users/x");
         assert!(EXPLORER_SELECTION_PS.contains("SelectedItems"));
         fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn hwnd_selection_script_skips_add_type_and_handles_desktop_flag() {
+        assert!(EXPLORER_SELECTION_PS.contains("UTF8Encoding"));
+        let with_desk = build_hwnd_selection_ps(&[12345, 0, 67890], true);
+        assert!(!with_desk.contains("Add-Type"));
+        assert!(with_desk.contains("UTF8Encoding"));
+        assert!(with_desk.contains("$targets = @(12345,67890)"));
+        assert!(with_desk.contains("FindWindowSW"));
+
+        let no_desk = build_hwnd_selection_ps(&[12345], false);
+        assert!(!no_desk.contains("Add-Type"));
+        assert!(no_desk.contains("UTF8Encoding"));
+        assert!(no_desk.contains("$targets = @(12345)"));
+        assert!(!no_desk.contains("FindWindowSW"));
+
+        let d = std::env::temp_dir().join(format!("zeidex ps {}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("ملف تجريبي.txt");
+        std::fs::write(&f, "").unwrap();
+        let out = format!("\u{FEFF}  {}  \r\n\r\n/no/such/file\r\n", f.to_string_lossy());
+        assert_eq!(parse_ps_paths(out.as_bytes()), vec![f]);
+        std::fs::remove_dir_all(&d).unwrap();
     }
 }

@@ -44,11 +44,13 @@ jobs:
           cargo fmt --manifest-path crates/localdrop/Cargo.toml --check
           cargo clippy --manifest-path crates/localdrop/Cargo.toml --all-targets -- -D warnings
           cargo test --manifest-path crates/localdrop/Cargo.toml
-      - name: Packaging scripts (syntax, checksum naming)
+      - name: Packaging scripts (syntax, checksum naming, manifests)
         if: runner.os == 'Linux'
         run: |
           sh -n packaging/linux/install.sh
+          bash -n packaging/linux/build-appimage.sh
           bash -n packaging/checksums.sh
+          python3 packaging/manifests/render-manifests.py --check
           # GitHub turns spaces in asset names into dots; the sums must use the same name
           # or `sha256sum -c` and install.sh both fail on a good download.
           tmp="$(mktemp -d)"
@@ -56,6 +58,13 @@ jobs:
           bash packaging/checksums.sh "$tmp/Zeidex Convert_9.9.9_x64.dmg" > "$tmp/sums.txt"
           grep -qx '[0-9a-f]\{64\}  Zeidex\.Convert_9\.9\.9_x64\.dmg' "$tmp/sums.txt" \
             || { cat "$tmp/sums.txt"; exit 1; }
+      - name: Tauri backend (fmt, clippy, unit tests)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libxtst-dev libx11-dev
+          cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path app/src-tauri/Cargo.toml
       - name: UI tests (React + jsdom)
         working-directory: app
         run: |
@@ -194,6 +203,8 @@ jobs:
       - name: Build AppImage
         working-directory: app
         run: npx tauri build --bundles appimage
+      - name: Repack AppImage with static Type-2 runtime (no libfuse2 required)
+        run: bash packaging/linux/build-appimage.sh
       - name: Checksums
         run: |
           bash packaging/checksums.sh app/src-tauri/target/release/bundle/appimage/*.AppImage \
@@ -378,4 +389,32 @@ jobs:
             app/src-tauri/target/release/bundle/dmg/*.dmg \
             app/src-tauri/target/release/bundle/SHA256SUMS-macos-${{ matrix.arch }}.txt --clobber
 
-  # --- CLI: standalone binaries for Linux (x64 + arm64), macOS and Windows ---
+  # --- Package Manager Manifests (winget, Scoop, Homebrew) on tag releases ---
+  package-manifests:
+    name: manifests (winget, Scoop, Homebrew)
+    needs: [windows-installers, macos-dmg]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render and upload package manager manifests
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          mkdir -p dist-sums dist-manifests
+          gh release download "$TAG" -p "SHA256SUMS-*.txt" -D dist-sums
+          WIN_SETUP_SHA="$(awk 'NR==1 {print $1}' dist-sums/SHA256SUMS-windows.txt || echo '0000000000000000000000000000000000000000000000000000000000000000')"
+          MAC_ARM_SHA="$(awk 'NR==1 {print $1}' dist-sums/SHA256SUMS-macos-arm64.txt || echo '0000000000000000000000000000000000000000000000000000000000000000')"
+          MAC_X64_SHA="$(awk 'NR==1 {print $1}' dist-sums/SHA256SUMS-macos-x64.txt || echo '0000000000000000000000000000000000000000000000000000000000000000')"
+          python3 packaging/manifests/render-manifests.py \
+            --version "$VER" \
+            --win-setup-sha256 "$WIN_SETUP_SHA" \
+            --mac-arm64-sha256 "$MAC_ARM_SHA" \
+            --mac-x64-sha256 "$MAC_X64_SHA" \
+            --out dist-manifests
+          tar -czf "zeidex-convert-manifests-${TAG}.tar.gz" -C dist-manifests .
+          gh release upload "$TAG" "zeidex-convert-manifests-${TAG}.tar.gz" --clobber

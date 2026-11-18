@@ -8,20 +8,19 @@
 
 export const SIZE = 480;
 /** Rendered size of the popup wheel window; the viewBox stays 480 so the maths is unchanged. */
-export const WHEEL_PX = 344;
+export const WHEEL_PX = 380;
 export const SCALE = WHEEL_PX / SIZE;
 export const C = SIZE / 2;
-export const MODES_R = [186, 228] as const;
-export const ITEMS_R = [122, 180] as const;
+export const MODES_R = [184, 238] as const;
+export const ITEMS_R = [118, 184] as const;
 export const CHILD_R = [56, 116] as const;
 export const HUB_R = 52;
 export const MODES = ['convert', 'tools', 'actions'] as const;
 export type WheelMode = (typeof MODES)[number];
-export const MODE_ICON: Record<WheelMode, string> = { convert: '⇄', tools: '✎', actions: '↗' };
 /** Hover time on a mode segment before the wheel switches to it. */
-export const DWELL_MS = 380;
+export const DWELL_MS = 150;
 /** Hover time on an item before its nested sub-ring opens. */
-export const OPEN_MS = 260;
+export const OPEN_MS = 180;
 /** Grace period after the drag leaves before the wheel hides. */
 export const LEAVE_MS = 900;
 /** A wheel nobody touches hides itself, so it never sits on top of other windows. */
@@ -102,4 +101,37 @@ export function itemLabelMax(count: number): number {
 
 export function childLabelMax(count: number): number {
   return count > 6 ? 9 : 12;
+}
+
+/** Polar angle in degrees [0, 360) clockwise from 12 o'clock. */
+export function polarAngleDeg(pos: { x: number; y: number }, dpr = 1, scale = 1): number {
+  const x = pos.x / dpr / scale;
+  const y = pos.y / dpr / scale;
+  let deg = ((Math.atan2(y - C, x - C) + Math.PI / 2) * 180) / Math.PI;
+  if (deg < 0) deg += 360;
+  return deg;
+}
+
+/** Magnetic outward nudge (viewBox units) for the active wedge under the cursor. */
+export function wedgePopTransform(index: number, count: number, active: boolean): string | undefined {
+  if (!active || count <= 0) return undefined;
+  const angle = midAngle(index, count);
+  const dx = Math.cos(angle) * 5;
+  const dy = Math.sin(angle) * 5;
+  return `translate(${dx.toFixed(2)}px, ${dy.toFixed(2)}px)`;
+}
+
+/** Uppercase extension summary for the Wheel's live `EXT → TARGET` center pill. */
+export function sourceExtLabel(paths: string[]): string {
+  if (!paths.length) return '';
+  const exts = paths
+    .map((p) => {
+      const name = p.split(/[\\/]/).pop() ?? '';
+      const dot = name.lastIndexOf('.');
+      return dot > 0 ? name.slice(dot + 1).toUpperCase() : '';
+    })
+    .filter(Boolean);
+  if (!exts.length) return '';
+  const first = exts[0];
+  return exts.every((e) => e === first) ? first : `${exts.length}`;
 }

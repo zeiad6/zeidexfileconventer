@@ -44,10 +44,10 @@ export function ParamsForm({ choice, onSubmit, onCancel, variant = 'params', id 
       onSubmit={submit}
     >
       <h3>{zl(choice)}</h3>
-      {choice.params.map((p) => (
+      {choice.params.map((p, idx) => (
         <label key={p.key}>
           {zl(p)}
-          <input name={p.key} defaultValue={p.default} autoComplete="off" />
+          <input name={p.key} defaultValue={p.default} autoComplete="off" autoFocus={idx === 0} />
           {p.key === 'image' && (
             <button
               type="button"

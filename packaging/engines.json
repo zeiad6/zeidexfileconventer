@@ -86,7 +86,96 @@
       "kind": "zip"
     }
   },
+  "profiles": {
+    "lite": ["ffmpeg", "ffprobe", "7zip", "libvips"],
+    "full": [
+      "ffmpeg",
+      "ffprobe",
+      "7zip",
+      "libvips",
+      "rhwp",
+      "pandoc",
+      "qpdf",
+      "ghostscript",
+      "tesseract",
+      "qrencode",
+      "exiftool",
+      "zbar",
+      "whisper",
+      "realesrgan",
+      "libreoffice",
+      "calibre",
+      "models"
+    ]
+  },
   "platforms": {
+    "windows-x64": {
+      "components": {
+        "ffmpeg": {
+          "version": "9.0.2",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-9.0.zip",
+          "sha256": "A0E45723C72141975F51D8666302E614711745F3102B704CA3F82C897A58D278",
+          "size": 194034585,
+          "kind": "zip"
+        },
+        "libvips": {
+          "version": "8.18.7",
+          "url": "https://github.com/libvips/build-win64-mxe/releases/download/v8.18.7/vips-dev-x64-all-8.18.7.zip",
+          "sha256": "78E56BA30C267BA32FF965200534BD5721364CADBEAD8C4D595E44B58DFEFF15",
+          "size": 19734071,
+          "kind": "zip"
+        },
+        "qpdf": {
+          "version": "12.4.2",
+          "url": "https://github.com/qpdf/qpdf/releases/download/v12.4.2/qpdf-12.4.2-msvc64.zip",
+          "sha256": "DB87077E683630C1217E0E8F9A20A9749D952AB676E881C3689187763A5DE25D",
+          "size": 28183147,
+          "kind": "zip"
+        },
+        "pandoc": {
+          "version": "3.12",
+          "url": "https://github.com/jgm/pandoc/releases/download/3.12/pandoc-3.12-windows-x86_64.zip",
+          "sha256": "2A77EBC2517D13E95056E76B1CD5B574CFE958AC61AA6058117D80C22CA19B79",
+          "size": 42114462,
+          "kind": "zip"
+        },
+        "rhwp": {
+          "version": "0.8.7",
+          "url": "https://github.com/edwardkim/rhwp/releases/download/v0.8.7/rhwp-v0.8.7-windows-x86_64.zip",
+          "sha256": "F7AC326E98F595AE8FECD8DA7A614EE9A37DB77BDF938782A8E07C9DA473EC6F",
+          "size": 19796112,
+          "kind": "zip"
+        },
+        "exiftool": {
+          "version": "13.64",
+          "url": "https://sourceforge.net/projects/exiftool/files/exiftool-13.64_64.zip/download",
+          "sha256": "72C29C44D1E860EEBCAEFA71692D979AF9858FE9A6D7D791A5E7F1DAC77804AF",
+          "size": 10000000,
+          "kind": "zip"
+        },
+        "zbar": {
+          "version": "0.23.95",
+          "url": "https://github.com/mchehab/zbar/releases/download/0.23.95/zbar-win_x86_64-VfW.zip",
+          "sha256": "40E01FB14CD8B02C99934A76A801EBD535C0A7F55D644A9D8FEDE0B71253AE09",
+          "size": 2500000,
+          "kind": "zip"
+        },
+        "whisper": {
+          "version": "b5454",
+          "url": "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-x64.zip",
+          "sha256": "6BA69E3482D7826214F90A6A9C84CA07782AEC1E1D0C6A7C30C994FD5D816CCB",
+          "size": 6000000,
+          "kind": "zip"
+        },
+        "realesrgan": {
+          "version": "20220424",
+          "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip",
+          "sha256": "ABC02804E17982A3BE33675E4D471E91EA374E65B70167ABC09E31ACB412802D",
+          "size": 45000000,
+          "kind": "zip"
+        }
+      }
+    },
     "linux-x64": {
       "components": {
         "rhwp": {

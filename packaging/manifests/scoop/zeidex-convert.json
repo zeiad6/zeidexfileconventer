@@ -1,0 +1,23 @@
+{
+  "version": "__VERSION__",
+  "description": "Offline-first file converter and media processor (desktop app + CLI)",
+  "homepage": "https://zeidexsoft.com",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v__VERSION__/zeidex-convert-windows-x64.zip",
+      "hash": "__WIN_CLI_SHA256__",
+      "bin": "zeidex-convert.exe"
+    }
+  },
+  "checkver": {
+    "github": "https://github.com/zeiad6/zeidexfileconventer"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/zeiad6/zeidexfileconventer/releases/download/v$version/zeidex-convert-windows-x64.zip"
+      }
+    }
+  }
+}

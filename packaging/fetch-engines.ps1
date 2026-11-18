@@ -1,4 +1,4 @@
-# Downloads the redistributable engines bundled into the Windows build (CI and local):
+﻿# Downloads the redistributable engines bundled into the Windows build (CI and local):
 # FFmpeg/FFprobe (GPL build, BtbN), libvips (LGPL), qpdf (Apache-2.0), Ghostscript (AGPL,
 # conda-forge), rhwp (MIT), Pandoc (GPL), 7-Zip (LGPL, pinned 26.03), LibreOffice and Calibre
 # (MPL-2.0 / GPL-3.0), Tesseract (Apache-2.0), qrencode, ExifTool, ZBar, whisper.cpp,
@@ -6,8 +6,14 @@
 #
 # LibreOffice is the reason this list grew: it used to be left to winget, so every document
 # conversion ended with "LibreOffice not found" on a machine that had never installed it.
+param(
+  [ValidateSet("full", "lite")]
+  [string]$Profile = $(if ($env:ZEIDEX_BUILD_PROFILE) { $env:ZEIDEX_BUILD_PROFILE } else { "full" })
+)
+
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+Write-Host "==> engine profile: $Profile (windows-x64)"
 
 $dst = Join-Path $PSScriptRoot "..\app\src-tauri\engines"
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "zeidex-engines"
@@ -108,6 +114,9 @@ $bin = Get-ChildItem (Join-Path $tmp "vips") -Recurse -Directory -Filter bin | S
 New-Item -ItemType Directory -Force (Join-Path $dst "vips") | Out-Null
 Copy-Item $bin.FullName (Join-Path $dst "vips") -Recurse -Force
 
+# qpdf and remaining Full-only engines. In Lite mode only FFmpeg/FFprobe, libvips, 7-Zip and
+# VC++ runtime are staged; heavy optional engines can be installed on demand from the UI.
+if ($Profile -eq "full") {
 # qpdf (pinned)
 $zip = Get-Pinned `
   "https://github.com/qpdf/qpdf/releases/download/v12.4.2/qpdf-12.4.2-msvc64.zip" `
@@ -137,6 +146,7 @@ if (Test-Path $seven) {
 } else {
   Write-Warning "7-Zip not found; Ghostscript is not bundled, so PDF rendering falls back to the system install"
 }
+}
 
 # VC++ runtime: the conda Ghostscript and the Rust-built rhwp.exe link the dynamic CRT, and a
 # clean Windows does not ship vcruntime140.dll. The DLLs go beside each consumer: gs.exe loads
@@ -159,6 +169,21 @@ if (Test-Path $seven) {
   }
 }
 
+# 7-Zip: pinned to the same 26.03 as the other platforms. Needed by both Lite and Full.
+if (Test-Path $seven) {
+  $msi = Get-Pinned `
+    "https://github.com/ip7z/7zip/releases/download/26.03/7z2603-x64.msi" `
+    "C0680064D698A62DD4A5A47F403DB356A6531A5473E4C4B1D090EA2590513926" `
+    "7z2603-x64.msi"
+  $zdir = Join-Path $tmp "7zmsi"
+  & $seven x $msi "-o$zdir" -y | Out-Null
+  Copy-Item (Join-Path $zdir "_7z.exe") (Join-Path $dst "7z.exe") -Force
+  Copy-Item (Join-Path $zdir "_7z.dll") (Join-Path $dst "7z.dll") -Force
+} else {
+  Write-Warning "7-Zip not found; archives will rely on a system install"
+}
+
+if ($Profile -eq "full") {
 # rhwp: the HWP/HWPX viewer-editor engine.
 $rhwp = Get-Pinned `
   "https://github.com/edwardkim/rhwp/releases/download/v0.8.7/rhwp-v0.8.7-windows-x86_64.zip" `
@@ -176,21 +201,6 @@ $pandoc = Get-Pinned `
 Expand-Archive $pandoc (Join-Path $tmp "pandoc") -Force
 Get-ChildItem (Join-Path $tmp "pandoc") -Recurse -Filter pandoc.exe | Select-Object -First 1 |
   Copy-Item -Destination $dst
-
-# 7-Zip: pinned to the same 26.03 as the other platforms. The runner's install is only used to
-# unpack the MSI; the bundled copy is the pinned one, not whatever the runner happens to carry.
-if (Test-Path $seven) {
-  $msi = Get-Pinned `
-    "https://github.com/ip7z/7zip/releases/download/26.03/7z2603-x64.msi" `
-    "C0680064D698A62DD4A5A47F403DB356A6531A5473E4C4B1D090EA2590513926" `
-    "7z2603-x64.msi"
-  $zdir = Join-Path $tmp "7zmsi"
-  & $seven x $msi "-o$zdir" -y | Out-Null
-  Copy-Item (Join-Path $zdir "_7z.exe") (Join-Path $dst "7z.exe") -Force
-  Copy-Item (Join-Path $zdir "_7z.dll") (Join-Path $dst "7z.dll") -Force
-} else {
-  Write-Warning "7-Zip not found; archives will rely on a system install"
-}
 
 # --- tools that used to be "install it yourself" ---------------------------------------------
 
@@ -253,27 +263,50 @@ Copy-EngineTree $caldir "ebook-convert.exe" "calibre"
 Remove-Item (Join-Path $dst "calibre\app\translations") -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "Calibre staged: $([math]::Round((Get-ChildItem (Join-Path $dst 'calibre') -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)) MB"
 
-# Tesseract OCR: the conda package carries every language; only eng, ara and osd ship, plus the
-# configs pdf.ttf that `tsv` and `pdf` output need.
+# Tesseract OCR and qrencode ("Make QR code") share one conda environment.
+#
+# A conda package on its own is not a working engine: `tesseract.exe` links leptonica, libtiff,
+# libarchive, libcurl, openjpeg, giflib, libwebp, libpng, liblzma, libjpeg-turbo and the VC
+# runtime, and every one of those DLLs lives in a *dependency* package. Copying `Library\bin` out
+# of the tesseract archive alone is what shipped an exe that died in the Windows loader with
+# 0xC0000135 — the `exit Some(-1073741515)` users reported. qrencode was staged the same wrong
+# way. The environment is resolved with micromamba (the tool the Unix script already uses) so the
+# whole closure arrives, the solved `Library\bin` — conda's DLL directory on Windows — is staged
+# once as `engines\ocr`, and both binaries are started before anything ships.
 if (Test-Path $seven) {
-  $tes = Get-CondaTree `
-    "https://conda.anaconda.org/conda-forge/win-64/tesseract-5.5.4-h8c7c6a5_0.conda" `
-    "67AF4D943866603827AA4029EC0F2442644B3ABE58C2313E89CFCC8BE9E06897" `
-    "tesseract-5.5.4-h8c7c6a5_0.conda"
-  # The package splits tessdata over two trees: the languages sit in `share/tessdata` (conda's
-  # prefix-level share) while `configs/` and `tessconfigs/` live under `Library/share/tessdata`.
-  # Find the tree that actually holds the traineddata instead of assuming one layout.
-  $tesTrees = @(Get-ChildItem $tes -Recurse -Directory -Filter "tessdata")
+  # micromamba 2.10.0-0, win-64: 11,723,264 bytes, digest from the published release asset.
+  $mm = Get-Pinned `
+    "https://github.com/mamba-org/micromamba-releases/releases/download/2.10.0-0/micromamba-win-64.exe" `
+    "F8B4284BD4EB1134122EAF93B3EA6C7BE567E596DE5829E1A6F478E34E41974A" `
+    "micromamba-win-64.exe"
+  $mmRoot = Join-Path $tmp "mamba-root"
+  $ocrEnv = Join-Path $tmp "ocr-env"
+  Remove-Item $ocrEnv -Recurse -Force -ErrorAction SilentlyContinue
+  # micromamba checks every package against the conda-forge repodata digest as it fetches it.
+  & $mm create -y -r $mmRoot -p $ocrEnv -c conda-forge "tesseract=5.5.4" "libqrencode=4.1.1" | Out-Null
+  $ocrBin = Join-Path $ocrEnv "Library\bin"
+  foreach ($exe in "tesseract.exe", "qrencode.exe") {
+    if (-not (Test-Path (Join-Path $ocrBin $exe))) { throw "micromamba staged no $exe" }
+  }
+
+  $ocr = Join-Path $dst "ocr\Library"
+  $tedata = Join-Path $ocr "share\tessdata"
+  Remove-Item (Join-Path $dst "ocr"), (Join-Path $dst "tesseract"), (Join-Path $dst "qrencode") `
+    -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force (Join-Path $ocr "bin"), $tedata | Out-Null
+  Copy-Item (Join-Path $ocrBin "*") (Join-Path $ocr "bin") -Force
+
+  # The package splits tessdata over two trees: the languages sit in `share/tessdata` at the env
+  # prefix while `configs/` and `tessconfigs/` live under `Library/share/tessdata`. Search both
+  # instead of assuming one layout.
+  $tesTrees = @(Get-ChildItem $ocrEnv -Recurse -Directory -Filter "tessdata" -ErrorAction SilentlyContinue)
   $tesData = $tesTrees | Where-Object { Test-Path (Join-Path $_.FullName "eng.traineddata") } |
     Select-Object -First 1
-  if (-not $tesData) { throw "eng.traineddata was not found in the Tesseract package" }
-  $tedst = Join-Path $dst "tesseract\Library"
-  $tedata = Join-Path $tedst "share\tessdata"
-  Remove-Item (Join-Path $dst "tesseract") -Recurse -Force -ErrorAction SilentlyContinue
-  New-Item -ItemType Directory -Force (Join-Path $tedst "bin"), $tedata | Out-Null
-  Copy-Item (Join-Path $tes "Library\bin\*") (Join-Path $tedst "bin") -Force
+  if (-not $tesData) { throw "eng.traineddata was not found in the Tesseract environment" }
   foreach ($lang in "eng", "ara", "osd") {
-    Copy-Item (Join-Path $tesData.FullName "$lang.traineddata") $tedata -Force
+    $srcLang = Join-Path $tesData.FullName "$lang.traineddata"
+    if (-not (Test-Path $srcLang)) { throw "$lang.traineddata was not found in $($tesData.FullName)" }
+    Copy-Item $srcLang $tedata -Force
   }
   # `configs` (tsv/pdf/hocr output) and `tessconfigs` (language aliases) may sit in either tree;
   # pdf.ttf is not published in 5.5.4, so it is copied only when a future package carries it.
@@ -282,17 +315,20 @@ if (Test-Path $seven) {
       Where-Object { Test-Path $_ } | Select-Object -First 1
     if ($src) { Copy-Item $src $tedata -Recurse -Force }
   }
-}
 
-# qrencode: the "Make QR code" tool.
-if (Test-Path $seven) {
-  $qr = Get-CondaTree `
-    "https://conda.anaconda.org/conda-forge/win-64/libqrencode-4.1.1-hbd848b6_1.conda" `
-    "A56261ECF15C0A7AC098E5AF246CB31619EA318146CE9F5E7B33684EF573683A" `
-    "libqrencode-4.1.1-hbd848b6_1.conda"
-  Remove-Item (Join-Path $dst "qrencode") -Recurse -Force -ErrorAction SilentlyContinue
-  New-Item -ItemType Directory -Force (Join-Path $dst "qrencode\Library\bin") | Out-Null
-  Copy-Item (Join-Path $qr "Library\bin\*") (Join-Path $dst "qrencode\Library\bin") -Force
+  # Gate: an engine that cannot start must fail the build, not the user's first job. This is the
+  # check the previous staging lacked, and it is the reason the missing DLL reached a release.
+  foreach ($exe in "tesseract.exe", "qrencode.exe") {
+    $probe = & (Join-Path $ocr "bin\$exe") --version 2>&1
+    if ($LASTEXITCODE -ne 0) {
+      throw "the staged $exe does not start (exit $LASTEXITCODE): $($probe -join ' ')"
+    }
+  }
+  $langsOut = (& (Join-Path $ocr "bin\tesseract.exe") --tessdata-dir $tedata --list-langs 2>&1) -join "`n"
+  if ($LASTEXITCODE -ne 0 -or $langsOut -notmatch "(?m)^eng\r?$" -or $langsOut -notmatch "(?m)^ara\r?$") {
+    throw "staged Tesseract tessdata check failed in $tedata`: $langsOut"
+  }
+  Write-Host "Tesseract + qrencode staged: $((Get-ChildItem (Join-Path $ocr 'bin') -File | Measure-Object Length -Sum).Sum / 1MB) MB"
 }
 
 # ExifTool: the official Windows build is a packed exe, so no Perl is needed. `-k` pauses at the
@@ -360,6 +396,7 @@ $u2 = Get-Pinned `
   "8D10D2F3BB75AE3B6D527C77944FC5E7DCD94B29809D47A739A7A728A912B491" `
   "u2net.onnx"
 Copy-Item $u2 (Join-Path $modelDir "u2net.onnx") -Force
+}
 
 # NSIS builds one data block and its compiler cannot map beyond 2 GB, so a 2.7 GB resource
 # tree fails with "error mmapping datablock". Ship the engines as one solid archive instead:

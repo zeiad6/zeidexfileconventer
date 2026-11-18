@@ -42,8 +42,9 @@ EXAMPLES:
   zeidex-convert watch ~/Downloads --ext heic --do "convert to=jpg"
 
 OPTIONS:
-  --jobs N        files processed at the same time (default: half the CPU cores, max 4)
-  --quality 1-100 encoder quality for lossy images and for video/audio re-encodes
+  --jobs N              files processed at the same time (default: half the CPU cores, max 4)
+  --quality 1-100       encoder quality for lossy images and for video/audio re-encodes
+  --hwaccel auto|on|off GPU hardware encoding mode for FFmpeg video jobs (default: auto)
 "#;
 
 fn main() -> ExitCode {
@@ -127,7 +128,7 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
             let (text, rest) = rest.split_first().ok_or_else(|| Error::BadOption("text required".into()))?;
             let (opts, _) = split_args(rest)?;
             let out = PathBuf::from(opts.get("out").map_or("qr.png", String::as_str));
-            let out = std::path::absolute(&out)?;
+            let out = zeidex_core::tools::normalize_engine_path(&std::path::absolute(&out)?);
             let staged = runner::staging_path(out.parent().unwrap_or(std::path::Path::new(".")), "png");
             let ok = std::process::Command::new(zeidex_core::tools::require(Tool::Qrencode)?)
                 .args(["-s", "10", "-m", "2", "-l", "M", "-o"])
@@ -163,14 +164,50 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
             Ok(true)
         }
         "doctor" => {
+            let verify = rest.iter().any(|a| a == "--verify");
             let mut all = true;
-            for t in Tool::ALL {
-                match locate(t) {
-                    Some(p) => println!("  ok       {:<14} {}", t.label(), p.display()),
-                    None => {
-                        all = false;
-                        println!("  missing  {:<14} {}", t.label(), t.install_hint());
+            println!("profile: {}", zeidex_core::tools::build_profile());
+            if verify {
+                let summary = zeidex_core::health::test_all_engines();
+                for e in &summary.engines {
+                    let tag = match e.state {
+                        zeidex_core::health::EngineHealthState::Healthy => "healthy ",
+                        zeidex_core::health::EngineHealthState::Missing => {
+                            all = false;
+                            "missing "
+                        }
+                        zeidex_core::health::EngineHealthState::Broken => {
+                            all = false;
+                            "broken  "
+                        }
+                    };
+                    let info = e.version.as_deref().unwrap_or(&e.note);
+                    let path = e.path.as_deref().unwrap_or("-");
+                    println!("  {tag} {:<24} {} ({info})", e.name, path);
+                    if !e.stderr.is_empty() && e.state == zeidex_core::health::EngineHealthState::Broken {
+                        println!("           stderr: {}", e.stderr.replace('\n', " "));
                     }
+                }
+            } else {
+                for t in Tool::ALL {
+                    match locate(t) {
+                        Some(p) => println!("  ok       {:<14} {}", t.label(), p.display()),
+                        None => {
+                            all = false;
+                            println!("  missing  {:<14} {}", t.label(), t.install_hint());
+                        }
+                    }
+                }
+            }
+            let hw = locate(Tool::Ffmpeg)
+                .and_then(|bin| zeidex_core::hwaccel::detect_for_ffmpeg(&bin))
+                .map_or("CPU fallback (libx264)", |e| e.label());
+            println!("  hwaccel  {:<14} {hw}", "FFmpeg GPU");
+            for m in zeidex_core::health::scan_models() {
+                if m.present {
+                    println!("  ok       {:<24} {}", m.id, m.path.as_deref().unwrap_or("-"));
+                } else {
+                    println!("  missing  {:<24} {}", m.id, m.label);
                 }
             }
             Ok(all)
@@ -211,7 +248,7 @@ fn real_main(args: &[String]) -> Result<bool, Error> {
             Ok(true)
         }
         "integrate" => {
-            let exe = std::env::current_exe()?;
+            let exe = zeidex_core::tools::normalize_engine_path(&std::env::current_exe()?);
             for p in integrate::install(&exe)? {
                 println!("wrote {}", p.display());
             }
@@ -255,6 +292,9 @@ fn watch(dir: &std::path::Path, exts: &[String], op: &Op) -> Result<bool, Error>
 fn run(op: &Op, files: &[PathBuf], opts: &HashMap<String, String>) -> Result<bool, Error> {
     if files.is_empty() {
         return Err(Error::BadOption("no input files".into()));
+    }
+    if let Some(hw) = opts.get("hwaccel") {
+        zeidex_core::hwaccel::set_mode(zeidex_core::hwaccel::HwAccelMode::parse(hw)?);
     }
     let jobs = match opts.get("jobs") {
         Some(j) => j.parse::<usize>().map_err(|_| Error::BadOption(format!("jobs={j}")))?.max(1),

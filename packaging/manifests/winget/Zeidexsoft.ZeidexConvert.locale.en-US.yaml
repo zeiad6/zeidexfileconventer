@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: Zeidexsoft.ZeidexConvert
+PackageVersion: __VERSION__
+PackageLocale: en-US
+Publisher: Zeidexsoft
+PublisherUrl: https://zeidexsoft.com
+PublisherSupportUrl: https://github.com/zeiad6/zeidexfileconventer/issues
+PackageName: Zeidex Convert
+PackageUrl: https://github.com/zeiad6/zeidexfileconventer
+License: MIT
+LicenseUrl: https://github.com/zeiad6/zeidexfileconventer/blob/main/LICENSE
+ShortDescription: Offline-first file converter and media processor with Shift-drag wheel and CLI.
+Tags:
+  - converter
+  - ffmpeg
+  - offline
+  - pdf
+  - media
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

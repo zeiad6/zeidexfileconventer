@@ -1,7 +1,7 @@
 [package]
 name = "zeidex-app"
 description = "Zeidex Convert desktop app (Windows, macOS, Linux)"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 rust-version = "1.80"
 license = "MIT"

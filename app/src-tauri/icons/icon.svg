@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    Zeidex Convert app icon. Source of truth: every PNG, the .ico and the .icns are rendered
+    from this file by `python3 packaging/make-icons.py`.
+
+    Three marks, in the order they are read: the dark squircle (macOS and Windows both expect the
+    artwork to carry its own shape and padding), the three-segment ring — the popup wheel, which is
+    the product — and the document it converts. Everything is drawn on a 1024 grid with a 64 px
+    margin, so one file serves the macOS dock, a Windows tile and a Linux PNG.
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.82" y2="1">
+      <stop offset="0" stop-color="#463d34"/>
+      <stop offset="0.52" stop-color="#2b2521"/>
+      <stop offset="1" stop-color="#13100d"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0.34" cy="0.16" r="0.86">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0.03"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="lift" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f07b1d" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#f07b1d" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="paper" x1="0.2" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#efe5d7"/>
+    </linearGradient>
+    <filter id="cast" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="24"/>
+    </filter>
+  </defs>
+
+  <!-- Squircle: a 896 px rounded square with r = 200 (22.3 %, the curvature macOS uses). -->
+  <rect x="64" y="64" width="896" height="896" rx="200" ry="200" fill="url(#bg)"/>
+  <rect x="64" y="64" width="896" height="896" rx="200" ry="200" fill="url(#sheen)"/>
+  <rect x="66.5" y="66.5" width="891" height="891" rx="197.5" ry="197.5"
+        fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="3"/>
+
+  <!-- Warm halo behind the wheel so the ring does not sit flat on the charcoal. -->
+  <circle cx="512" cy="512" r="430" fill="url(#lift)"/>
+
+  <!-- The wheel: one stroked circle, dashed into three 120 degree segments with a 5 degree gap.
+       Circumference at r = 290 is 1822.12; each dash is 582.07, so one dash plus its 25.3 gap is
+       exactly a third of the circle and the three colours can be offset by one period each. -->
+  <g fill="none" stroke-width="92" stroke-linecap="butt" transform="rotate(-90 512 512)">
+    <circle cx="512" cy="512" r="290" stroke="#ff9e4a" stroke-dasharray="582.07 1240.05" stroke-dashoffset="0"/>
+    <circle cx="512" cy="512" r="290" stroke="#f07b1d" stroke-dasharray="582.07 1240.05" stroke-dashoffset="-607.37"/>
+    <circle cx="512" cy="512" r="290" stroke="#d0660f" stroke-dasharray="582.07 1240.05" stroke-dashoffset="-1214.75"/>
+  </g>
+
+  <!-- The file being converted. Body is a rounded rect whose top-right corner is cut on the
+       diagonal; the folded flap is accent-coloured so the white shape keeps one warm note. -->
+  <ellipse cx="512" cy="532" rx="136" ry="176" fill="#000000" fill-opacity="0.38" filter="url(#cast)"/>
+  <path d="M 400 344 H 568 L 646 422 V 658 A 22 22 0 0 1 624 680 H 400 A 22 22 0 0 1 378 658 V 366 A 22 22 0 0 1 400 344 Z"
+        fill="url(#paper)"/>
+  <path d="M 568 344 L 646 422 H 582 Q 568 422 568 408 Z" fill="#f07b1d" fill-opacity="0.92"/>
+  <path d="M 568 344 L 646 422 H 582 Q 568 422 568 408 Z" fill="none" stroke="#000000" stroke-opacity="0.10" stroke-width="2"/>
+</svg>

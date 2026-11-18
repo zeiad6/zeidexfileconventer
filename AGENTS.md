@@ -19,7 +19,7 @@ Calibre, Tesseract, whisper.cpp, Real-ESRGAN, ZBar, qrencode, ExifTool, rhwp).
 | `crates/localdrop` | Encrypted local file handoff to a phone. Own workspace (see below). |
 | `app/` | Vite + React + TypeScript UI (`src/wheel`, `src/shelf`, `src/home`, `src/editor`, `src/jobs`), vitest suites under `test/`. |
 | `app/src-tauri` | The Tauri shell: commands (`describe`, `convert`, `doctor`, `install_engine`, drag hook), window setup. **Own workspace.** |
-| `packaging/` | `fetch-engines.sh` (macOS/Linux) and `fetch-engines.ps1` (Windows) stage engines into `app/src-tauri/engines/`; `engines.json` pins every URL, version, size and SHA-256. |
+| `packaging/` | `fetch-engines.sh` (macOS/Linux) and `fetch-engines.ps1` (Windows) stage engines into `app/src-tauri/engines/`; `engines.json` pins every URL, version, size and SHA-256. `make-icons.py` renders all app icons and the NSIS artwork from `app/src-tauri/icons/icon.svg`. |
 | `android/` | Git submodule (separate repository). Leave the pointer alone unless the task is Android. |
 | `docs/AUDIT.md`, `specs/` | Design and audit notes that explain why engines are bundled or optional. |
 
@@ -33,7 +33,7 @@ cover them.
 | Command | Purpose |
 |---------|---------|
 | `cargo fmt --all --check` | Formatting for the root workspace |
-| `rustfmt --check --edition 2021 --config-path rustfmt.toml app/src-tauri/src/*.rs` | Formatting for the app crate (not in the root workspace) |
+| `rustfmt --check --edition 2021 --config-path rustfmt.toml app/src-tauri/src/*.rs app/src-tauri/build.rs` | Formatting for the app crate (not in the root workspace) |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Lints, warnings are errors |
 | `cargo test --workspace` | Core + CLI tests |
 | `cargo check --manifest-path app/src-tauri/Cargo.toml` | Compile the Tauri shell |
@@ -42,6 +42,33 @@ cover them.
 | `cd app && npx vitest run` | UI tests (~70 s; the wheel suite waits out a real 3.4 s idle timer) |
 | `cd app && npm run build` | `tsc --noEmit` then `vite build` |
 | `bash packaging/fetch-engines.sh` | Stage Unix engines (set `ZEIDEX_ENGINE_COMPONENTS` to fetch a subset) |
+| `python3 packaging/make-icons.py` | Re-render every app icon (PNG/ICO/ICNS) and the NSIS header/sidebar from `app/src-tauri/icons/icon.svg`, using the `icon-small.svg` optical variant for 16–24 px; needs `rsvg-convert` |
+
+### Building the Windows installer from Linux
+
+Windows bundles are normally built on `windows-latest`. On a Linux host the same exe and NSIS
+installer can be produced with `cargo-xwin` plus the system `lld-link`/`llvm-lib`/`clang-cl`
+(`x86_64-pc-windows-gnu` is not viable: the WebView2 static lib is MSVC-only).
+
+```
+cd app/src-tauri && ZEIDEX_CROSS_RESOURCES=1 CARGO_BUILD_JOBS=3 \
+  cargo xwin build --release --target x86_64-pc-windows-msvc
+cd app && ./node_modules/.bin/tauri bundle --target x86_64-pc-windows-msvc --bundles nsis
+```
+
+`ZEIDEX_CROSS_RESOURCES=1` is required for an artifact: without it `build.rs` takes the
+cross-check path and the exe ships with no icon, version block or manifest. `tauri bundle`
+(not `tauri build`) is used because it does not recompile, so the exe it packages is the one
+built with the resources. Bundling needs a host NSIS 3.x (`makensis`, `/usr/share/nsis`); the
+installer is unsigned and must still be smoke-tested on a real Windows machine — a successful
+cross build proves it compiles and packs, not that it runs.
+
+The Windows engine tree has to be staged from `packaging/fetch-engines.ps1` on Linux
+(`msiextract` for the MSIs, `7z` for the zips, micromamba `--platform win-64` for the conda
+packages) and then packed exactly like CI does: `7z a -t7z -mx=9 -md=64m -ms=256m -mmt=2
+engines.7z . -x!7z.exe -x!7z.dll -x!engines.7z`, leaving only `7z.exe`, `7z.dll` and the
+archive beside it for `windows/hooks.nsh`. `packaging/fetch-engines.sh` then has to be re-run
+to restore the Unix tree, because both share `app/src-tauri/engines/`.
 
 CI (`.github/workflows/build.yml`) runs fmt, clippy, `cargo test --workspace`, the app crate
 checks, `tsc`, vitest and the bundles on `ubuntu-24.04` + `windows-latest`. Keep a change green

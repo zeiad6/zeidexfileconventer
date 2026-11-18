@@ -8,11 +8,16 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ErrorReportModal } from '../components/ErrorReportModal';
 import { ParamsForm } from '../components/ParamsForm';
 import {
   appWindow,
+  buildProfile,
   describe as describePaths,
+  diagnosticReport,
   doctor,
+  downloadAllMissing,
+  downloadEngine,
   installEngine,
   downloadDraggedUrl,
   floatAdd,
@@ -21,6 +26,7 @@ import {
   getSettings,
   hookOk,
   integrateShell,
+  modelsStatus,
   onDragDrop,
   openEditor,
   openInHome,
@@ -28,10 +34,20 @@ import {
   runJob,
   safeListen,
   takePending,
+  testAllEngines,
 } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { MODES } from '../lib/geometry';
-import type { Choice, Desc, Engine, Mode, WatchRule } from '../lib/types';
+import type {
+  Choice,
+  Desc,
+  DiagnosticsReport,
+  Engine,
+  EngineDownloadProgress,
+  Mode,
+  ModelStatus,
+  WatchRule,
+} from '../lib/types';
 import { AboutModal, DonateModal } from './Modals';
 import { SettingsView } from './SettingsView';
 
@@ -59,10 +75,18 @@ const RESIZE_STRIPS = ['North', 'South', 'East', 'West', 'NorthEast', 'NorthWest
 
 const base = (p: string) => p.split(/[\\/]/).pop() ?? p;
 
+function formatBytes(bytes?: number | null): string {
+  if (!bytes || bytes <= 0) return '';
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`;
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
+  if (bytes >= 1e3) return `${Math.round(bytes / 1e3)} KB`;
+  return `${bytes} B`;
+}
+
 const IS_MAC = /Mac/i.test(navigator.platform || navigator.userAgent);
 
 export function Home() {
-  const { t, zl, toggle } = useI18n();
+  const { t, zl, toggle, ar } = useI18n();
   const [paths, setPaths] = useState<string[]>([]);
   const [desc, setDesc] = useState<Desc | null>(null);
   const [mode, setMode] = useState<Mode>('convert');
@@ -71,6 +95,14 @@ export function Home() {
   const [dropOver, setDropOver] = useState(false);
   const [hookKey, setHookKey] = useState<'hookOn' | 'hookOff' | 'selectionHint' | null>(null);
   const [engines, setEngines] = useState<Engine[]>([]);
+  const [models, setModels] = useState<ModelStatus[]>([]);
+  const [profile, setProfile] = useState<'lite' | 'full' | null>(null);
+  const [downloading, setDownloading] = useState<Record<string, EngineDownloadProgress>>({});
+  const [downloadingAll, setDownloadingAll] = useState(false);
+  const [testingEngines, setTestingEngines] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [diagReport, setDiagReport] = useState<DiagnosticsReport | null>(null);
   const [integrated, setIntegrated] = useState('');
   const [shelfFiles, setShelfFiles] = useState<string[]>([]);
   const [watchRules, setWatchRules] = useState<WatchRule[]>([]);
@@ -163,11 +195,33 @@ export function Home() {
       safeListen<void>('hook-error', () => setHookKey('hookOff')),
       // Ctrl+Shift+Space is also used by other apps: never pop up, only explain.
       safeListen<void>('selection-empty', () => setHookKey('selectionHint')),
+      safeListen<EngineDownloadProgress>('engine-download', (ev) => {
+        setDownloading((prev) => {
+          const next = { ...prev };
+          if (ev.stage === 'done' || ev.stage === 'failed') {
+            delete next[ev.id];
+          } else {
+            next[ev.id] = ev;
+          }
+          return next;
+        });
+        if (ev.stage === 'done') {
+          void doctor().then(setEngines).catch(() => {});
+          void modelsStatus().then((m) => Array.isArray(m) && setModels(m)).catch(() => {});
+          void buildProfile().then((p) => p && setProfile(p)).catch(() => {});
+        }
+      }),
     ];
     return () => offs.forEach((off) => off());
   }, [load, pickTool]);
 
-  // The shelf and the watch summary are fetched when their view opens.
+  const refreshEngines = useCallback(() => {
+    void doctor().then(setEngines).catch(() => {});
+    void modelsStatus().then((m) => Array.isArray(m) && setModels(m)).catch(() => {});
+    void buildProfile().then((p) => p && setProfile(p)).catch(() => {});
+  }, []);
+
+  // The shelf, watch summary, and engine diagnostics scan when their view opens.
   useEffect(() => {
     if (view === 'shelf') {
       floatList()
@@ -177,8 +231,10 @@ export function Home() {
       getSettings()
         .then((s) => setWatchRules(s.watch ?? []))
         .catch(() => {});
+    } else if (view === 'settings') {
+      refreshEngines();
     }
-  }, [view]);
+  }, [view, refreshEngines]);
 
   useEffect(() => {
     let alive = true;
@@ -187,6 +243,12 @@ export function Home() {
       .catch(() => {});
     doctor()
       .then((rows) => alive && setEngines(rows))
+      .catch(() => {});
+    modelsStatus()
+      .then((m) => alive && Array.isArray(m) && setModels(m))
+      .catch(() => {});
+    buildProfile()
+      .then((p) => alive && p && setProfile(p))
       .catch(() => {});
     takePending()
       .then((pending) => {
@@ -256,7 +318,7 @@ export function Home() {
         </div>
       </header>
       <div className="studio-body">
-      <aside className="rail" aria-label="Sections">
+      <aside className="rail" aria-label={t('sectionsNav')}>
         <div className="rail-head">
           <img src="/icon.png" alt="" className="app-icon" />
           <div className="rail-title">
@@ -264,7 +326,20 @@ export function Home() {
             <span className="hint">{t('sub')}</span>
           </div>
         </div>
-        <nav className="rail-nav" id="railNav">
+        <nav
+          className="rail-nav"
+          id="railNav"
+          aria-label={t('sectionsNav')}
+          onKeyDown={(e) => {
+            if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+            const btns = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('button')];
+            const idx = btns.indexOf(document.activeElement as HTMLButtonElement);
+            if (idx < 0) return;
+            e.preventDefault();
+            const next = e.key === 'ArrowDown' ? (idx + 1) % btns.length : (idx - 1 + btns.length) % btns.length;
+            btns[next]?.focus();
+          }}
+        >
           {(Object.keys(VIEW_IDS) as View[]).map((name) => (
             <button
               key={name}
@@ -272,6 +347,7 @@ export function Home() {
               className={`rail-btn${view === name ? ' on' : ''}`}
               id={VIEW_IDS[name]}
               data-view={name}
+              aria-current={view === name ? 'page' : undefined}
               onClick={() => showView(name)}
             >
               {t(VIEW_TITLES[name])}
@@ -336,13 +412,32 @@ export function Home() {
               <div className="files" id="files">
                 {filesLine}
               </div>
-              <div className="tabs" id="tabs" role="tablist">
+              <div
+                className="tabs"
+                id="tabs"
+                role="tablist"
+                aria-label={t('convert')}
+                onKeyDown={(e) => {
+                  const rtl = document.documentElement.dir === 'rtl';
+                  const forward = rtl ? 'ArrowLeft' : 'ArrowRight';
+                  const back = rtl ? 'ArrowRight' : 'ArrowLeft';
+                  if (e.key !== forward && e.key !== back) return;
+                  const tabs = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)')];
+                  const idx = tabs.indexOf(document.activeElement as HTMLButtonElement);
+                  if (idx < 0 || !tabs.length) return;
+                  e.preventDefault();
+                  const next = e.key === forward ? (idx + 1) % tabs.length : (idx - 1 + tabs.length) % tabs.length;
+                  tabs[next]?.focus();
+                  tabs[next]?.click();
+                }}
+              >
                 {TABS.map((m) => (
                   <button
                     key={m}
                     type="button"
                     role="tab"
                     aria-selected={mode === m}
+                    tabIndex={mode === m ? 0 : -1}
                     className={m === mode ? 'on' : ''}
                     disabled={!desc?.[m].length}
                     onClick={() => {
@@ -473,38 +568,244 @@ export function Home() {
             </section>
 
             <section className="panel" id="enginePanel">
-              <h2>{t('engines')}</h2>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2>{t('engines')}</h2>
+                  {profile && (
+                    <span className="hint" id="buildProfileBadge">
+                      {t(profile === 'lite' ? 'profileLite' : 'profileFull')}
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <button type="button" id="refreshEnginesBtn" onClick={refreshEngines}>
+                    {t('refreshEngines')}
+                  </button>
+                  <button
+                    type="button"
+                    id="testEnginesBtn"
+                    disabled={testingEngines}
+                    onClick={async () => {
+                      try {
+                        setTestingEngines(true);
+                        const rep = await testAllEngines();
+                        setDiagReport(rep);
+                        setEngines(rep.engines);
+                        setModels(rep.models);
+                        setProfile(rep.profile);
+                      } catch (err) {
+                        setIntegrated(String(err));
+                      } finally {
+                        setTestingEngines(false);
+                      }
+                    }}
+                  >
+                    {testingEngines ? t('testingEngines') : t('testAllEngines')}
+                  </button>
+                  {engines.some((e) => !e.path && e.downloadable) && (
+                    <button
+                      type="button"
+                      id="downloadAllEnginesBtn"
+                      disabled={downloadingAll}
+                      onClick={async () => {
+                        try {
+                          setDownloadingAll(true);
+                          const installed = await downloadAllMissing();
+                          if (installed.length) {
+                            setIntegrated(`${t('engineDownloadedOk')} ${installed.join(', ')}`);
+                          }
+                          refreshEngines();
+                        } catch (err) {
+                          setIntegrated(String(err));
+                        } finally {
+                          setDownloadingAll(false);
+                        }
+                      }}
+                    >
+                      {downloadingAll ? t('downloading') : t('downloadAllMissing')}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    id="viewEngineReportBtn"
+                    className={engines.some((e) => e.health === 'broken') ? 'border-bad/60 bad' : undefined}
+                    onClick={async () => {
+                      setReportOpen(true);
+                      if (!diagReport) {
+                        try {
+                          setReportLoading(true);
+                          const rep = await diagnosticReport();
+                          setDiagReport(rep);
+                          setEngines(rep.engines);
+                          setModels(rep.models);
+                        } catch (err) {
+                          setIntegrated(String(err));
+                        } finally {
+                          setReportLoading(false);
+                        }
+                      }
+                    }}
+                  >
+                    {t('viewErrorReport')}
+                  </button>
+                </div>
+              </div>
               <table className="engines">
                 <tbody id="engines">
-                  {engines.map((engine) => (
-                    <tr key={engine.id}>
-                      <td className={engine.path ? 'ok' : 'bad'}>{engine.path ? '✓' : '✗'}</td>
-                      <td>{engine.name}</td>
-                      <td>
-                        {engine.path ? <code>{engine.path}</code> : <code>{engine.hint}</code>}
-                      </td>
-                      <td>
-                        {engine.path ? null : (
-                          <button
-                            type="button"
-                            className="install"
-                            data-engine={engine.id}
-                            onClick={async () => {
-                              try {
-                                await installEngine(engine.id);
-                              } catch (err) {
-                                setIntegrated(String(err));
-                              }
-                            }}
-                          >
-                            {t('install')}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {engines.map((engine) => {
+                    const dl = downloading[engine.id];
+                    const mb = engine.size_bytes ? ` (${Math.max(1, Math.round(engine.size_bytes / 1e6))} MB)` : '';
+                    const diskLabel = formatBytes(engine.disk_bytes);
+                    const statusKey =
+                      engine.health === 'healthy'
+                        ? 'statusHealthy'
+                        : engine.health === 'broken'
+                          ? 'statusBroken'
+                          : engine.path
+                            ? 'statusInstalled'
+                            : 'statusMissing';
+                    const statusClass =
+                      engine.health === 'broken' ? 'bad' : engine.path && engine.health !== 'missing' ? 'ok' : 'bad';
+                    const statusIcon =
+                      engine.health === 'healthy'
+                        ? '🟢'
+                        : engine.health === 'broken'
+                          ? '🔴'
+                          : engine.path
+                            ? '✓'
+                            : '🟡';
+                    const dlLabel = dl
+                      ? dl.stage === 'extracting'
+                        ? t('extracting')
+                        : dl.percent != null
+                          ? `${dl.percent}% · ${formatBytes(dl.speed_bps)}/s`
+                          : t('downloading')
+                      : `${t('downloadEngine')}${mb}`;
+                    const triggerDownload = async () => {
+                      try {
+                        setDownloading((prev) => ({ ...prev, [engine.id]: { id: engine.id, stage: 'downloading' } }));
+                        const installedPath = await downloadEngine(engine.id);
+                        setIntegrated(`${t('engineDownloadedOk')} ${installedPath}`);
+                        refreshEngines();
+                      } catch (err) {
+                        setIntegrated(String(err));
+                      } finally {
+                        setDownloading((prev) => {
+                          const next = { ...prev };
+                          delete next[engine.id];
+                          return next;
+                        });
+                      }
+                    };
+                    return (
+                      <tr key={engine.id} data-health={engine.health ?? (engine.path ? 'installed' : 'missing')}>
+                        <td className={statusClass} title={t(statusKey)}>
+                          {statusIcon}
+                        </td>
+                        <td>
+                          <div>{engine.name}</div>
+                          <div className="hint text-[11px]">
+                            <span className={statusClass}>{t(statusKey)}</span>
+                            {engine.tier && ` · ${t(engine.tier === 'core' ? 'engineCore' : 'engineOptional')}`}
+                            {diskLabel && ` · ${diskLabel}`}
+                          </div>
+                          {engine.version && (
+                            <div className="hint text-[11px]" dir="ltr">
+                              {engine.version}
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          {engine.path ? (
+                            <>
+                              <code dir="ltr">{engine.path}</code>
+                              {engine.source && engine.source !== 'missing' && (
+                                <span className="hint">
+                                  {' '}
+                                  ({t(
+                                    engine.source === 'bundled'
+                                      ? 'engineBundled'
+                                      : engine.source === 'local'
+                                        ? 'engineLocal'
+                                        : 'engineSystem',
+                                  )})
+                                </span>
+                              )}
+                              {engine.health_detail && (
+                                <div className={engine.health === 'broken' ? 'bad text-[11px]' : 'hint text-[11px]'}>
+                                  {engine.health_detail}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <code dir="ltr">{engine.hint}</code>
+                          )}
+                        </td>
+                        <td>
+                          <div className="flex flex-wrap gap-1.5">
+                            {!engine.path && engine.downloadable && (
+                              <button
+                                type="button"
+                                className="install"
+                                data-download-engine={engine.id}
+                                disabled={Boolean(dl)}
+                                onClick={triggerDownload}
+                              >
+                                {dlLabel}
+                              </button>
+                            )}
+                            {engine.path && engine.downloadable && (engine.health === 'broken' || engine.source === 'local') && (
+                              <button
+                                type="button"
+                                className="install"
+                                data-repair-engine={engine.id}
+                                disabled={Boolean(dl)}
+                                onClick={triggerDownload}
+                              >
+                                {dl ? dlLabel : t('reinstallEngine')}
+                              </button>
+                            )}
+                            {!engine.path && (
+                              <button
+                                type="button"
+                                className="install"
+                                data-engine={engine.id}
+                                onClick={async () => {
+                                  try {
+                                    await installEngine(engine.id);
+                                  } catch (err) {
+                                    setIntegrated(String(err));
+                                  }
+                                }}
+                              >
+                                {t('install')}
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
+              {models.length > 0 && (
+                <div className="mt-3 rounded-lg border border-line bg-bg p-2.5" id="modelsSummary">
+                  <strong className="mb-1.5 block text-xs">{t('modelsLabel')}</strong>
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    {models.map((m) => (
+                      <span
+                        key={m.id}
+                        className={`inline-flex items-center gap-1 rounded border border-line px-2 py-0.5 ${m.present ? 'ok' : 'bad'}`}
+                        title={m.path ?? ''}
+                      >
+                        <span>{m.present ? '✓' : '✗'}</span>
+                        <span>{ar ? m.label_ar : m.label}</span>
+                        {m.disk_bytes ? <span className="hint">({formatBytes(m.disk_bytes)})</span> : null}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="row justify-start">
                 <button
                   type="button"
@@ -539,6 +840,12 @@ export function Home() {
         }}
       />
       <DonateModal open={donate} onClose={() => setDonate(false)} />
+      <ErrorReportModal
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+        report={diagReport}
+        loading={reportLoading}
+      />
 
       {RESIZE_STRIPS.map((dir) => (
         <div

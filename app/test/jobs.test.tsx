@@ -71,7 +71,7 @@ describe('jobs', () => {
     expect(row.querySelector('button')).toBeNull();
   });
 
-  it('can be cleared', async () => {
+  it('can be cleared and cancels active background jobs', async () => {
     const h = installTauri();
     mount(<Jobs />);
     await h.emit('job', { type: 'start', job: 3, index: 0, total: 1, file: 'c.mov', title: '→ MP4' });
@@ -79,5 +79,45 @@ describe('jobs', () => {
 
     await h.click(document.querySelector('button'));
     expect(rows()).toHaveLength(0);
+    expect(h.calls.some((c) => c.cmd === 'cancel_all_jobs')).toBe(true);
+  });
+
+  it('supports pause, resume, cancel and open output folder quick actions', async () => {
+    const h = installTauri();
+    mount(<Jobs />);
+    await h.emit('job', { type: 'start', job: 9, index: 0, total: 1, file: 'v.mp4', title: '→ MKV' });
+
+    let row = rows()[0];
+    const pauseBtn = [...row.querySelectorAll('button')].find((b) => b.textContent === 'Pause')!;
+    await h.click(pauseBtn);
+    expect(h.calls.some((c) => c.cmd === 'pause_job' && c.args.job === 9)).toBe(true);
+
+    await h.emit('job', { type: 'paused', job: 9 });
+    row = rows()[0];
+    const resumeBtn = [...row.querySelectorAll('button')].find((b) => b.textContent === 'Resume')!;
+    await h.click(resumeBtn);
+    expect(h.calls.some((c) => c.cmd === 'resume_job' && c.args.job === 9)).toBe(true);
+
+    await h.emit('job', { type: 'done', job: 9, index: 0, output: '/out/v.mkv' });
+    row = rows()[0];
+    const folderBtn = [...row.querySelectorAll('button')].find((b) => b.textContent === 'Open Folder')!;
+    await h.click(folderBtn);
+    expect(h.calls.some((c) => c.cmd === 'open_output_folder' && c.args.path === '/out/v.mkv')).toBe(true);
+  });
+
+  it('opens the Error Report modal with failed job details from Jobs window', async () => {
+    const h = installTauri();
+    mount(<Jobs />);
+    await h.emit('job', { type: 'start', job: 12, index: 0, total: 1, file: 'scan.pdf', title: '→ OCR' });
+    await h.emit('job', { type: 'failed', job: 12, index: 0, error: "Failed loading language 'ara'" });
+
+    const btn = document.getElementById('viewJobsReportBtn') as HTMLButtonElement;
+    expect(btn.className).toContain('bad');
+    await h.click(btn);
+
+    const call = h.calls.find((c) => c.cmd === 'diagnostic_report');
+    expect(call?.args.failed_jobs).toEqual([{ name: 'scan.pdf', error: "Failed loading language 'ara'" }]);
+    expect(document.getElementById('errorReportModal')).not.toBeNull();
+    expect(document.getElementById('diagnosticReportLog')?.getAttribute('dir')).toBe('ltr');
   });
 });

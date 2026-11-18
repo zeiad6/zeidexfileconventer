@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!--
+    Optical variant of `icon.svg` for 16 px and 24 px only.
+
+    At that size the full artwork turns into a dark square with a faint smudge: the 1.4 px ring
+    aliases away and the document's soft shadow becomes grey haze around a 4 px white shape. This
+    file keeps the same three marks but spends every pixel on them — no shadow, no sheen, no halo,
+    a ring thick enough to survive the grid, and a document large enough to read as paper.
+    `packaging/make-icons.py` renders 16 px and 24 px from here and every other size from
+    `icon.svg`; keep the two in sync when the mark itself changes.
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#423a32"/>
+      <stop offset="1" stop-color="#15120f"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="8" y="8" width="240" height="240" rx="54" ry="54" fill="url(#bg)"/>
+  <rect x="9.5" y="9.5" width="237" height="237" rx="52.5" ry="52.5"
+        fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="3"/>
+
+  <!-- r = 88, circumference 552.92; one 175.09 dash plus a 9.22 gap is a third of the circle. -->
+  <g fill="none" stroke-width="34" stroke-linecap="butt" transform="rotate(-90 128 128)">
+    <circle cx="128" cy="128" r="88" stroke="#ff9e4a" stroke-dasharray="175.09 377.83" stroke-dashoffset="0"/>
+    <circle cx="128" cy="128" r="88" stroke="#f07b1d" stroke-dasharray="175.09 377.83" stroke-dashoffset="-184.31"/>
+    <circle cx="128" cy="128" r="88" stroke="#d0660f" stroke-dasharray="175.09 377.83" stroke-dashoffset="-368.62"/>
+  </g>
+
+  <path d="M 97 80 H 143 L 165 102 V 170 A 6 6 0 0 1 159 176 H 97 A 6 6 0 0 1 91 170 V 86 A 6 6 0 0 1 97 80 Z"
+        fill="#ffffff"/>
+  <path d="M 143 80 L 165 102 H 147 Q 143 102 143 98 Z" fill="#f07b1d"/>
+</svg>

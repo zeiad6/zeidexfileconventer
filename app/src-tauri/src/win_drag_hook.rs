@@ -6,13 +6,14 @@
 //! treats the gesture as a drag once it passes the threshold. Modifier keys are read with the
 //! same call, so a drag that starts before the app is even running still works.
 //!
-//! `CF_HDROP` is read from the clipboard as a best-effort probe of what is being dragged
-//! (Explorer publishes it while a file drag is in flight). The authoritative file list still
-//! comes from Tauri's OLE drop target on the wheel window, which is what actually receives the
-//! drop; the probe only lets the wheel show the right segments before the pointer arrives.
+//! `CF_HDROP` is read from the clipboard as a best-effort probe of what is being dragged.
+//! Explorer does **not** publish it during an OLE drag, so that probe usually comes up empty;
+//! the file-manager selection is used as the fallback (`crate::drag_paths`) and Tauri's OLE drop
+//! target on the wheel window supplies the authoritative list once the pointer moves.
 
+use std::sync::atomic::{AtomicIsize, Ordering};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use windows_sys::Win32::Foundation::{HWND, POINT};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
@@ -22,20 +23,67 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos,
+    WindowFromPoint, GA_ROOT, GWL_EXSTYLE, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
 };
 
-use crate::hook::{center, hide, mode_for, set_visible, visible, Trigger, KEYS};
+use crate::hook::{
+    hide, in_drop, in_shift_grace, mode_for, native_drag_paths, note_shift_release, set_wheel_files, show_at_center,
+    visible, wheel_local_coords, CommitPayload, HoverPoint, Trigger, KEYS, SHIFT_RELEASE_GRACE,
+};
 
 /// Pointer travel (px) before a held left button counts as a drag.
 const DRAG_THRESHOLD: f64 = 12.0;
-/// 60 Hz: the same cadence the compositor uses, cheap enough to stay invisible in Task Manager.
-const TICK: Duration = Duration::from_millis(16);
+/// 60 Hz while a drag is active or the wheel is open, so hover/dwell stays instant.
+const ACTIVE_TICK: Duration = Duration::from_millis(16);
+/// ~15 Hz while idle in the background, cutting timer wakeups and CPU usage by 4x.
+const IDLE_TICK: Duration = Duration::from_millis(64);
 /// Time the webview gets to handle a drop before a release elsewhere hides the wheel.
 const RELEASE_GRACE: Duration = Duration::from_millis(700);
 /// `CF_HDROP`: the clipboard format Explorer publishes during a file drag.
 const CF_HDROP: u32 = 15;
+
+static ORIGIN_HWND: AtomicIsize = AtomicIsize::new(0);
+
+fn root_window_at(p: POINT) -> isize {
+    unsafe {
+        let hwnd = WindowFromPoint(p);
+        if hwnd.is_null() {
+            return 0;
+        }
+        let root = GetAncestor(hwnd, GA_ROOT);
+        (if root.is_null() { hwnd } else { root }) as isize
+    }
+}
+
+fn is_desktop_hwnd(hwnd: isize) -> bool {
+    if hwnd == 0 {
+        return false;
+    }
+    let mut buf = [0u16; 64];
+    let len = unsafe { GetClassNameW(hwnd as HWND, buf.as_mut_ptr(), buf.len() as i32) };
+    if len <= 0 {
+        return false;
+    }
+    let class = String::from_utf16_lossy(&buf[..len as usize]);
+    class == "Progman" || class == "WorkerW"
+}
+
+/// Candidate root window HWNDs (drag origin + foreground) and whether either is the Desktop.
+pub fn probe_context() -> (Vec<isize>, bool) {
+    let origin = ORIGIN_HWND.load(Ordering::Relaxed);
+    let fg = unsafe { GetForegroundWindow() } as isize;
+    let mut hwnds = Vec::with_capacity(2);
+    if origin != 0 {
+        hwnds.push(origin);
+    }
+    if fg != 0 && fg != origin {
+        hwnds.push(fg);
+    }
+    let desktop = hwnds.iter().copied().any(is_desktop_hwnd);
+    (hwnds, desktop)
+}
 
 fn key_down(vk: u16) -> bool {
     // The high bit means "currently down"; the low bit is the since-last-call latch.
@@ -94,9 +142,35 @@ pub fn apply_overlay_styles(hwnd: isize) {
     }
     unsafe {
         let current = GetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE);
-        let style = current | WS_EX_NOACTIVATE as isize | WS_EX_TOOLWINDOW as isize | WS_EX_TOPMOST as isize;
+        // Never leave WS_EX_TRANSPARENT set: WebView2 needs hit-testing to receive native OLE drops.
+        let style = (current & !(WS_EX_TRANSPARENT as isize))
+            | WS_EX_NOACTIVATE as isize
+            | WS_EX_TOOLWINDOW as isize
+            | WS_EX_TOPMOST as isize;
         SetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE, style);
-        SetWindowPos(hwnd as HWND, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(
+            hwnd as HWND,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+}
+
+/// Allows keyboard input inside the wheel window when a parameterized tool form is kept open.
+pub fn allow_focus(hwnd: isize) {
+    if hwnd == 0 {
+        return;
+    }
+    unsafe {
+        let current = GetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE);
+        let style = (current & !(WS_EX_NOACTIVATE as isize) & !(WS_EX_TRANSPARENT as isize))
+            | WS_EX_TOOLWINDOW as isize
+            | WS_EX_TOPMOST as isize;
+        SetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE, style);
     }
 }
 
@@ -122,24 +196,26 @@ pub fn start(app: AppHandle, on_hotkey: fn(&AppHandle)) {
         let mut active = false;
         let mut origin = pointer();
         let mut last = origin;
+        let mut prev_hover = POINT { x: i32::MIN, y: i32::MIN };
         let mut mods = (false, false, false, false);
-        let mut shown = false;
         let mut was_space = false;
         let mut beats = 0u8;
 
         loop {
             let down = key_down(VK_LBUTTON);
-            let p = pointer();
+            let wheel_open = visible();
+            let p = if down || wheel_open { pointer() } else { POINT { x: 0, y: 0 } };
 
             if down && !was_down {
                 origin = p;
+                ORIGIN_HWND.store(root_window_at(p), Ordering::Relaxed);
                 active = false;
                 mods = (false, false, false, false);
                 beats = 0;
-                if shown {
-                    // A second press while the wheel is open is a cancel, not a new drag.
+                prev_hover = POINT { x: i32::MIN, y: i32::MIN };
+                if visible() && !crate::hook::kept() {
+                    // A second press while the wheel is open (and not kept for a form/toast) is a cancel.
                     hide(&app);
-                    shown = false;
                 }
             }
 
@@ -151,7 +227,6 @@ pub fn start(app: AppHandle, on_hotkey: fn(&AppHandle)) {
             } else if was_down {
                 if active {
                     release(&app, p);
-                    shown = false;
                 }
                 active = false;
             }
@@ -171,12 +246,22 @@ pub fn start(app: AppHandle, on_hotkey: fn(&AppHandle)) {
             }
             was_space = space;
 
-            // A slow drag must not let the UI's idle timer hide the wheel mid-gesture.
-            if active && shown {
+            // A slow drag must not let the UI's idle timer hide the wheel mid-gesture; also forward
+            // window-relative cursor motion so wedges & mode switching respond at 60 Hz even when
+            // WebView2 skips OLE DragOver notifications on a newly opened overlay (including orb opens).
+            if active && visible() && !crate::hook::kept() {
                 beats = beats.wrapping_add(1);
                 if beats % 30 == 0 {
                     let _ = app.emit("wheel-alive", ());
                 }
+                if p.x != prev_hover.x || p.y != prev_hover.y {
+                    prev_hover = p;
+                    if let Some((lx, ly)) = wheel_local_coords(&app, p.x, p.y) {
+                        let _ = app.emit("wheel-hover", HoverPoint { x: lx, y: ly });
+                    }
+                }
+            } else if !visible() {
+                prev_hover = POINT { x: i32::MIN, y: i32::MIN };
             }
 
             if active {
@@ -187,60 +272,69 @@ pub fn start(app: AppHandle, on_hotkey: fn(&AppHandle)) {
                     key_down(VK_LWIN) || key_down(VK_RWIN),
                 );
                 if now != mods {
+                    if mods.0 && !now.0 && visible() {
+                        note_shift_release();
+                    }
                     mods = now;
                     let keys = *KEYS.lock().unwrap_or_else(|e| e.into_inner());
                     let (shift, ctrl, alt, win) = trigger(now.0, now.1, now.2, now.3);
                     if let Some(mode) = mode_for(&keys, shift, alt, ctrl, win) {
                         show(&app, mode, (last.x, last.y));
-                        shown = true;
                     }
                 }
             } else if !down {
                 mods = (false, false, false, false);
             }
 
-            std::thread::sleep(TICK);
+            std::thread::sleep(if down || wheel_open { ACTIVE_TICK } else { IDLE_TICK });
         }
     });
 }
 
 fn show(app: &AppHandle, mode: &'static str, at: (i32, i32)) {
-    if !visible() {
-        if let Some(w) = app.get_webview_window("wheel") {
-            center(&w, at.0, at.1);
-            let _ = w.show();
-        }
-        set_visible(true);
-        let files = dragged_paths();
-        if !files.is_empty() {
-            // This is a native drag: load the file types, but do not put the wheel in
-            // click/keyboard mode. OLE keeps sending drag events to the window.
-            let _ = app.emit("wheel-files", files);
-        }
+    let was_visible = visible();
+    show_at_center(app, mode, at);
+    if !was_visible {
+        // Never inspect Windows Clipboard (`CF_HDROP` or text) during a mouse drag: stale
+        // copied files or folders in the clipboard would hijack the wheel. Only probe foreground
+        // Explorer selection until native OLE `DragEnter` supplies the true payload.
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let paths = crate::drag_probe_paths();
+            if !paths.is_empty() && visible() && native_drag_paths().is_empty() {
+                set_wheel_files(paths.clone());
+                let _ = app.emit("wheel-files", paths);
+            }
+        });
     }
-    let _ = app.emit("wheel-mode", mode);
 }
 
 fn release(app: &AppHandle, p: POINT) {
     if !visible() {
         return;
     }
-    // Releasing inside the wheel is a drop: the webview handles it and hides the wheel.
-    let inside = app
-        .get_webview_window("wheel")
-        .and_then(|w| {
-            let pos = w.outer_position().ok()?;
-            let size = w.outer_size().ok()?;
-            Some(p.x >= pos.x && p.y >= pos.y && p.x < pos.x + size.width as i32 && p.y < pos.y + size.height as i32)
-        })
-        .unwrap_or(false);
-    if inside {
+    // Releasing inside the wheel is a drop: native OLE DragDrop usually fires. If WebView2 missed
+    // it, emit `wheel-commit` with any native paths (or empty so the wheel uses its loaded files).
+    if let Some((lx, ly)) = wheel_local_coords(app, p.x, p.y) {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(180));
+            if !in_drop() && visible() && !crate::hook::kept() {
+                let paths = native_drag_paths();
+                let _ = app.emit("wheel-commit", CommitPayload { position: HoverPoint { x: lx, y: ly }, paths });
+            }
+            std::thread::sleep(Duration::from_millis(520));
+            if !crate::hook::kept() && !in_drop() && visible() {
+                hide(&app);
+            }
+        });
         return;
     }
+    let extra = if in_shift_grace() { SHIFT_RELEASE_GRACE } else { Duration::ZERO };
     let app = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(RELEASE_GRACE);
-        if !crate::hook::kept() {
+        std::thread::sleep(RELEASE_GRACE + extra);
+        if !crate::hook::kept() && !in_drop() {
             hide(&app);
         }
     });
